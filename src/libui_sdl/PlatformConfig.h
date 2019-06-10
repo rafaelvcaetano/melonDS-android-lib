@@ -25,7 +25,8 @@ enum
 {
     HK_Lid = 0,
     HK_Mic,
-
+    HK_FastForward,
+    HK_FastForwardToggle,
     HK_MAX
 };
 
@@ -47,6 +48,9 @@ extern int ScreenGap;
 extern int ScreenLayout;
 extern int ScreenSizing;
 extern int ScreenFilter;
+
+extern int ScreenUseGL;
+extern int ScreenRatio;
 
 extern int LimitFPS;
 

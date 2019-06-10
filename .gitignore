@@ -5,5 +5,5 @@ obj
 *.o
 melon_grc.c
 melon_grc.h
+cmake-build
 .idea
-cmake-build-*

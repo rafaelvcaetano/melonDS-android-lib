@@ -20,7 +20,7 @@
 #include <string.h>
 #include "NDS.h"
 #include "GPU.h"
-
+u64 vbltime;
 
 namespace GPU
 {
@@ -49,7 +49,8 @@ u8 VRAM_F[ 16*1024];
 u8 VRAM_G[ 16*1024];
 u8 VRAM_H[ 32*1024];
 u8 VRAM_I[ 16*1024];
-u8* VRAM[9] = {VRAM_A, VRAM_B, VRAM_C, VRAM_D, VRAM_E, VRAM_F, VRAM_G, VRAM_H, VRAM_I};
+u8* VRAM[9]     = {VRAM_A,  VRAM_B,  VRAM_C,  VRAM_D,  VRAM_E, VRAM_F, VRAM_G, VRAM_H, VRAM_I};
+u32 VRAMMask[9] = {0x1FFFF, 0x1FFFF, 0x1FFFF, 0x1FFFF, 0xFFFF, 0x3FFF, 0x3FFF, 0x7FFF, 0x3FFF};
 
 u8 VRAMCNT[9];
 u8 VRAMSTAT;
@@ -71,7 +72,14 @@ u32 VRAMMap_TexPal[8];
 
 u32 VRAMMap_ARM7[2];
 
-u32 Framebuffer[256*192*2];
+u8* VRAMPtr_ABG[0x20];
+u8* VRAMPtr_AOBJ[0x10];
+u8* VRAMPtr_BBG[0x8];
+u8* VRAMPtr_BOBJ[0x8];
+
+int FrontBuffer;
+u32* Framebuffer[2][2];
+bool Accelerated;
 
 GPU2D* GPU2D_A;
 GPU2D* GPU2D_B;
@@ -83,6 +91,12 @@ bool Init()
     GPU2D_B = new GPU2D(1);
     if (!GPU3D::Init()) return false;
 
+    FrontBuffer = 0;
+    Framebuffer[0][0] = NULL; Framebuffer[0][1] = NULL;
+    Framebuffer[1][0] = NULL; Framebuffer[1][1] = NULL;
+    Accelerated = false;
+    SetDisplaySettings(false);
+
     return true;
 }
 
@@ -91,6 +105,11 @@ void DeInit()
     delete GPU2D_A;
     delete GPU2D_B;
     GPU3D::DeInit();
+
+    if (Framebuffer[0][0]) delete[] Framebuffer[0][0];
+    if (Framebuffer[0][1]) delete[] Framebuffer[0][1];
+    if (Framebuffer[1][0]) delete[] Framebuffer[1][0];
+    if (Framebuffer[1][1]) delete[] Framebuffer[1][1];
 }
 
 void Reset()
@@ -138,22 +157,43 @@ void Reset()
     VRAMMap_ARM7[0] = 0;
     VRAMMap_ARM7[1] = 0;
 
-    for (int i = 0; i < 256*192*2; i++)
+    memset(VRAMPtr_ABG, 0, sizeof(VRAMPtr_ABG));
+    memset(VRAMPtr_AOBJ, 0, sizeof(VRAMPtr_AOBJ));
+    memset(VRAMPtr_BBG, 0, sizeof(VRAMPtr_BBG));
+    memset(VRAMPtr_BOBJ, 0, sizeof(VRAMPtr_BOBJ));
+
+    int fbsize;
+    if (Accelerated) fbsize = (256*3 + 1) * 192;
+    else             fbsize = 256 * 192;
+    for (int i = 0; i < fbsize; i++)
     {
-        Framebuffer[i] = 0xFFFFFFFF;
+        Framebuffer[0][0][i] = 0xFFFFFFFF;
+        Framebuffer[1][0][i] = 0xFFFFFFFF;
+    }
+    for (int i = 0; i < fbsize; i++)
+    {
+        Framebuffer[0][1][i] = 0xFFFFFFFF;
+        Framebuffer[1][1][i] = 0xFFFFFFFF;
     }
 
     GPU2D_A->Reset();
     GPU2D_B->Reset();
     GPU3D::Reset();
 
-    GPU2D_A->SetFramebuffer(&Framebuffer[256*192]);
-    GPU2D_B->SetFramebuffer(&Framebuffer[256*0]);
+    int backbuf = FrontBuffer ? 0 : 1;
+    GPU2D_A->SetFramebuffer(Framebuffer[backbuf][1]);
+    GPU2D_B->SetFramebuffer(Framebuffer[backbuf][0]);
 }
 
 void Stop()
 {
-    memset(Framebuffer, 0, 256*192*2*4);
+    int fbsize;
+    if (Accelerated) fbsize = (256*3 + 1) * 192;
+    else             fbsize = 256 * 192;
+    memset(Framebuffer[0][0], 0, fbsize*4);
+    memset(Framebuffer[0][1], 0, fbsize*4);
+    memset(Framebuffer[1][0], 0, fbsize*4);
+    memset(Framebuffer[1][1], 0, fbsize*4);
 }
 
 void DoSavestate(Savestate* file)
@@ -203,9 +243,63 @@ void DoSavestate(Savestate* file)
     file->Var32(&VRAMMap_ARM7[0]);
     file->Var32(&VRAMMap_ARM7[1]);
 
+    if (!file->Saving)
+    {
+        for (int i = 0; i < 0x20; i++)
+            VRAMPtr_ABG[i] = GetUniqueBankPtr(VRAMMap_ABG[i], i << 14);
+        for (int i = 0; i < 0x10; i++)
+            VRAMPtr_AOBJ[i] = GetUniqueBankPtr(VRAMMap_AOBJ[i], i << 14);
+        for (int i = 0; i < 0x8; i++)
+            VRAMPtr_BBG[i] = GetUniqueBankPtr(VRAMMap_BBG[i], i << 14);
+        for (int i = 0; i < 0x8; i++)
+            VRAMPtr_BOBJ[i] = GetUniqueBankPtr(VRAMMap_BOBJ[i], i << 14);
+    }
+
     GPU2D_A->DoSavestate(file);
     GPU2D_B->DoSavestate(file);
     GPU3D::DoSavestate(file);
+}
+
+void AssignFramebuffers()
+{
+    int backbuf = FrontBuffer ? 0 : 1;
+    if (NDS::PowerControl9 & (1<<15))
+    {
+        GPU2D_A->SetFramebuffer(Framebuffer[backbuf][0]);
+        GPU2D_B->SetFramebuffer(Framebuffer[backbuf][1]);
+    }
+    else
+    {
+        GPU2D_A->SetFramebuffer(Framebuffer[backbuf][1]);
+        GPU2D_B->SetFramebuffer(Framebuffer[backbuf][0]);
+    }
+}
+
+void SetDisplaySettings(bool accel)
+{
+    int fbsize;
+    if (accel) fbsize = (256*3 + 1) * 192;
+    else       fbsize = 256 * 192;
+    if (Framebuffer[0][0]) delete[] Framebuffer[0][0];
+    if (Framebuffer[1][0]) delete[] Framebuffer[1][0];
+    if (Framebuffer[0][1]) delete[] Framebuffer[0][1];
+    if (Framebuffer[1][1]) delete[] Framebuffer[1][1];
+    Framebuffer[0][0] = new u32[fbsize];
+    Framebuffer[1][0] = new u32[fbsize];
+    Framebuffer[0][1] = new u32[fbsize];
+    Framebuffer[1][1] = new u32[fbsize];
+
+    memset(Framebuffer[0][0], 0, fbsize*4);
+    memset(Framebuffer[1][0], 0, fbsize*4);
+    memset(Framebuffer[0][1], 0, fbsize*4);
+    memset(Framebuffer[1][1], 0, fbsize*4);
+
+    AssignFramebuffers();
+
+    GPU2D_A->SetDisplaySettings(accel);
+    GPU2D_B->SetDisplaySettings(accel);
+
+    Accelerated = accel;
 }
 
 
@@ -239,8 +333,30 @@ void DoSavestate(Savestate* file)
 // when reading: values are read from each bank and ORed together
 // when writing: value is written to each bank
 
-#define MAP_RANGE(map, base, n)  for (int i = 0; i < n; i++) map[(base)+i] |= bankmask;
-#define UNMAP_RANGE(map, base, n)  for (int i = 0; i < n; i++) map[(base)+i] &= ~bankmask;
+u8* GetUniqueBankPtr(u32 mask, u32 offset)
+{
+    if (!mask) return NULL;
+
+    int num = 0;
+    if (!(mask & 0xFF)) { mask >>= 8; num += 8; }
+    else
+    {
+        if (!(mask & 0xF)) { mask >>= 4; num += 4; }
+        if (!(mask & 0x3)) { mask >>= 2; num += 2; }
+        if (!(mask & 0x1)) { mask >>= 1; num += 1; }
+    }
+    if (mask != 1) return NULL;
+
+    return &VRAM[num][offset & VRAMMask[num]];
+}
+
+#define MAP_RANGE(map, base, n)    for (int i = 0; i < n; i++) VRAMMap_##map[(base)+i] |= bankmask;
+#define UNMAP_RANGE(map, base, n)  for (int i = 0; i < n; i++) VRAMMap_##map[(base)+i] &= ~bankmask;
+
+#define MAP_RANGE_PTR(map, base, n) \
+    for (int i = 0; i < n; i++) { VRAMMap_##map[(base)+i] |= bankmask; VRAMPtr_##map[(base)+i] = GetUniqueBankPtr(VRAMMap_##map[(base)+i], ((base)+i)<<14); }
+#define UNMAP_RANGE_PTR(map, base, n) \
+    for (int i = 0; i < n; i++) { VRAMMap_##map[(base)+i] &= ~bankmask; VRAMPtr_##map[(base)+i] = GetUniqueBankPtr(VRAMMap_##map[(base)+i], ((base)+i)<<14); }
 
 void MapVRAM_AB(u32 bank, u8 cnt)
 {
@@ -262,12 +378,12 @@ void MapVRAM_AB(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            UNMAP_RANGE(VRAMMap_ABG, oldofs<<3, 8);
+            UNMAP_RANGE_PTR(ABG, oldofs<<3, 8);
             break;
 
         case 2: // AOBJ
             oldofs &= 0x1;
-            UNMAP_RANGE(VRAMMap_AOBJ, oldofs<<3, 8);
+            UNMAP_RANGE_PTR(AOBJ, oldofs<<3, 8);
             break;
 
         case 3: // texture
@@ -285,12 +401,12 @@ void MapVRAM_AB(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            MAP_RANGE(VRAMMap_ABG, ofs<<3, 8);
+            MAP_RANGE_PTR(ABG, ofs<<3, 8);
             break;
 
         case 2: // AOBJ
             ofs &= 0x1;
-            MAP_RANGE(VRAMMap_AOBJ, ofs<<3, 8);
+            MAP_RANGE_PTR(AOBJ, ofs<<3, 8);
             break;
 
         case 3: // texture
@@ -322,7 +438,7 @@ void MapVRAM_CD(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            UNMAP_RANGE(VRAMMap_ABG, oldofs<<3, 8);
+            UNMAP_RANGE_PTR(ABG, oldofs<<3, 8);
             break;
 
         case 2: // ARM7 VRAM
@@ -337,11 +453,11 @@ void MapVRAM_CD(u32 bank, u8 cnt)
         case 4: // BBG/BOBJ
             if (bank == 2)
             {
-                UNMAP_RANGE(VRAMMap_BBG, 0, 8);
+                UNMAP_RANGE_PTR(BBG, 0, 8);
             }
             else
             {
-                UNMAP_RANGE(VRAMMap_BOBJ, 0, 8);
+                UNMAP_RANGE_PTR(BOBJ, 0, 8);
             }
             break;
         }
@@ -356,7 +472,7 @@ void MapVRAM_CD(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            MAP_RANGE(VRAMMap_ABG, ofs<<3, 8);
+            MAP_RANGE_PTR(ABG, ofs<<3, 8);
             break;
 
         case 2: // ARM7 VRAM
@@ -372,11 +488,11 @@ void MapVRAM_CD(u32 bank, u8 cnt)
         case 4: // BBG/BOBJ
             if (bank == 2)
             {
-                MAP_RANGE(VRAMMap_BBG, 0, 8);
+                MAP_RANGE_PTR(BBG, 0, 8);
             }
             else
             {
-                MAP_RANGE(VRAMMap_BOBJ, 0, 8);
+                MAP_RANGE_PTR(BOBJ, 0, 8);
             }
             break;
         }
@@ -401,19 +517,19 @@ void MapVRAM_E(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            UNMAP_RANGE(VRAMMap_ABG, 0, 4);
+            UNMAP_RANGE_PTR(ABG, 0, 4);
             break;
 
         case 2: // AOBJ
-            UNMAP_RANGE(VRAMMap_AOBJ, 0, 4);
+            UNMAP_RANGE_PTR(AOBJ, 0, 4);
             break;
 
         case 3: // texture palette
-            UNMAP_RANGE(VRAMMap_TexPal, 0, 4);
+            UNMAP_RANGE(TexPal, 0, 4);
             break;
 
         case 4: // ABG ext palette
-            UNMAP_RANGE(VRAMMap_ABGExtPal, 0, 4);
+            UNMAP_RANGE(ABGExtPal, 0, 4);
             GPU2D_A->BGExtPalDirty(0);
             GPU2D_A->BGExtPalDirty(2);
             break;
@@ -429,19 +545,19 @@ void MapVRAM_E(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            MAP_RANGE(VRAMMap_ABG, 0, 4);
+            MAP_RANGE_PTR(ABG, 0, 4);
             break;
 
         case 2: // AOBJ
-            MAP_RANGE(VRAMMap_AOBJ, 0, 4);
+            MAP_RANGE_PTR(AOBJ, 0, 4);
             break;
 
         case 3: // texture palette
-            MAP_RANGE(VRAMMap_TexPal, 0, 4);
+            MAP_RANGE(TexPal, 0, 4);
             break;
 
         case 4: // ABG ext palette
-            MAP_RANGE(VRAMMap_ABGExtPal, 0, 4);
+            MAP_RANGE(ABGExtPal, 0, 4);
             GPU2D_A->BGExtPalDirty(0);
             GPU2D_A->BGExtPalDirty(2);
             break;
@@ -469,13 +585,23 @@ void MapVRAM_FG(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            VRAMMap_ABG[(oldofs & 0x1) + ((oldofs & 0x2) << 1)] &= ~bankmask;
-            VRAMMap_ABG[(oldofs & 0x1) + ((oldofs & 0x2) << 1) + 2] &= ~bankmask;
+            {
+                u32 base = (oldofs & 0x1) + ((oldofs & 0x2) << 1);
+                VRAMMap_ABG[base] &= ~bankmask;
+                VRAMMap_ABG[base + 2] &= ~bankmask;
+                VRAMPtr_ABG[base] = GetUniqueBankPtr(VRAMMap_ABG[base], base << 14);
+                VRAMPtr_ABG[base + 2] = GetUniqueBankPtr(VRAMMap_ABG[base + 2], (base + 2) << 14);
+            }
             break;
 
         case 2: // AOBJ
-            VRAMMap_AOBJ[(oldofs & 0x1) + ((oldofs & 0x2) << 1)] &= ~bankmask;
-            VRAMMap_AOBJ[(oldofs & 0x1) + ((oldofs & 0x2) << 1) + 2] &= ~bankmask;
+            {
+                u32 base = (oldofs & 0x1) + ((oldofs & 0x2) << 1);
+                VRAMMap_AOBJ[base] &= ~bankmask;
+                VRAMMap_AOBJ[base + 2] &= ~bankmask;
+                VRAMPtr_AOBJ[base] = GetUniqueBankPtr(VRAMMap_AOBJ[base], base << 14);
+                VRAMPtr_AOBJ[base + 2] = GetUniqueBankPtr(VRAMMap_AOBJ[base + 2], (base + 2) << 14);
+            }
             break;
 
         case 3: // texture palette
@@ -504,13 +630,23 @@ void MapVRAM_FG(u32 bank, u8 cnt)
             break;
 
         case 1: // ABG
-            VRAMMap_ABG[(ofs & 0x1) + ((ofs & 0x2) << 1)] |= bankmask;
-            VRAMMap_ABG[(ofs & 0x1) + ((ofs & 0x2) << 1) + 2] |= bankmask;
+            {
+                u32 base = (ofs & 0x1) + ((ofs & 0x2) << 1);
+                VRAMMap_ABG[base] |= bankmask;
+                VRAMMap_ABG[base + 2] |= bankmask;
+                VRAMPtr_ABG[base] = GetUniqueBankPtr(VRAMMap_ABG[base], base << 14);
+                VRAMPtr_ABG[base + 2] = GetUniqueBankPtr(VRAMMap_ABG[base + 2], (base + 2) << 14);
+            }
             break;
 
         case 2: // AOBJ
-            VRAMMap_AOBJ[(ofs & 0x1) + ((ofs & 0x2) << 1)] |= bankmask;
-            VRAMMap_AOBJ[(ofs & 0x1) + ((ofs & 0x2) << 1) + 2] |= bankmask;
+            {
+                u32 base = (ofs & 0x1) + ((ofs & 0x2) << 1);
+                VRAMMap_AOBJ[base] |= bankmask;
+                VRAMMap_AOBJ[base + 2] |= bankmask;
+                VRAMPtr_AOBJ[base] = GetUniqueBankPtr(VRAMMap_AOBJ[base], base << 14);
+                VRAMPtr_AOBJ[base + 2] = GetUniqueBankPtr(VRAMMap_AOBJ[base + 2], (base + 2) << 14);
+            }
             break;
 
         case 3: // texture palette
@@ -553,10 +689,14 @@ void MapVRAM_H(u32 bank, u8 cnt)
             VRAMMap_BBG[1] &= ~bankmask;
             VRAMMap_BBG[4] &= ~bankmask;
             VRAMMap_BBG[5] &= ~bankmask;
+            VRAMPtr_BBG[0] = GetUniqueBankPtr(VRAMMap_BBG[0], 0 << 14);
+            VRAMPtr_BBG[1] = GetUniqueBankPtr(VRAMMap_BBG[1], 1 << 14);
+            VRAMPtr_BBG[4] = GetUniqueBankPtr(VRAMMap_BBG[4], 4 << 14);
+            VRAMPtr_BBG[5] = GetUniqueBankPtr(VRAMMap_BBG[5], 5 << 14);
             break;
 
         case 2: // BBG ext palette
-            UNMAP_RANGE(VRAMMap_BBGExtPal, 0, 4);
+            UNMAP_RANGE(BBGExtPal, 0, 4);
             GPU2D_B->BGExtPalDirty(0);
             GPU2D_B->BGExtPalDirty(2);
             break;
@@ -576,10 +716,14 @@ void MapVRAM_H(u32 bank, u8 cnt)
             VRAMMap_BBG[1] |= bankmask;
             VRAMMap_BBG[4] |= bankmask;
             VRAMMap_BBG[5] |= bankmask;
+            VRAMPtr_BBG[0] = GetUniqueBankPtr(VRAMMap_BBG[0], 0 << 14);
+            VRAMPtr_BBG[1] = GetUniqueBankPtr(VRAMMap_BBG[1], 1 << 14);
+            VRAMPtr_BBG[4] = GetUniqueBankPtr(VRAMMap_BBG[4], 4 << 14);
+            VRAMPtr_BBG[5] = GetUniqueBankPtr(VRAMMap_BBG[5], 5 << 14);
             break;
 
         case 2: // BBG ext palette
-            MAP_RANGE(VRAMMap_BBGExtPal, 0, 4);
+            MAP_RANGE(BBGExtPal, 0, 4);
             GPU2D_B->BGExtPalDirty(0);
             GPU2D_B->BGExtPalDirty(2);
             break;
@@ -609,10 +753,14 @@ void MapVRAM_I(u32 bank, u8 cnt)
             VRAMMap_BBG[3] &= ~bankmask;
             VRAMMap_BBG[6] &= ~bankmask;
             VRAMMap_BBG[7] &= ~bankmask;
+            VRAMPtr_BBG[2] = GetUniqueBankPtr(VRAMMap_BBG[2], 2 << 14);
+            VRAMPtr_BBG[3] = GetUniqueBankPtr(VRAMMap_BBG[3], 3 << 14);
+            VRAMPtr_BBG[6] = GetUniqueBankPtr(VRAMMap_BBG[6], 6 << 14);
+            VRAMPtr_BBG[7] = GetUniqueBankPtr(VRAMMap_BBG[7], 7 << 14);
             break;
 
         case 2: // BOBJ
-            UNMAP_RANGE(VRAMMap_BOBJ, 0, 8);
+            UNMAP_RANGE_PTR(BOBJ, 0, 8);
             break;
 
         case 3: // BOBJ ext palette
@@ -635,10 +783,14 @@ void MapVRAM_I(u32 bank, u8 cnt)
             VRAMMap_BBG[3] |= bankmask;
             VRAMMap_BBG[6] |= bankmask;
             VRAMMap_BBG[7] |= bankmask;
+            VRAMPtr_BBG[2] = GetUniqueBankPtr(VRAMMap_BBG[2], 2 << 14);
+            VRAMPtr_BBG[3] = GetUniqueBankPtr(VRAMMap_BBG[3], 3 << 14);
+            VRAMPtr_BBG[6] = GetUniqueBankPtr(VRAMMap_BBG[6], 6 << 14);
+            VRAMPtr_BBG[7] = GetUniqueBankPtr(VRAMMap_BBG[7], 7 << 14);
             break;
 
         case 2: // BOBJ
-            MAP_RANGE(VRAMMap_BOBJ, 0, 8);
+            MAP_RANGE_PTR(BOBJ, 0, 8);
             break;
 
         case 3: // BOBJ ext palette
@@ -666,16 +818,7 @@ void SetPowerCnt(u32 val)
     GPU2D_B->SetEnabled(val & (1<<9));
     GPU3D::SetEnabled(val & (1<<3), val & (1<<2));
 
-    if (val & (1<<15))
-    {
-        GPU2D_A->SetFramebuffer(&Framebuffer[256*0]);
-        GPU2D_B->SetFramebuffer(&Framebuffer[256*192]);
-    }
-    else
-    {
-        GPU2D_A->SetFramebuffer(&Framebuffer[256*192]);
-        GPU2D_B->SetFramebuffer(&Framebuffer[256*0]);
-    }
+    AssignFramebuffers();
 }
 
 
@@ -728,11 +871,23 @@ void StartHBlank(u32 line)
             GPU2D_B->DrawScanline(line);
         }
 
+        // sprites are pre-rendered one scanline in advance
+        if (line < 191)
+        {
+            GPU2D_A->DrawSprites(line+1);
+            GPU2D_B->DrawSprites(line+1);
+        }
+
         NDS::CheckDMAs(0, 0x02);
     }
     else if (VCount == 215)
     {
         GPU3D::VCount215();
+    }
+    else if (VCount == 262)
+    {
+        GPU2D_A->DrawSprites(0);
+        GPU2D_B->DrawSprites(0);
     }
 
     if (DispStat[0] & (1<<4)) NDS::SetIRQ(0, NDS::IRQ_HBlank);
@@ -746,6 +901,9 @@ void StartHBlank(u32 line)
 
 void FinishFrame(u32 lines)
 {
+    FrontBuffer = FrontBuffer ? 0 : 1;
+    AssignFramebuffers();
+
     TotalScanlines = lines;
 }
 
