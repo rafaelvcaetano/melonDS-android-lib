@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -111,8 +111,6 @@
     func(GLUNIFORMBLOCKBINDING, glUniformBlockBinding); \
     func(GLGETUNIFORMLOCATION, glGetUniformLocation); \
     func(GLGETUNIFORMBLOCKINDEX, glGetUniformBlockIndex); \
-     \
-    func(GLBINDIMAGETEXTURE, glBindImageTexture); \
      \
     func(GLDRAWBUFFERS, glDrawBuffers); \
      \

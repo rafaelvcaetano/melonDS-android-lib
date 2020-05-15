@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -35,6 +35,11 @@ void SetBias(u16 bias);
 
 void Mix(u32 samples);
 
+void TrimOutput();
+void DrainOutput();
+void InitOutput();
+int GetOutputSize();
+void Sync(bool wait);
 int ReadOutput(s16* data, int samples);
 
 u8 Read8(u32 addr);

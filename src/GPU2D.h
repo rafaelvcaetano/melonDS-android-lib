@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -63,7 +63,7 @@ public:
     void OBJExtPalDirty();
 
     u16* GetBGExtPal(u32 slot, u32 pal);
-    u16* GetOBJExtPal(u32 pal);
+    u16* GetOBJExtPal();
 
 private:
     u32 Num;
@@ -78,6 +78,7 @@ private:
     u8 WindowMask[256] __attribute__((aligned (8)));
     u32 OBJLine[256] __attribute__((aligned (8)));
     u8 OBJWindow[256] __attribute__((aligned (8)));
+    u8 OBJIndex[256] __attribute__((aligned (8)));
 
     u32 NumSprites;
 
@@ -111,7 +112,11 @@ private:
     u8 BGMosaicSize[2];
     u8 OBJMosaicSize[2];
     u8 BGMosaicY, BGMosaicYMax;
-    u8 OBJMosaicY, OBJMosaicYMax;
+    u8 OBJMosaicYCount, OBJMosaicY, OBJMosaicYMax;
+
+    u8 MosaicTable[16][256];
+    u8* CurBGXMosaicTable;
+    u8* CurOBJXMosaicTable;
 
     u16 BlendCnt;
     u16 BlendAlpha;
@@ -133,8 +138,11 @@ private:
     u32 ColorBrightnessDown(u32 val, u32 factor);
     u32 ColorComposite(int i, u32 val1, u32 val2);
 
+    void UpdateMosaicCounters(u32 line);
+
     template<u32 bgmode> void DrawScanlineBGMode(u32 line);
     void DrawScanlineBGMode6(u32 line);
+    void DrawScanlineBGMode7(u32 line);
     void DrawScanline_BGOBJ(u32 line);
 
     static void DrawPixel_Normal(u32* dst, u16 color, u32 flag);
@@ -142,14 +150,15 @@ private:
     void (*DrawPixel)(u32* dst, u16 color, u32 flag);
 
     void DrawBG_3D();
-    void DrawBG_Text(u32 line, u32 bgnum);
-    void DrawBG_Affine(u32 line, u32 bgnum);
-    void DrawBG_Extended(u32 line, u32 bgnum);
-    void DrawBG_Large(u32 line);
+    template<bool mosaic> void DrawBG_Text(u32 line, u32 bgnum);
+    template<bool mosaic> void DrawBG_Affine(u32 line, u32 bgnum);
+    template<bool mosaic> void DrawBG_Extended(u32 line, u32 bgnum);
+    template<bool mosaic> void DrawBG_Large(u32 line);
 
+    void ApplySpriteMosaicX();
     void InterleaveSprites(u32 prio);
-    template<bool window> void DrawSprite_Rotscale(u16* attrib, u16* rotparams, u32 boundwidth, u32 boundheight, u32 width, u32 height, s32 xpos, s32 ypos);
-    template<bool window> void DrawSprite_Normal(u16* attrib, u32 width, s32 xpos, s32 ypos);
+    template<bool window> void DrawSprite_Rotscale(u32 num, u32 boundwidth, u32 boundheight, u32 width, u32 height, s32 xpos, s32 ypos);
+    template<bool window> void DrawSprite_Normal(u32 num, u32 width, u32 height, s32 xpos, s32 ypos);
 
     void DoCapture(u32 line, u32 width);
 

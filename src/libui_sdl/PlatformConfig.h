@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -25,8 +25,12 @@ enum
 {
     HK_Lid = 0,
     HK_Mic,
+    HK_Pause,
+    HK_Reset,
     HK_FastForward,
     HK_FastForwardToggle,
+    HK_SolarSensorDecrease,
+    HK_SolarSensorIncrease,
     HK_MAX
 };
 
@@ -39,6 +43,8 @@ extern int JoyMapping[12];
 extern int HKKeyMapping[HK_MAX];
 extern int HKJoyMapping[HK_MAX];
 
+extern int JoystickID;
+
 extern int WindowWidth;
 extern int WindowHeight;
 extern int WindowMaximized;
@@ -50,9 +56,12 @@ extern int ScreenSizing;
 extern int ScreenFilter;
 
 extern int ScreenUseGL;
+extern int ScreenVSync;
 extern int ScreenRatio;
 
 extern int LimitFPS;
+extern int AudioSync;
+extern int ShowOSD;
 
 extern int DirectBoot;
 

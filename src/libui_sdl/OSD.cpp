@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -27,6 +27,8 @@
 
 #include "OSD.h"
 #include "font.h"
+
+#include "PlatformConfig.h"
 
 extern int WindowWidth, WindowHeight;
 
@@ -202,7 +204,7 @@ void RenderText(u32 color, const char* text, Item* item)
     int breaks[64];
 
     bool rainbow = (color == 0);
-    u32 rainbowinc = (text[0] * 17) % 600;
+    u32 rainbowinc = ((text[0] * 17) + (SDL_GetTicks() * 13)) % 600;
 
     color |= 0xFF000000;
     const u32 shadow = 0xE0000000;
@@ -306,6 +308,8 @@ void RenderText(u32 color, const char* text, Item* item)
 
 void AddMessage(u32 color, const char* text)
 {
+    if (!Config::ShowOSD) return;
+
     while (Rendering);
 
     Item item;
@@ -341,6 +345,14 @@ void WindowResized(bool opengl)
 
 void Update(bool opengl, uiAreaDrawParams* params)
 {
+    if (!Config::ShowOSD)
+    {
+        Rendering = true;
+        if (ItemQueue.size() > 0) DeInit(opengl);
+        Rendering = false;
+        return;
+    }
+
     Rendering = true;
 
     Uint32 tick_now = SDL_GetTicks();
@@ -407,8 +419,8 @@ void Update(bool opengl, uiAreaDrawParams* params)
                 item.DrawBitmapLoaded = true;
             }
 
-            uiRect rc_src = {0, 0, item.Width, item.Height};
-            uiRect rc_dst = {kOSDMargin, y, item.Width, item.Height};
+            uiRect rc_src = {0, 0, (int) item.Width, (int) item.Height};
+            uiRect rc_dst = {kOSDMargin, (int) y, (int) item.Width, (int) item.Height};
 
             uiDrawBitmapDraw(params->Context, item.DrawBitmap, &rc_src, &rc_dst, 0);
         }

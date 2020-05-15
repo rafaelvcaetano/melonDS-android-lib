@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -65,6 +65,8 @@ typedef struct
 
     bool IsShadowMask;
     bool IsShadow;
+
+    int Type; // 0=regular 1=line
 
     u32 VTop, VBottom; // vertex indices
     s32 YTop, YBottom; // Y coords

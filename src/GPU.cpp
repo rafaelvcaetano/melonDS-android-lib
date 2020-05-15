@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -20,7 +20,6 @@
 #include <string.h>
 #include "NDS.h"
 #include "GPU.h"
-u64 vbltime;
 
 namespace GPU
 {
@@ -284,6 +283,7 @@ void SetDisplaySettings(bool accel)
     if (Framebuffer[1][0]) delete[] Framebuffer[1][0];
     if (Framebuffer[0][1]) delete[] Framebuffer[0][1];
     if (Framebuffer[1][1]) delete[] Framebuffer[1][1];
+
     Framebuffer[0][0] = new u32[fbsize];
     Framebuffer[1][0] = new u32[fbsize];
     Framebuffer[0][1] = new u32[fbsize];

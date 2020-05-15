@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -20,6 +20,11 @@
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
+
+#ifndef __WIN32__
+#include <glib.h>
+#endif
 
 #include <SDL2/SDL.h>
 #include "libui/ui.h"
@@ -38,6 +43,7 @@
 #include "DlgWifiSettings.h"
 
 #include "../NDS.h"
+#include "../GBACart.h"
 #include "../GPU.h"
 #include "../SPU.h"
 #include "../Wifi.h"
@@ -47,6 +53,10 @@
 #include "../Savestate.h"
 
 #include "OSD.h"
+
+#ifdef MELONCAP
+#include "MelonCap.h"
+#endif // MELONCAP
 
 
 // savestate slot mapping
@@ -93,15 +103,17 @@ uiMenuItem* MenuItem_ScreenSizing[4];
 
 uiMenuItem* MenuItem_ScreenFilter;
 uiMenuItem* MenuItem_LimitFPS;
+uiMenuItem* MenuItem_AudioSync;
+uiMenuItem* MenuItem_ShowOSD;
 
 SDL_Thread* EmuThread;
 int EmuRunning;
 volatile int EmuStatus;
 
 bool RunningSomething;
-char ROMPath[1024];
-char SRAMPath[1024];
-char PrevSRAMPath[1024]; // for savestate 'undo load'
+char ROMPath[2][1024];
+char SRAMPath[2][1024];
+char PrevSRAMPath[2][1024]; // for savestate 'undo load'
 
 bool SavestateLoaded;
 
@@ -128,6 +140,8 @@ bool GL_ScreenSizeDirty;
 
 int GL_3DScale;
 
+bool GL_VSyncStatus;
+
 int ScreenGap = 0;
 int ScreenLayout = 0;
 int ScreenSizing = 0;
@@ -143,12 +157,26 @@ uiDrawMatrix BottomScreenTrans;
 
 bool Touching = false;
 
-u32 KeyInputMask;
-u32 HotkeyMask;
+u32 KeyInputMask, JoyInputMask;
+u32 KeyHotkeyMask, JoyHotkeyMask;
+u32 HotkeyMask, LastHotkeyMask;
+u32 HotkeyPress, HotkeyRelease;
+
+#define HotkeyDown(hk)     (HotkeyMask & (1<<(hk)))
+#define HotkeyPressed(hk)  (HotkeyPress & (1<<(hk)))
+#define HotkeyReleased(hk) (HotkeyRelease & (1<<(hk)))
+
 bool LidStatus;
+
+int JoystickID;
 SDL_Joystick* Joystick;
 
+int AudioFreq;
+float AudioSampleFrac;
 SDL_AudioDeviceID AudioDevice, MicDevice;
+
+SDL_cond* AudioSync;
+SDL_mutex* AudioSyncLock;
 
 u32 MicBufferLength = 2048;
 s16 MicBuffer[2048];
@@ -157,11 +185,12 @@ u32 MicBufferReadPos, MicBufferWritePos;
 u32 MicWavLength;
 s16* MicWavBuffer;
 
-u32 MicCommand;
-
-bool HotkeyFPSToggle = false;
-
 void SetupScreenRects(int width, int height);
+
+void TogglePause(void* blarg);
+void Reset(void* blarg);
+
+void SetupSRAMPath(int slot);
 
 void SaveState(int slot);
 void LoadState(int slot);
@@ -225,6 +254,8 @@ bool GLScreen_InitOSDShader(GLuint* shader)
 
 bool GLScreen_Init()
 {
+    GL_VSyncStatus = Config::ScreenVSync;
+
     // TODO: consider using epoxy?
     if (!OpenGL_Init())
         return false;
@@ -287,6 +318,13 @@ void GLScreen_DeInit()
 
 void GLScreen_DrawScreen()
 {
+    bool vsync = Config::ScreenVSync && !HotkeyDown(HK_FastForward);
+    if (vsync != GL_VSyncStatus)
+    {
+        GL_VSyncStatus = vsync;
+        uiGLSetVSync(vsync);
+    }
+
     float scale = uiGLGetFramebufferScale(GLContext);
 
     glBindFramebuffer(GL_FRAMEBUFFER, uiGLGetFramebuffer(GLContext));
@@ -547,34 +585,44 @@ void MicLoadWav(char* name)
     SDL_FreeWAV(buf);
 }
 
-
-void UpdateWindowTitle(void* data)
-{
-    uiWindowSetTitle(MainWindow, (const char*)data);
-}
-
 void AudioCallback(void* data, Uint8* stream, int len)
 {
-    // resampling:
-    // buffer length is 1024 samples
-    // which is 710 samples at the original sample rate
+    len /= (sizeof(s16) * 2);
 
-    s16 buf_in[710*2];
+    // resample incoming audio to match the output sample rate
+
+    float f_len_in = (len * 32823.6328125) / (float)AudioFreq;
+    f_len_in += AudioSampleFrac;
+    int len_in = (int)floor(f_len_in);
+    AudioSampleFrac = f_len_in - len_in;
+
+    s16 buf_in[1024*2];
     s16* buf_out = (s16*)stream;
 
-    int num_in = SPU::ReadOutput(buf_in, 710);
-    int num_out = 1024;
+    int num_in;
+    int num_out = len;
+
+    SDL_LockMutex(AudioSyncLock);
+    num_in = SPU::ReadOutput(buf_in, len_in);
+    SDL_CondSignal(AudioSync);
+    SDL_UnlockMutex(AudioSyncLock);
+
+    if (num_in < 1)
+    {
+        memset(stream, 0, len*sizeof(s16)*2);
+        return;
+    }
 
     int margin = 6;
-    if (num_in < 710-margin)
+    if (num_in < len_in-margin)
     {
         int last = num_in-1;
         if (last < 0) last = 0;
 
-        for (int i = num_in; i < 710-margin; i++)
+        for (int i = num_in; i < len_in-margin; i++)
             ((u32*)buf_in)[i] = ((u32*)buf_in)[last];
 
-        num_in = 710-margin;
+        num_in = len_in-margin;
     }
 
     float res_incr = num_in / (float)num_out;
@@ -583,11 +631,21 @@ void AudioCallback(void* data, Uint8* stream, int len)
 
     int volume = Config::AudioVolume;
 
-    for (int i = 0; i < 1024; i++)
+    for (int i = 0; i < len; i++)
     {
-        // TODO: interp!!
         buf_out[i*2  ] = (buf_in[res_pos*2  ] * volume) >> 8;
         buf_out[i*2+1] = (buf_in[res_pos*2+1] * volume) >> 8;
+
+        /*s16 s_l = buf_in[res_pos*2  ];
+        s16 s_r = buf_in[res_pos*2+1];
+
+        float a = res_timer;
+        float b = 1.0 - a;
+        s_l = (s_l * a) + (buf_in[(res_pos-1)*2  ] * b);
+        s_r = (s_r * a) + (buf_in[(res_pos-1)*2+1] * b);
+
+        buf_out[i*2  ] = (s_l * volume) >> 8;
+        buf_out[i*2+1] = (s_r * volume) >> 8;*/
 
         res_timer += res_incr;
         while (res_timer >= 1.0)
@@ -619,50 +677,12 @@ void MicCallback(void* data, Uint8* stream, int len)
     }
 }
 
-bool JoyButtonPressed(int btnid, int njoybuttons, Uint8* joybuttons, Uint32 hat)
-{
-    if (btnid < 0) return false;
-
-    hat &= ~(hat >> 4);
-
-    bool pressed = false;
-    if (btnid == 0x101) // up
-        pressed = (hat & SDL_HAT_UP);
-    else if (btnid == 0x104) // down
-        pressed = (hat & SDL_HAT_DOWN);
-    else if (btnid == 0x102) // right
-        pressed = (hat & SDL_HAT_RIGHT);
-    else if (btnid == 0x108) // left
-        pressed = (hat & SDL_HAT_LEFT);
-    else if (btnid < njoybuttons)
-        pressed = (joybuttons[btnid] & ~(joybuttons[btnid] >> 1)) & 0x01;
-
-    return pressed;
-}
-
-bool JoyButtonHeld(int btnid, int njoybuttons, Uint8* joybuttons, Uint32 hat)
-{
-    if (btnid < 0) return false;
-
-    bool pressed = false;
-    if (btnid == 0x101) // up
-        pressed = (hat & SDL_HAT_UP);
-    else if (btnid == 0x104) // down
-        pressed = (hat & SDL_HAT_DOWN);
-    else if (btnid == 0x102) // right
-        pressed = (hat & SDL_HAT_RIGHT);
-    else if (btnid == 0x108) // left
-        pressed = (hat & SDL_HAT_LEFT);
-    else if (btnid < njoybuttons)
-        pressed = joybuttons[btnid] & 0x01;
-
-    return pressed;
-}
-
 void FeedMicInput()
 {
     int type = Config::MicInputType;
-    if ((type != 1 && MicCommand == 0) ||
+    bool cmd = HotkeyDown(HK_Mic);
+
+    if ((type != 1 && !cmd) ||
         (type == 1 && MicBufferLength == 0) ||
         (type == 3 && MicWavBuffer == NULL))
     {
@@ -722,10 +742,169 @@ void FeedMicInput()
     }
 }
 
+void OpenJoystick()
+{
+    if (Joystick) SDL_JoystickClose(Joystick);
+
+    int num = SDL_NumJoysticks();
+    if (num < 1)
+    {
+        Joystick = NULL;
+        return;
+    }
+
+    if (JoystickID >= num)
+        JoystickID = 0;
+
+    Joystick = SDL_JoystickOpen(JoystickID);
+}
+
+bool JoystickButtonDown(int val)
+{
+    if (val == -1) return false;
+
+    bool hasbtn = ((val & 0xFFFF) != 0xFFFF);
+
+    if (hasbtn)
+    {
+        if (val & 0x100)
+        {
+            int hatnum = (val >> 4) & 0xF;
+            int hatdir = val & 0xF;
+            Uint8 hatval = SDL_JoystickGetHat(Joystick, hatnum);
+
+            bool pressed = false;
+            if      (hatdir == 0x1) pressed = (hatval & SDL_HAT_UP);
+            else if (hatdir == 0x4) pressed = (hatval & SDL_HAT_DOWN);
+            else if (hatdir == 0x2) pressed = (hatval & SDL_HAT_RIGHT);
+            else if (hatdir == 0x8) pressed = (hatval & SDL_HAT_LEFT);
+
+            if (pressed) return true;
+        }
+        else
+        {
+            int btnnum = val & 0xFFFF;
+            Uint8 btnval = SDL_JoystickGetButton(Joystick, btnnum);
+
+            if (btnval) return true;
+        }
+    }
+
+    if (val & 0x10000)
+    {
+        int axisnum = (val >> 24) & 0xF;
+        int axisdir = (val >> 20) & 0xF;
+        Sint16 axisval = SDL_JoystickGetAxis(Joystick, axisnum);
+
+        switch (axisdir)
+        {
+        case 0: // positive
+            if (axisval > 16384) return true;
+            break;
+
+        case 1: // negative
+            if (axisval < -16384) return true;
+            break;
+
+        case 2: // trigger
+            if (axisval > 0) return true;
+            break;
+        }
+    }
+
+    return false;
+}
+
+void ProcessInput()
+{
+    SDL_JoystickUpdate();
+
+    if (Joystick)
+    {
+        if (!SDL_JoystickGetAttached(Joystick))
+        {
+            SDL_JoystickClose(Joystick);
+            Joystick = NULL;
+        }
+    }
+    if (!Joystick && (SDL_NumJoysticks() > 0))
+    {
+        JoystickID = Config::JoystickID;
+        OpenJoystick();
+    }
+
+    JoyInputMask = 0xFFF;
+    for (int i = 0; i < 12; i++)
+        if (JoystickButtonDown(Config::JoyMapping[i]))
+            JoyInputMask &= ~(1<<i);
+
+    JoyHotkeyMask = 0;
+    for (int i = 0; i < HK_MAX; i++)
+        if (JoystickButtonDown(Config::HKJoyMapping[i]))
+            JoyHotkeyMask |= (1<<i);
+
+    HotkeyMask = KeyHotkeyMask | JoyHotkeyMask;
+    HotkeyPress = HotkeyMask & ~LastHotkeyMask;
+    HotkeyRelease = LastHotkeyMask & ~HotkeyMask;
+    LastHotkeyMask = HotkeyMask;
+}
+
+bool JoyButtonPressed(int btnid, int njoybuttons, Uint8* joybuttons, Uint32 hat)
+{
+    if (btnid < 0) return false;
+
+    hat &= ~(hat >> 4);
+
+    bool pressed = false;
+    if (btnid == 0x101) // up
+        pressed = (hat & SDL_HAT_UP);
+    else if (btnid == 0x104) // down
+        pressed = (hat & SDL_HAT_DOWN);
+    else if (btnid == 0x102) // right
+        pressed = (hat & SDL_HAT_RIGHT);
+    else if (btnid == 0x108) // left
+        pressed = (hat & SDL_HAT_LEFT);
+    else if (btnid < njoybuttons)
+        pressed = (joybuttons[btnid] & ~(joybuttons[btnid] >> 1)) & 0x01;
+
+    return pressed;
+}
+
+bool JoyButtonHeld(int btnid, int njoybuttons, Uint8* joybuttons, Uint32 hat)
+{
+    if (btnid < 0) return false;
+
+    bool pressed = false;
+    if (btnid == 0x101) // up
+        pressed = (hat & SDL_HAT_UP);
+    else if (btnid == 0x104) // down
+        pressed = (hat & SDL_HAT_DOWN);
+    else if (btnid == 0x102) // right
+        pressed = (hat & SDL_HAT_RIGHT);
+    else if (btnid == 0x108) // left
+        pressed = (hat & SDL_HAT_LEFT);
+    else if (btnid < njoybuttons)
+        pressed = joybuttons[btnid] & 0x01;
+
+    return pressed;
+}
+
+void UpdateWindowTitle(void* data)
+{
+    if (EmuStatus == 0) return;
+    void** dataarray = (void**)data;
+    SDL_LockMutex((SDL_mutex*)dataarray[1]);
+    uiWindowSetTitle(MainWindow, (const char*)dataarray[0]);
+    SDL_UnlockMutex((SDL_mutex*)dataarray[1]);
+}
+
+void UpdateFPSLimit(void* data)
+{
+    uiMenuItemSetChecked(MenuItem_LimitFPS, Config::LimitFPS==1);
+}
+
 int EmuThreadFunc(void* burp)
 {
-    NDS::Init();
-
     MainScreenPos[0] = 0;
     MainScreenPos[1] = 0;
     MainScreenPos[2] = 0;
@@ -744,133 +923,71 @@ int EmuThreadFunc(void* burp)
 
     Touching = false;
     KeyInputMask = 0xFFF;
+    JoyInputMask = 0xFFF;
+    KeyHotkeyMask = 0;
+    JoyHotkeyMask = 0;
     HotkeyMask = 0;
+    LastHotkeyMask = 0;
     LidStatus = false;
-    MicCommand = 0;
-
-    Uint8* joybuttons = NULL; int njoybuttons = 0;
-    Uint32 joyhat = 0;
-
-    if (Joystick)
-    {
-        njoybuttons = SDL_JoystickNumButtons(Joystick);
-        if (njoybuttons)
-        {
-            joybuttons = new Uint8[njoybuttons];
-            memset(joybuttons, 0, sizeof(Uint8)*njoybuttons);
-        }
-    }
 
     u32 nframes = 0;
     u32 starttick = SDL_GetTicks();
     u32 lasttick = starttick;
     u32 lastmeasuretick = lasttick;
     u32 fpslimitcount = 0;
+    u64 perfcount = SDL_GetPerformanceCounter();
+    u64 perffreq = SDL_GetPerformanceFrequency();
+    float samplesleft = 0;
+    u32 nsamples = 0;
+
     char melontitle[100];
+    SDL_mutex* titlemutex = SDL_CreateMutex();
+    void* titledata[2] = {melontitle, titlemutex};
 
     while (EmuRunning != 0)
     {
+        ProcessInput();
+
+        if (HotkeyPressed(HK_FastForwardToggle))
+        {
+            Config::LimitFPS = !Config::LimitFPS;
+            uiQueueMain(UpdateFPSLimit, NULL);
+        }
+        // TODO: similar hotkeys for video/audio sync?
+
+        if (HotkeyPressed(HK_Pause)) uiQueueMain(TogglePause, NULL);
+        if (HotkeyPressed(HK_Reset)) uiQueueMain(Reset, NULL);
+
+        if (GBACart::CartInserted && GBACart::HasSolarSensor)
+        {
+            if (HotkeyPressed(HK_SolarSensorDecrease))
+            {
+                if (GBACart_SolarSensor::LightLevel > 0) GBACart_SolarSensor::LightLevel--;
+                char msg[64];
+                sprintf(msg, "Solar sensor level set to %d", GBACart_SolarSensor::LightLevel);
+                OSD::AddMessage(0, msg);
+            }
+            if (HotkeyPressed(HK_SolarSensorIncrease))
+            {
+                if (GBACart_SolarSensor::LightLevel < 10) GBACart_SolarSensor::LightLevel++;
+                char msg[64];
+                sprintf(msg, "Solar sensor level set to %d", GBACart_SolarSensor::LightLevel);
+                OSD::AddMessage(0, msg);
+            }
+        }
+
         if (EmuRunning == 1)
         {
             EmuStatus = 1;
 
-            SDL_JoystickUpdate();
+            // process input and hotkeys
+            NDS::SetKeyMask(KeyInputMask & JoyInputMask);
 
-            if (Joystick)
+            if (HotkeyPressed(HK_Lid))
             {
-                if (!SDL_JoystickGetAttached(Joystick))
-                {
-                    SDL_JoystickClose(Joystick);
-                    Joystick = NULL;
-                }
-            }
-            if (!Joystick && (SDL_NumJoysticks() > 0))
-            {
-                Joystick = SDL_JoystickOpen(0);
-                if (Joystick)
-                {
-                    njoybuttons = SDL_JoystickNumButtons(Joystick);
-                    if (joybuttons) delete[] joybuttons;
-                    if (njoybuttons)
-                    {
-                        joybuttons = new Uint8[njoybuttons];
-                        memset(joybuttons, 0, sizeof(Uint8)*njoybuttons);
-                        joyhat = 0;
-                    }
-                }
-            }
-
-            // poll input
-            u32 keymask = KeyInputMask;
-            u32 joymask = 0xFFF;
-            if (Joystick)
-            {
-                joyhat <<= 4;
-                joyhat |= SDL_JoystickGetHat(Joystick, 0);
-
-                Sint16 axisX = SDL_JoystickGetAxis(Joystick, 0);
-                Sint16 axisY = SDL_JoystickGetAxis(Joystick, 1);
-
-                for (int i = 0; i < njoybuttons; i++)
-                {
-                    joybuttons[i] <<= 1;
-                    joybuttons[i] |= SDL_JoystickGetButton(Joystick, i);
-                }
-
-                for (int i = 0; i < 12; i++)
-                {
-                    bool pressed = JoyButtonHeld(Config::JoyMapping[i], njoybuttons, joybuttons, joyhat);
-
-                    if (i == 4) // right
-                        pressed = pressed || (axisX >= 16384);
-                    else if (i == 5) // left
-                        pressed = pressed || (axisX <= -16384);
-                    else if (i == 6) // up
-                        pressed = pressed || (axisY <= -16384);
-                    else if (i == 7) // down
-                        pressed = pressed || (axisY >= 16384);
-
-                    if (pressed) joymask &= ~(1<<i);
-                }
-
-                if (JoyButtonPressed(Config::HKJoyMapping[HK_Lid], njoybuttons, joybuttons, joyhat))
-                {
-                    LidStatus = !LidStatus;
-                    HotkeyMask |= 0x1;
-                }
-
-                if (JoyButtonPressed(Config::HKJoyMapping[HK_FastForwardToggle], njoybuttons, joybuttons, joyhat))
-                {
-                    HotkeyFPSToggle = !HotkeyFPSToggle;
-                    Config::LimitFPS = !Config::LimitFPS;
-                    uiMenuItemSetChecked(MenuItem_LimitFPS, Config::LimitFPS==1);
-                }
-
-                if (!HotkeyFPSToggle)   // For fast forward (hold) hotkey
-                {
-                    if (JoyButtonHeld(Config::HKJoyMapping[HK_FastForward], njoybuttons, joybuttons, joyhat))
-                    {
-                        Config::LimitFPS = false;
-                        uiMenuItemSetChecked(MenuItem_LimitFPS, false);
-                    }
-                    else if (!Config::LimitFPS)
-                    {
-                        Config::LimitFPS = true;
-                        uiMenuItemSetChecked(MenuItem_LimitFPS, true);
-                    }
-                }
-
-                if (JoyButtonHeld(Config::HKJoyMapping[HK_Mic], njoybuttons, joybuttons, joyhat))
-                    MicCommand |= 2;
-                else
-                    MicCommand &= ~2;
-            }
-            NDS::SetKeyMask(keymask & joymask);
-
-            if (HotkeyMask & 0x1)
-            {
+                LidStatus = !LidStatus;
                 NDS::SetLidClosed(LidStatus);
-                HotkeyMask &= ~0x1;
+                OSD::AddMessage(0, LidStatus ? "Lid closed" : "Lid opened");
             }
 
             // microphone input
@@ -914,6 +1031,10 @@ int EmuThreadFunc(void* burp)
             // emulate
             u32 nlines = NDS::RunFrame();
 
+#ifdef MELONCAP
+            MelonCap::Update();
+#endif // MELONCAP
+
             if (EmuRunning == 0) break;
 
             if (Screen_UseGL)
@@ -923,23 +1044,51 @@ int EmuThreadFunc(void* burp)
             }
             uiAreaQueueRedrawAll(MainDrawArea);
 
-            // framerate limiter based off SDL2_gfx
-            float framerate = (1000.0f * nlines) / (60.0f * 263.0f);
+            bool fastforward = HotkeyDown(HK_FastForward);
 
-            fpslimitcount++;
-            u32 curtick = SDL_GetTicks();
-            u32 delay = curtick - lasttick;
-            lasttick = curtick;
-
-            u32 wantedtick = starttick + (u32)((float)fpslimitcount * framerate);
-            if (curtick < wantedtick && Config::LimitFPS)
+            if (Config::AudioSync && !fastforward)
             {
-                SDL_Delay(wantedtick - curtick);
+                SDL_LockMutex(AudioSyncLock);
+                while (SPU::GetOutputSize() > 1024)
+                {
+                    int ret = SDL_CondWaitTimeout(AudioSync, AudioSyncLock, 500);
+                    if (ret == SDL_MUTEX_TIMEDOUT) break;
+                }
+                SDL_UnlockMutex(AudioSyncLock);
             }
             else
             {
-                fpslimitcount = 0;
-                starttick = curtick;
+                // ensure the audio FIFO doesn't overflow
+                //SPU::TrimOutput();
+            }
+
+            float framerate = (1000.0f * nlines) / (60.0f * 263.0f);
+
+            {
+                u32 curtick = SDL_GetTicks();
+                u32 delay = curtick - lasttick;
+
+                bool limitfps = Config::LimitFPS && !fastforward;
+                if (limitfps)
+                {
+                    float wantedtickF = starttick + (framerate * (fpslimitcount+1));
+                    u32 wantedtick = (u32)ceil(wantedtickF);
+                    if (curtick < wantedtick) SDL_Delay(wantedtick - curtick);
+
+                    lasttick = SDL_GetTicks();
+                    fpslimitcount++;
+                    if ((abs(wantedtickF - (float)wantedtick) < 0.001312) || (fpslimitcount > 60))
+                    {
+                        fpslimitcount = 0;
+                        nsamples = 0;
+                        starttick = lasttick;
+                    }
+                }
+                else
+                {
+                    if (delay < 1) SDL_Delay(1);
+                    lasttick = SDL_GetTicks();
+                }
             }
 
             nframes++;
@@ -958,8 +1107,10 @@ int EmuThreadFunc(void* burp)
                 if (framerate < 1) fpstarget = 999;
                 else fpstarget = 1000.0f/framerate;
 
+                SDL_LockMutex(titlemutex);
                 sprintf(melontitle, "[%d/%.0f] melonDS " MELONDS_VERSION, fps, fpstarget);
-                uiQueueMain(UpdateWindowTitle, melontitle);
+                SDL_UnlockMutex(titlemutex);
+                uiQueueMain(UpdateWindowTitle, titledata);
             }
         }
         else
@@ -979,8 +1130,6 @@ int EmuThreadFunc(void* burp)
                     uiGLMakeContextCurrent(GLContext);
                     GLScreen_DrawScreen();
                     uiGLEnd(GLContext);
-                    //uiGLMakeContextCurrent(NULL);
-                    //uiQueueMain(norp, NULL);
                 }
                 uiAreaQueueRedrawAll(MainDrawArea);
             }
@@ -995,7 +1144,7 @@ int EmuThreadFunc(void* burp)
 
     EmuStatus = 0;
 
-    if (joybuttons) delete[] joybuttons;
+    SDL_DestroyMutex(titlemutex);
 
     if (Screen_UseGL) uiGLMakeContextCurrent(GLContext);
 
@@ -1013,6 +1162,12 @@ int EmuThreadFunc(void* burp)
     if (Screen_UseGL) uiGLMakeContextCurrent(NULL);
 
     return 44203;
+}
+
+void StopEmuThread()
+{
+    EmuRunning = 0;
+    SDL_WaitThread(EmuThread, NULL);
 }
 
 
@@ -1128,6 +1283,15 @@ void OnAreaDragBroken(uiAreaHandler* handler, uiArea* area)
 {
 }
 
+bool EventMatchesKey(uiAreaKeyEvent* evt, int val, bool checkmod)
+{
+    if (val == -1) return false;
+
+    int key = val & 0xFFFF;
+    int mod = val >> 16;
+    return evt->Scancode == key && (!checkmod || evt->Modifiers == mod);
+}
+
 int OnAreaKeyEvent(uiAreaHandler* handler, uiArea* area, uiAreaKeyEvent* evt)
 {
     // TODO: release all keys if the window loses focus? or somehow global key input?
@@ -1136,34 +1300,19 @@ int OnAreaKeyEvent(uiAreaHandler* handler, uiArea* area, uiAreaKeyEvent* evt)
     if (evt->Modifiers == 0x2) // ALT+key
         return 0;
 
-    // d0rp
-    if (!RunningSomething)
-        return 1;
-
     if (evt->Up)
     {
         for (int i = 0; i < 12; i++)
-            if (evt->Scancode == Config::KeyMapping[i])
+            if (EventMatchesKey(evt, Config::KeyMapping[i], false))
                 KeyInputMask |= (1<<i);
 
-        if (evt->Scancode == Config::HKKeyMapping[HK_Mic])
-            MicCommand &= ~1;
-
-        if (evt->Scancode == Config::HKKeyMapping[HK_FastForwardToggle])
-        {
-            HotkeyFPSToggle = !HotkeyFPSToggle;
-            Config::LimitFPS = !Config::LimitFPS;
-            uiMenuItemSetChecked(MenuItem_LimitFPS, Config::LimitFPS==1);
-        }
-
-        if (evt->Scancode == Config::HKKeyMapping[HK_FastForward] && !HotkeyFPSToggle)
-        {
-            Config::LimitFPS = true;
-            uiMenuItemSetChecked(MenuItem_LimitFPS, Config::LimitFPS==1);
-        }
+        for (int i = 0; i < HK_MAX; i++)
+            if (EventMatchesKey(evt, Config::HKKeyMapping[i], true))
+                KeyHotkeyMask &= ~(1<<i);
     }
     else if (!evt->Repeat)
     {
+        // TODO, eventually: make savestate keys configurable?
         // F keys: 3B-44, 57-58 | SHIFT: mod. 0x4
         if (evt->Scancode >= 0x3B && evt->Scancode <= 0x42) // F1-F8, quick savestate
         {
@@ -1181,25 +1330,16 @@ int OnAreaKeyEvent(uiAreaHandler* handler, uiArea* area, uiAreaKeyEvent* evt)
         }
 
         for (int i = 0; i < 12; i++)
-            if (evt->Scancode == Config::KeyMapping[i])
+            if (EventMatchesKey(evt, Config::KeyMapping[i], false))
                 KeyInputMask &= ~(1<<i);
 
-        if (evt->Scancode == Config::HKKeyMapping[HK_Lid])
-        {
-            LidStatus = !LidStatus;
-            HotkeyMask |= 0x1;
-        }
-        if (evt->Scancode == Config::HKKeyMapping[HK_Mic])
-            MicCommand |= 1;
+        for (int i = 0; i < HK_MAX; i++)
+            if (EventMatchesKey(evt, Config::HKKeyMapping[i], true))
+                KeyHotkeyMask |= (1<<i);
 
-        if (evt->Scancode == Config::HKKeyMapping[HK_FastForward] && !HotkeyFPSToggle)
-        {
-            Config::LimitFPS = false;
-            uiMenuItemSetChecked(MenuItem_LimitFPS, Config::LimitFPS==1);
-        }
-
-        if (evt->Scancode == 0x57) // F11
-            NDS::debug(0);
+        // REMOVE ME
+        //if (evt->Scancode == 0x57) // F11
+        //    NDS::debug(0);
     }
 
     return 1;
@@ -1474,6 +1614,8 @@ void Run()
     EmuRunning = 1;
     RunningSomething = true;
 
+    SPU::InitOutput();
+    AudioSampleFrac = 0;
     SDL_PauseAudioDevice(AudioDevice, 0);
     SDL_PauseAudioDevice(MicDevice, 0);
 
@@ -1502,12 +1644,76 @@ void Run()
     uiMenuItemSetChecked(MenuItem_Pause, 0);
 }
 
+void TogglePause(void* blarg)
+{
+    if (!RunningSomething) return;
+
+    if (EmuRunning == 1)
+    {
+        // enable pause
+        EmuRunning = 2;
+        uiMenuItemSetChecked(MenuItem_Pause, 1);
+
+        SPU::DrainOutput();
+        SDL_PauseAudioDevice(AudioDevice, 1);
+        SDL_PauseAudioDevice(MicDevice, 1);
+
+        OSD::AddMessage(0, "Paused");
+    }
+    else
+    {
+        // disable pause
+        EmuRunning = 1;
+        uiMenuItemSetChecked(MenuItem_Pause, 0);
+
+        SPU::InitOutput();
+        AudioSampleFrac = 0;
+        SDL_PauseAudioDevice(AudioDevice, 0);
+        SDL_PauseAudioDevice(MicDevice, 0);
+
+        OSD::AddMessage(0, "Resumed");
+    }
+}
+
+void Reset(void* blarg)
+{
+    if (!RunningSomething) return;
+
+    EmuRunning = 2;
+    while (EmuStatus != 2);
+
+    SavestateLoaded = false;
+    uiMenuItemDisable(MenuItem_UndoStateLoad);
+
+    if (ROMPath[0][0] == '\0')
+        NDS::LoadBIOS();
+    else
+    {
+        SetupSRAMPath(0);
+        NDS::LoadROM(ROMPath[0], SRAMPath[0], Config::DirectBoot);
+    }
+
+    if (ROMPath[1][0] != '\0')
+    {
+        SetupSRAMPath(1);
+        NDS::LoadGBAROM(ROMPath[1], SRAMPath[1]);
+    }
+
+    Run();
+
+    OSD::AddMessage(0, "Reset");
+}
+
 void Stop(bool internal)
 {
     EmuRunning = 2;
     if (!internal) // if shutting down from the UI thread, wait till the emu thread has stopped
         while (EmuStatus != 2);
     RunningSomething = false;
+
+    // eject any inserted GBA cartridge
+    GBACart::Eject();
+    ROMPath[1][0] = '\0';
 
     uiWindowSetTitle(MainWindow, "melonDS " MELONDS_VERSION);
 
@@ -1522,36 +1728,51 @@ void Stop(bool internal)
 
     uiAreaQueueRedrawAll(MainDrawArea);
 
+    SPU::DrainOutput();
     SDL_PauseAudioDevice(AudioDevice, 1);
     SDL_PauseAudioDevice(MicDevice, 1);
+
+    OSD::AddMessage(0xFFC040, "Shutdown");
 }
 
-void SetupSRAMPath()
+void SetupSRAMPath(int slot)
 {
-    strncpy(SRAMPath, ROMPath, 1023);
-    SRAMPath[1023] = '\0';
-    strncpy(SRAMPath + strlen(ROMPath) - 3, "sav", 3);
+    strncpy(SRAMPath[slot], ROMPath[slot], 1023);
+    SRAMPath[slot][1023] = '\0';
+    strncpy(SRAMPath[slot] + strlen(ROMPath[slot]) - 3, "sav", 3);
 }
 
-void TryLoadROM(char* file, int prevstatus)
+void TryLoadROM(char* file, int slot, int prevstatus)
 {
     char oldpath[1024];
     char oldsram[1024];
-    strncpy(oldpath, ROMPath, 1024);
-    strncpy(oldsram, SRAMPath, 1024);
+    strncpy(oldpath, ROMPath[slot], 1024);
+    strncpy(oldsram, SRAMPath[slot], 1024);
 
-    strncpy(ROMPath, file, 1023);
-    ROMPath[1023] = '\0';
+    strncpy(ROMPath[slot], file, 1023);
+    ROMPath[slot][1023] = '\0';
 
-    SetupSRAMPath();
+    SetupSRAMPath(0);
+    SetupSRAMPath(1);
 
-    if (NDS::LoadROM(ROMPath, SRAMPath, Config::DirectBoot))
+    if (slot == 0 && NDS::LoadROM(ROMPath[slot], SRAMPath[slot], Config::DirectBoot))
     {
         SavestateLoaded = false;
         uiMenuItemDisable(MenuItem_UndoStateLoad);
 
-        strncpy(PrevSRAMPath, SRAMPath, 1024); // safety
+        // Reload the inserted GBA cartridge (if any)
+        if (ROMPath[1][0] != '\0') NDS::LoadGBAROM(ROMPath[1], SRAMPath[1]);
+
+        strncpy(PrevSRAMPath[slot], SRAMPath[slot], 1024); // safety
         Run();
+    }
+    else if (slot == 1 && NDS::LoadGBAROM(ROMPath[slot], SRAMPath[slot]))
+    {
+        SavestateLoaded = false;
+        uiMenuItemDisable(MenuItem_UndoStateLoad);
+
+        strncpy(PrevSRAMPath[slot], SRAMPath[slot], 1024); // safety
+        if (RunningSomething) Run(); // do not start just from a GBA cart
     }
     else
     {
@@ -1559,8 +1780,8 @@ void TryLoadROM(char* file, int prevstatus)
                       "Failed to load the ROM",
                       "Make sure the file can be accessed and isn't opened in another application.");
 
-        strncpy(ROMPath, oldpath, 1024);
-        strncpy(SRAMPath, oldsram, 1024);
+        strncpy(ROMPath[slot], oldpath, 1024);
+        strncpy(SRAMPath[slot], oldsram, 1024);
         EmuRunning = prevstatus;
     }
 }
@@ -1573,22 +1794,22 @@ void GetSavestateName(int slot, char* filename, int len)
 {
     int pos;
 
-    if (ROMPath[0] == '\0') // running firmware, no ROM
+    if (ROMPath[0][0] == '\0') // running firmware, no ROM
     {
         strcpy(filename, "firmware");
         pos = 8;
     }
     else
     {
-        int l = strlen(ROMPath);
+        int l = strlen(ROMPath[0]);
         pos = l;
-        while (ROMPath[pos] != '.' && pos > 0) pos--;
+        while (ROMPath[0][pos] != '.' && pos > 0) pos--;
         if (pos == 0) pos = l;
 
         // avoid buffer overflow. shoddy
         if (pos > len-5) pos = len-5;
 
-        strncpy(&filename[0], ROMPath, pos);
+        strncpy(&filename[0], ROMPath[0], pos);
     }
     strcpy(&filename[pos], ".ml");
     filename[pos+3] = '0'+slot;
@@ -1632,6 +1853,8 @@ void LoadState(int slot)
         return;
     }
 
+    u32 oldGBACartCRC = GBACart::CartCRC;
+
     // backup
     Savestate* backup = new Savestate("timewarp.mln", true);
     NDS::DoSavestate(backup);
@@ -1656,21 +1879,36 @@ void LoadState(int slot)
 
     if (!failed)
     {
-        if (Config::SavestateRelocSRAM && ROMPath[0]!='\0')
+        if (Config::SavestateRelocSRAM && ROMPath[0][0]!='\0')
         {
-            strncpy(PrevSRAMPath, SRAMPath, 1024);
+            strncpy(PrevSRAMPath[0], SRAMPath[0], 1024);
 
-            strncpy(SRAMPath, filename, 1019);
-            int len = strlen(SRAMPath);
-            strcpy(&SRAMPath[len], ".sav");
-            SRAMPath[len+4] = '\0';
+            strncpy(SRAMPath[0], filename, 1019);
+            int len = strlen(SRAMPath[0]);
+            strcpy(&SRAMPath[0][len], ".sav");
+            SRAMPath[0][len+4] = '\0';
 
-            NDS::RelocateSave(SRAMPath, false);
+            NDS::RelocateSave(SRAMPath[0], false);
+        }
+
+        bool loadedPartialGBAROM = false;
+
+        // in case we have a GBA cart inserted, and the GBA ROM changes
+        // due to having loaded a save state, we do not want to reload
+        // the previous cartridge on reset, or commit writes to any
+        // loaded save file. therefore, their paths are "nulled".
+        if (GBACart::CartInserted && GBACart::CartCRC != oldGBACartCRC)
+        {
+            ROMPath[1][0] = '\0';
+            SRAMPath[1][0] = '\0';
+            loadedPartialGBAROM = true;
         }
 
         char msg[64];
-        if (slot > 0) sprintf(msg, "State loaded from slot %d", slot);
-        else          sprintf(msg, "State loaded from file");
+        if (slot > 0) sprintf(msg, "State loaded from slot %d%s",
+                        slot, loadedPartialGBAROM ? " (GBA ROM header only)" : "");
+        else          sprintf(msg, "State loaded from file%s",
+                        loadedPartialGBAROM ? " (GBA ROM header only)" : "");
         OSD::AddMessage(0, msg);
 
         SavestateLoaded = true;
@@ -1721,14 +1959,14 @@ void SaveState(int slot)
         if (slot > 0)
             uiMenuItemEnable(MenuItem_LoadStateSlot[slot-1]);
 
-        if (Config::SavestateRelocSRAM && ROMPath[0]!='\0')
+        if (Config::SavestateRelocSRAM && ROMPath[0][0]!='\0')
         {
-            strncpy(SRAMPath, filename, 1019);
-            int len = strlen(SRAMPath);
-            strcpy(&SRAMPath[len], ".sav");
-            SRAMPath[len+4] = '\0';
+            strncpy(SRAMPath[0], filename, 1019);
+            int len = strlen(SRAMPath[0]);
+            strcpy(&SRAMPath[0][len], ".sav");
+            SRAMPath[0][len+4] = '\0';
 
-            NDS::RelocateSave(SRAMPath, true);
+            NDS::RelocateSave(SRAMPath[0], true);
         }
     }
 
@@ -1755,10 +1993,10 @@ void UndoStateLoad()
     NDS::DoSavestate(backup);
     delete backup;
 
-    if (ROMPath[0]!='\0')
+    if (ROMPath[0][0]!='\0')
     {
-        strncpy(SRAMPath, PrevSRAMPath, 1024);
-        NDS::RelocateSave(SRAMPath, false);
+        strncpy(SRAMPath[0], PrevSRAMPath[0], 1024);
+        NDS::RelocateSave(SRAMPath[0], false);
     }
 
     OSD::AddMessage(0, "State load undone");
@@ -1784,6 +2022,7 @@ int OnCloseWindow(uiWindow* window, void* blarg)
     while (EmuStatus != 3);
 
     CloseAllDialogs();
+    StopEmuThread();
     uiQuit();
     return 1;
 }
@@ -1801,7 +2040,11 @@ void OnDropFile(uiWindow* window, char* file, void* blarg)
             while (EmuStatus != 2);
         }
 
-        TryLoadROM(file, prevstatus);
+        TryLoadROM(file, 0, prevstatus);
+    }
+    else if (!strcasecmp(ext, "gba"))
+    {
+        TryLoadROM(file, 1, prevstatus);
     }
 }
 
@@ -1821,6 +2064,7 @@ void OnCloseByMenu(uiMenuItem* item, uiWindow* window, void* blarg)
     while (EmuStatus != 3);
 
     CloseAllDialogs();
+    StopEmuThread();
     DestroyMainWindow();
     uiQuit();
 }
@@ -1831,7 +2075,7 @@ void OnOpenFile(uiMenuItem* item, uiWindow* window, void* blarg)
     EmuRunning = 2;
     while (EmuStatus != 2);
 
-    char* file = uiOpenFile(window, "DS ROM (*.nds)|*.nds;*.srl|Any file|*.*", Config::LastROMFolder);
+    char* file = uiOpenFile(window, "DS ROM (*.nds)|*.nds;*.srl|GBA ROM (*.gba)|*.gba|Any file|*.*", Config::LastROMFolder);
     if (!file)
     {
         EmuRunning = prevstatus;
@@ -1842,8 +2086,17 @@ void OnOpenFile(uiMenuItem* item, uiWindow* window, void* blarg)
     while (file[pos] != '/' && file[pos] != '\\' && pos > 0) pos--;
     strncpy(Config::LastROMFolder, file, pos);
     Config::LastROMFolder[pos] = '\0';
+    char* ext = &file[strlen(file)-3];
 
-    TryLoadROM(file, prevstatus);
+    if (!strcasecmp(ext, "gba"))
+    {
+        TryLoadROM(file, 1, prevstatus);
+    }
+    else
+    {
+        TryLoadROM(file, 0, prevstatus);
+    }
+
     uiFreeText(file);
 }
 
@@ -1868,8 +2121,14 @@ void OnRun(uiMenuItem* item, uiWindow* window, void* blarg)
 {
     if (!RunningSomething)
     {
-        ROMPath[0] = '\0';
+        ROMPath[0][0] = '\0';
         NDS::LoadBIOS();
+
+        if (ROMPath[1][0] != '\0')
+        {
+            SetupSRAMPath(1);
+            NDS::LoadGBAROM(ROMPath[1], SRAMPath[1]);
+        }
     }
 
     Run();
@@ -1877,47 +2136,12 @@ void OnRun(uiMenuItem* item, uiWindow* window, void* blarg)
 
 void OnPause(uiMenuItem* item, uiWindow* window, void* blarg)
 {
-    if (!RunningSomething) return;
-
-    if (EmuRunning == 1)
-    {
-        // enable pause
-        EmuRunning = 2;
-        uiMenuItemSetChecked(MenuItem_Pause, 1);
-
-        SDL_PauseAudioDevice(AudioDevice, 1);
-        SDL_PauseAudioDevice(MicDevice, 1);
-    }
-    else
-    {
-        // disable pause
-        EmuRunning = 1;
-        uiMenuItemSetChecked(MenuItem_Pause, 0);
-
-        SDL_PauseAudioDevice(AudioDevice, 0);
-        SDL_PauseAudioDevice(MicDevice, 0);
-    }
+    TogglePause(NULL);
 }
 
 void OnReset(uiMenuItem* item, uiWindow* window, void* blarg)
 {
-    if (!RunningSomething) return;
-
-    EmuRunning = 2;
-    while (EmuStatus != 2);
-
-    SavestateLoaded = false;
-    uiMenuItemDisable(MenuItem_UndoStateLoad);
-
-    if (ROMPath[0] == '\0')
-        NDS::LoadBIOS();
-    else
-    {
-        SetupSRAMPath();
-        NDS::LoadROM(ROMPath, SRAMPath, Config::DirectBoot);
-    }
-
-    Run();
+    Reset(NULL);
 }
 
 void OnStop(uiMenuItem* item, uiWindow* window, void* blarg)
@@ -2111,7 +2335,20 @@ void OnSetLimitFPS(uiMenuItem* item, uiWindow* window, void* blarg)
     int chk = uiMenuItemChecked(item);
     if (chk != 0) Config::LimitFPS = true;
     else          Config::LimitFPS = false;
-    HotkeyFPSToggle = !Config::LimitFPS; // ensure that the hotkey toggle indicator is synced with this menu item
+}
+
+void OnSetAudioSync(uiMenuItem* item, uiWindow* window, void* blarg)
+{
+    int chk = uiMenuItemChecked(item);
+    if (chk != 0) Config::AudioSync = true;
+    else          Config::AudioSync = false;
+}
+
+void OnSetShowOSD(uiMenuItem* item, uiWindow* window, void* blarg)
+{
+    int chk = uiMenuItemChecked(item);
+    if (chk != 0) Config::ShowOSD = true;
+    else          Config::ShowOSD = false;
 }
 
 void ApplyNewSettings(int type)
@@ -2170,6 +2407,19 @@ void ApplyNewSettings(int type)
         GPU3D::InitRenderer(Screen_UseGL);
         if (Screen_UseGL) uiGLMakeContextCurrent(NULL);
     }
+    /*else if (type == 4) // vsync
+    {
+        if (Screen_UseGL)
+        {
+            uiGLMakeContextCurrent(GLContext);
+            uiGLSetVSync(Config::ScreenVSync);
+            uiGLMakeContextCurrent(NULL);
+        }
+        else
+        {
+            // TODO eventually: VSync for non-GL screen?
+        }
+    }*/
 
     EmuRunning = prevstatus;
 }
@@ -2338,8 +2588,16 @@ void CreateMainWindowMenu()
     MenuItem_ScreenFilter = uiMenuAppendCheckItem(menu, "Screen filtering");
     uiMenuItemOnClicked(MenuItem_ScreenFilter, OnSetScreenFiltering, NULL);
 
+    MenuItem_ShowOSD = uiMenuAppendCheckItem(menu, "Show OSD");
+    uiMenuItemOnClicked(MenuItem_ShowOSD, OnSetShowOSD, NULL);
+
+    uiMenuAppendSeparator(menu);
+
     MenuItem_LimitFPS = uiMenuAppendCheckItem(menu, "Limit framerate");
     uiMenuItemOnClicked(MenuItem_LimitFPS, OnSetLimitFPS, NULL);
+
+    MenuItem_AudioSync = uiMenuAppendCheckItem(menu, "Audio sync");
+    uiMenuItemOnClicked(MenuItem_AudioSync, OnSetAudioSync, NULL);
 }
 
 void CreateMainWindow(bool opengl)
@@ -2376,6 +2634,7 @@ void CreateMainWindow(bool opengl)
     if (opengl_good)
     {
         uiGLMakeContextCurrent(GLContext);
+        uiGLSetVSync(Config::ScreenVSync);
         if (!GLScreen_Init()) opengl_good = false;
         if (opengl_good)
         {
@@ -2425,6 +2684,7 @@ int main(int argc, char** argv)
     printf("melonDS " MELONDS_VERSION "\n");
     printf(MELONDS_URL "\n");
 
+#if defined(__WIN32__) || defined(UNIX_PORTABLE)
     if (argc > 0 && strlen(argv[0]) > 0)
     {
         int len = strlen(argv[0]);
@@ -2451,6 +2711,13 @@ int main(int argc, char** argv)
         EmuDirectory = new char[2];
         strcpy(EmuDirectory, ".");
     }
+#else
+	const char* confdir = g_get_user_config_dir();
+	const char* confname = "/melonDS";
+	EmuDirectory = new char[strlen(confdir) + strlen(confname) + 1];
+	strcat(EmuDirectory, confdir);
+	strcat(EmuDirectory, confname);
+#endif
 
     // http://stackoverflow.com/questions/14543333/joystick-wont-work-using-sdl
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -2486,23 +2753,80 @@ int main(int argc, char** argv)
         !Platform::LocalFileExists("bios9.bin") ||
         !Platform::LocalFileExists("firmware.bin"))
     {
-        uiMsgBoxError(
-            NULL,
-            "BIOS/Firmware not found",
+#if defined(__WIN32__) || defined(UNIX_PORTABLE)
+		const char* locationName = "the directory you run melonDS from";
+#else
+		char* locationName = EmuDirectory;
+#endif
+		char msgboxtext[512];
+		sprintf(msgboxtext,
             "One or more of the following required files don't exist or couldn't be accessed:\n\n"
             "bios7.bin -- ARM7 BIOS\n"
             "bios9.bin -- ARM9 BIOS\n"
             "firmware.bin -- firmware image\n\n"
-            "Dump the files from your DS and place them in the directory you run melonDS from.\n"
-            "Make sure that the files can be accessed.");
+            "Dump the files from your DS and place them in %s.\n"
+            "Make sure that the files can be accessed.",
+			locationName
+		);
+
+        uiMsgBoxError(NULL, "BIOS/Firmware not found", msgboxtext);
 
         uiUninit();
         SDL_Quit();
         return 0;
     }
-
+    if (!Platform::LocalFileExists("firmware.bin.bak"))
     {
-        FILE* f = Platform::OpenLocalFile("romlist.bin", "rb");
+        // verify the firmware
+        //
+        // there are dumps of an old hacked firmware floating around on the internet
+        // and those are problematic
+        // the hack predates WFC, and, due to this, any game that alters the WFC
+        // access point data will brick that firmware due to it having critical
+        // data in the same area. it has the same problem on hardware.
+        //
+        // but this should help stop users from reporting that issue over and over
+        // again, when the issue is not from melonDS but from their firmware dump.
+        //
+        // I don't know about all the firmware hacks in existence, but the one I
+        // looked at has 0x180 bytes from the header repeated at 0x3FC80, but
+        // bytes 0x0C-0x14 are different.
+
+        FILE* f = Platform::OpenLocalFile("firmware.bin", "rb");
+        u8 chk1[0x180], chk2[0x180];
+
+        fseek(f, 0, SEEK_SET);
+        fread(chk1, 1, 0x180, f);
+        fseek(f, -0x380, SEEK_END);
+        fread(chk2, 1, 0x180, f);
+
+        memset(&chk1[0x0C], 0, 8);
+        memset(&chk2[0x0C], 0, 8);
+
+        fclose(f);
+
+        if (!memcmp(chk1, chk2, 0x180))
+        {
+            uiMsgBoxError(NULL,
+                          "Problematic firmware dump",
+                          "You are using an old hacked firmware dump.\n"
+                          "Firmware boot will stop working if you run any game that alters WFC settings.\n\n"
+                          "Note that the issue is not from melonDS, it would also happen on an actual DS.");
+        }
+    }
+    {
+        const char* romlist_missing = "Save memory type detection will not work correctly.\n\n"
+            "You should use the latest version of romlist.bin (provided in melonDS release packages).";
+#if !defined(UNIX_PORTABLE) && !defined(__WIN32__)
+        std::string missingstr = std::string(romlist_missing) +
+            "\n\nThe ROM list should be placed in " + g_get_user_data_dir() + "/melonds/, otherwise "
+            "melonDS will search for it in the current working directory.";
+        const char* romlist_missing_text = missingstr.c_str();
+#else
+        const char* romlist_missing_text = romlist_missing;
+#endif
+
+        FILE* f = Platform::OpenDataFile("romlist.bin");
         if (f)
         {
             u32 data;
@@ -2511,11 +2835,12 @@ int main(int argc, char** argv)
 
             if ((data >> 24) == 0) // old CRC-based list
             {
-                uiMsgBoxError(NULL,
-                              "Your version of romlist.bin is outdated.",
-                              "Save memory type detection will not work correctly.\n\n"
-                              "You should use the latest version of romlist.bin (provided in melonDS release packages).");
+                uiMsgBoxError(NULL, "Your version of romlist.bin is outdated.", romlist_missing_text);
             }
+        }
+        else
+        {
+        	uiMsgBoxError(NULL, "romlist.bin not found.", romlist_missing_text);
         }
     }
 
@@ -2574,21 +2899,33 @@ int main(int argc, char** argv)
 
     uiMenuItemSetChecked(MenuItem_ScreenFilter, Config::ScreenFilter==1);
     uiMenuItemSetChecked(MenuItem_LimitFPS, Config::LimitFPS==1);
+    uiMenuItemSetChecked(MenuItem_AudioSync, Config::AudioSync==1);
+    uiMenuItemSetChecked(MenuItem_ShowOSD, Config::ShowOSD==1);
 
+#ifdef MELONCAP
+    MelonCap::Init();
+#endif // MELONCAP
+
+    AudioSync = SDL_CreateCond();
+    AudioSyncLock = SDL_CreateMutex();
+
+    AudioFreq = 48000; // TODO: make configurable?
     SDL_AudioSpec whatIwant, whatIget;
     memset(&whatIwant, 0, sizeof(SDL_AudioSpec));
-    whatIwant.freq = 47340;
+    whatIwant.freq = AudioFreq;
     whatIwant.format = AUDIO_S16LSB;
     whatIwant.channels = 2;
     whatIwant.samples = 1024;
     whatIwant.callback = AudioCallback;
-    AudioDevice = SDL_OpenAudioDevice(NULL, 0, &whatIwant, &whatIget, 0);
+    AudioDevice = SDL_OpenAudioDevice(NULL, 0, &whatIwant, &whatIget, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
     if (!AudioDevice)
     {
         printf("Audio init failed: %s\n", SDL_GetError());
     }
     else
     {
+        AudioFreq = whatIget.freq;
+        printf("Audio output frequency: %d Hz\n", AudioFreq);
         SDL_PauseAudioDevice(AudioDevice, 1);
     }
 
@@ -2616,11 +2953,11 @@ int main(int argc, char** argv)
     MicWavBuffer = NULL;
     if (Config::MicInputType == 3) MicLoadWav(Config::MicWavPath);
 
-    // TODO: support more joysticks
-    if (SDL_NumJoysticks() > 0)
-        Joystick = SDL_JoystickOpen(0);
-    else
-        Joystick = NULL;
+    JoystickID = Config::JoystickID;
+    Joystick = NULL;
+    OpenJoystick();
+
+    NDS::Init();
 
     EmuRunning = 2;
     RunningSomething = false;
@@ -2633,26 +2970,46 @@ int main(int argc, char** argv)
 
         if (!strcasecmp(ext, "nds") || !strcasecmp(ext, "srl"))
         {
-            strncpy(ROMPath, file, 1023);
-            ROMPath[1023] = '\0';
+            strncpy(ROMPath[0], file, 1023);
+            ROMPath[0][1023] = '\0';
 
-            SetupSRAMPath();
+            SetupSRAMPath(0);
 
-            if (NDS::LoadROM(ROMPath, SRAMPath, Config::DirectBoot))
+            if (NDS::LoadROM(ROMPath[0], SRAMPath[0], Config::DirectBoot))
                 Run();
+        }
+
+        if (argc > 2)
+        {
+            file = argv[2];
+            ext = &file[strlen(file)-3];
+
+            if (!strcasecmp(ext, "gba"))
+            {
+                strncpy(ROMPath[1], file, 1023);
+                ROMPath[1][1023] = '\0';
+
+                SetupSRAMPath(1);
+
+                NDS::LoadGBAROM(ROMPath[1], SRAMPath[1]);
+            }
         }
     }
 
     uiMain();
 
-    EmuRunning = 0;
-    SDL_WaitThread(EmuThread, NULL);
-
     if (Joystick) SDL_JoystickClose(Joystick);
     if (AudioDevice) SDL_CloseAudioDevice(AudioDevice);
     if (MicDevice)   SDL_CloseAudioDevice(MicDevice);
 
+    SDL_DestroyCond(AudioSync);
+    SDL_DestroyMutex(AudioSyncLock);
+
     if (MicWavBuffer) delete[] MicWavBuffer;
+
+#ifdef MELONCAP
+    MelonCap::DeInit();
+#endif // MELONCAP
 
     if (ScreenBitmap[0]) uiDrawFreeBitmap(ScreenBitmap[0]);
     if (ScreenBitmap[1]) uiDrawFreeBitmap(ScreenBitmap[1]);

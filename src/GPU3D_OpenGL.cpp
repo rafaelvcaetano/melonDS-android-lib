@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -73,6 +73,8 @@ typedef struct
 
     u32 NumIndices;
     u16* Indices;
+    GLuint PrimType;
+
     u32 NumEdgeIndices;
     u16* EdgeIndices;
 
@@ -104,7 +106,6 @@ u32 NumVertices;
 
 GLuint VertexArrayID;
 u16 IndexBuffer[2048 * 40];
-u32 NumTriangles;
 
 GLuint TexMemID;
 GLuint TexPalMemID;
@@ -341,36 +342,11 @@ bool Init()
     SetupDefaultTexParams(FramebufferTex[7]);
 
     // downscale framebuffer for antialiased mode
-    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[2]);
     SetupDefaultTexParams(FramebufferTex[2]);
 
     // downscale framebuffer for display capture (always 256x192)
-    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[3]);
     SetupDefaultTexParams(FramebufferTex[3]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 192, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[3], 0);
-
-    GLenum fbassign[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-
-    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[0]);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[0], 0);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, FramebufferTex[4], 0);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, FramebufferTex[5], 0);
-    glDrawBuffers(2, fbassign);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[1]);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[1], 0);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, FramebufferTex[4], 0);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, FramebufferTex[5], 0);
-    glDrawBuffers(2, fbassign);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[2]);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[2], 0);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, FramebufferTex[6], 0);
-    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, FramebufferTex[7], 0);
-    glDrawBuffers(2, fbassign);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[0]);
 
     glEnable(GL_BLEND);
     glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX);
@@ -447,6 +423,7 @@ void UpdateDisplaySettings()
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
         glBindTexture(GL_TEXTURE_2D, FramebufferTex[4]);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, ScreenW, ScreenH, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, NULL);
+        //glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8, ScreenW, ScreenH, 0, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV, NULL);
         glBindTexture(GL_TEXTURE_2D, FramebufferTex[5]);
         //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8UI, ScreenW, ScreenH, 0, GL_RGB_INTEGER, GL_UNSIGNED_BYTE, NULL);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, ScreenW, ScreenH, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
@@ -473,10 +450,36 @@ void UpdateDisplaySettings()
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8UI, ScreenW, ScreenH, 0, GL_RGB_INTEGER, GL_UNSIGNED_BYTE, NULL);
     }
 
+    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[3]);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[3], 0);
+
+    GLenum fbassign[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+
+    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[0]);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[0], 0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, FramebufferTex[4], 0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, FramebufferTex[5], 0);
+    glDrawBuffers(2, fbassign);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[1]);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[1], 0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, FramebufferTex[4], 0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, FramebufferTex[5], 0);
+    glDrawBuffers(2, fbassign);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[2]);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, FramebufferTex[2], 0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, FramebufferTex[6], 0);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, FramebufferTex[7], 0);
+    glDrawBuffers(2, fbassign);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, FramebufferID[0]);
+
     glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelbufferID);
     glBufferData(GL_PIXEL_PACK_BUFFER, 256*192*4, NULL, GL_DYNAMIC_READ);
 
-    glLineWidth(scale);
+    //glLineWidth(scale);
+    //glLineWidth(1.5);
 }
 
 
@@ -530,7 +533,6 @@ void BuildPolygons(RendererPolygon* polygons, int npolys)
 
     u16* iptr = &IndexBuffer[0];
     u16* eiptr = &IndexBuffer[2048*30];
-    u32 numtriangles = 0;
 
     for (int i = 0; i < npolys; i++)
     {
@@ -551,54 +553,114 @@ void BuildPolygons(RendererPolygon* polygons, int npolys)
         if (poly->WBuffer)    vtxattr |= (1<<9);
 
         // assemble vertices
-        for (int j = 0; j < poly->NumVertices; j++)
+        if (poly->Type == 1) // line
         {
-            Vertex* vtx = poly->Vertices[j];
+            rp->PrimType = GL_LINES;
 
-            u32 z = poly->FinalZ[j];
-            u32 w = poly->FinalW[j];
-
-            // Z should always fit within 16 bits, so it's okay to do this
-            u32 zshift = 0;
-            while (z > 0xFFFF) { z >>= 1; zshift++; }
-
-            u32 x, y;
-            if (ScaleFactor > 1)
+            u32 lastx, lasty;
+            int nout = 0;
+            for (int j = 0; j < poly->NumVertices; j++)
             {
-                x = (vtx->HiresPosition[0] * ScaleFactor) >> 4;
-                y = (vtx->HiresPosition[1] * ScaleFactor) >> 4;
-            }
-            else
-            {
-                x = vtx->FinalPosition[0];
-                y = vtx->FinalPosition[1];
-            }
+                Vertex* vtx = poly->Vertices[j];
 
-            *vptr++ = x | (y << 16);
-            *vptr++ = z | (w << 16);
+                u32 z = poly->FinalZ[j];
+                u32 w = poly->FinalW[j];
 
-            *vptr++ =  (vtx->FinalColor[0] >> 1) |
-                      ((vtx->FinalColor[1] >> 1) << 8) |
-                      ((vtx->FinalColor[2] >> 1) << 16) |
-                      (alpha << 24);
+                // Z should always fit within 16 bits, so it's okay to do this
+                u32 zshift = 0;
+                while (z > 0xFFFF) { z >>= 1; zshift++; }
 
-            *vptr++ = (u16)vtx->TexCoords[0] | ((u16)vtx->TexCoords[1] << 16);
+                u32 x, y;
+                if (ScaleFactor > 1)
+                {
+                    x = (vtx->HiresPosition[0] * ScaleFactor) >> 4;
+                    y = (vtx->HiresPosition[1] * ScaleFactor) >> 4;
+                }
+                else
+                {
+                    x = vtx->FinalPosition[0];
+                    y = vtx->FinalPosition[1];
+                }
 
-            *vptr++ = vtxattr | (zshift << 16);
-            *vptr++ = poly->TexParam;
-            *vptr++ = poly->TexPalette;
+                if (j > 0)
+                {
+                    if (lastx == x && lasty == y) continue;
+                }
 
-            if (j >= 2)
-            {
-                // build a triangle
-                *iptr++ = vidx_first;
-                *iptr++ = vidx - 1;
+                *vptr++ = x | (y << 16);
+                *vptr++ = z | (w << 16);
+
+                *vptr++ =  (vtx->FinalColor[0] >> 1) |
+                          ((vtx->FinalColor[1] >> 1) << 8) |
+                          ((vtx->FinalColor[2] >> 1) << 16) |
+                          (alpha << 24);
+
+                *vptr++ = (u16)vtx->TexCoords[0] | ((u16)vtx->TexCoords[1] << 16);
+
+                *vptr++ = vtxattr | (zshift << 16);
+                *vptr++ = poly->TexParam;
+                *vptr++ = poly->TexPalette;
+
                 *iptr++ = vidx;
-                numtriangles++;
-                rp->NumIndices += 3;
-            }
+                rp->NumIndices++;
 
-            vidx++;
+                vidx++;
+                nout++;
+                if (nout >= 2) break;
+            }
+        }
+        else
+        {
+            rp->PrimType = GL_TRIANGLES;
+
+            for (int j = 0; j < poly->NumVertices; j++)
+            {
+                Vertex* vtx = poly->Vertices[j];
+
+                u32 z = poly->FinalZ[j];
+                u32 w = poly->FinalW[j];
+
+                // Z should always fit within 16 bits, so it's okay to do this
+                u32 zshift = 0;
+                while (z > 0xFFFF) { z >>= 1; zshift++; }
+
+                u32 x, y;
+                if (ScaleFactor > 1)
+                {
+                    x = (vtx->HiresPosition[0] * ScaleFactor) >> 4;
+                    y = (vtx->HiresPosition[1] * ScaleFactor) >> 4;
+                }
+                else
+                {
+                    x = vtx->FinalPosition[0];
+                    y = vtx->FinalPosition[1];
+                }
+
+                *vptr++ = x | (y << 16);
+                *vptr++ = z | (w << 16);
+
+                *vptr++ =  (vtx->FinalColor[0] >> 1) |
+                          ((vtx->FinalColor[1] >> 1) << 8) |
+                          ((vtx->FinalColor[2] >> 1) << 16) |
+                          (alpha << 24);
+
+                *vptr++ = (u16)vtx->TexCoords[0] | ((u16)vtx->TexCoords[1] << 16);
+
+                *vptr++ = vtxattr | (zshift << 16);
+                *vptr++ = poly->TexParam;
+                *vptr++ = poly->TexPalette;
+
+                if (j >= 2)
+                {
+                    // build a triangle
+                    *iptr++ = vidx_first;
+                    *iptr++ = vidx - 1;
+                    *iptr++ = vidx;
+                    rp->NumIndices += 3;
+                }
+
+                vidx++;
+            }
         }
 
         rp->EdgeIndices = eiptr;
@@ -617,7 +679,6 @@ void BuildPolygons(RendererPolygon* polygons, int npolys)
         rp->NumEdgeIndices += 2;
     }
 
-    NumTriangles = numtriangles;
     NumVertices = vidx;
 }
 
@@ -625,12 +686,13 @@ void RenderSinglePolygon(int i)
 {
     RendererPolygon* rp = &PolygonList[i];
 
-    glDrawElements(GL_TRIANGLES, rp->NumIndices, GL_UNSIGNED_SHORT, rp->Indices);
+    glDrawElements(rp->PrimType, rp->NumIndices, GL_UNSIGNED_SHORT, rp->Indices);
 }
 
 int RenderPolygonBatch(int i)
 {
     RendererPolygon* rp = &PolygonList[i];
+    GLuint primtype = rp->PrimType;
     u32 key = rp->RenderKey;
     int numpolys = 0;
     u32 numindices = 0;
@@ -638,13 +700,14 @@ int RenderPolygonBatch(int i)
     for (int iend = i; iend < NumFinalPolys; iend++)
     {
         RendererPolygon* cur_rp = &PolygonList[iend];
+        if (cur_rp->PrimType != primtype) break;
         if (cur_rp->RenderKey != key) break;
 
         numpolys++;
         numindices += cur_rp->NumIndices;
     }
 
-    glDrawElements(GL_TRIANGLES, numindices, GL_UNSIGNED_SHORT, rp->Indices);
+    glDrawElements(primtype, numindices, GL_UNSIGNED_SHORT, rp->Indices);
     return numpolys;
 }
 
@@ -680,6 +743,7 @@ void RenderSceneChunk(int y, int h)
     // pass 1: opaque pixels
 
     UseRenderShader(flags);
+    glLineWidth(1.0);
 
     glColorMaski(1, GL_TRUE, GL_TRUE, fogenable, GL_FALSE);
 
@@ -711,6 +775,7 @@ void RenderSceneChunk(int y, int h)
     if (RenderDispCnt & (1<<5))
     {
         UseRenderShader(flags | RenderFlag_Edge);
+        glLineWidth(1.5);
 
         glColorMaski(0, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
         glColorMaski(1, GL_FALSE, GL_TRUE, GL_FALSE, GL_FALSE);
@@ -742,7 +807,7 @@ void RenderSceneChunk(int y, int h)
     else
         glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ONE);
 
-    UseRenderShader(flags | RenderFlag_Trans);
+    glLineWidth(1.0);
 
     if (NumOpaqueFinalPolys > -1)
     {
@@ -777,6 +842,8 @@ void RenderSceneChunk(int y, int h)
                 }
                 else if (rp->PolyData->Translucent)
                 {
+                    UseRenderShader(flags | RenderFlag_Trans);
+
                     // zorp
                     glDepthFunc(GL_LESS);
 

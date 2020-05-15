@@ -1,3 +1,4 @@
+build
 bin
 obj
 *.depend
@@ -6,4 +7,5 @@ obj
 melon_grc.c
 melon_grc.h
 cmake-build
+cmake-build-debug
 .idea

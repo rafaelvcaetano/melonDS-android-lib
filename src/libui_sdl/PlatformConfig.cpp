@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2019 Arisotura
+    Copyright 2016-2020 Arisotura
 
     This file is part of melonDS.
 
@@ -30,6 +30,8 @@ int JoyMapping[12];
 int HKKeyMapping[HK_MAX];
 int HKJoyMapping[HK_MAX];
 
+int JoystickID;
+
 int WindowWidth;
 int WindowHeight;
 int WindowMaximized;
@@ -41,9 +43,12 @@ int ScreenSizing;
 int ScreenFilter;
 
 int ScreenUseGL;
+int ScreenVSync;
 int ScreenRatio;
 
 int LimitFPS;
+int AudioSync;
+int ShowOSD;
 
 int DirectBoot;
 
@@ -88,19 +93,29 @@ ConfigEntry PlatformConfigFile[] =
     {"Joy_X",      0, &JoyMapping[10], -1, NULL, 0},
     {"Joy_Y",      0, &JoyMapping[11], -1, NULL, 0},
 
-    {"HKKey_Lid",               0, &HKKeyMapping[HK_Lid],               0x0D, NULL, 0},
-    {"HKKey_Mic",               0, &HKKeyMapping[HK_Mic],               0x35, NULL, 0},
-    {"HKKey_FastForward",       0, &HKKeyMapping[HK_FastForward],       0x0F, NULL, 0},
-    {"HKKey_FastForwardToggle", 0, &HKKeyMapping[HK_FastForwardToggle],   -1, NULL, 0},
+    {"HKKey_Lid",                 0, &HKKeyMapping[HK_Lid],                 0x0D, NULL, 0},
+    {"HKKey_Mic",                 0, &HKKeyMapping[HK_Mic],                 0x35, NULL, 0},
+    {"HKKey_Pause",               0, &HKKeyMapping[HK_Pause],                 -1, NULL, 0},
+    {"HKKey_Reset",               0, &HKKeyMapping[HK_Reset],                 -1, NULL, 0},
+    {"HKKey_FastForward",         0, &HKKeyMapping[HK_FastForward],         0x0F, NULL, 0},
+    {"HKKey_FastForwardToggle",   0, &HKKeyMapping[HK_FastForwardToggle],     -1, NULL, 0},
+    {"HKKey_SolarSensorDecrease", 0, &HKKeyMapping[HK_SolarSensorDecrease], 0x4B, NULL, 0},
+    {"HKKey_SolarSensorIncrease", 0, &HKKeyMapping[HK_SolarSensorIncrease], 0x4D, NULL, 0},
 
-    {"HKJoy_Lid",               0, &HKJoyMapping[HK_Lid],               -1, NULL, 0},
-    {"HKJoy_Mic",               0, &HKJoyMapping[HK_Mic],               -1, NULL, 0},
-    {"HKJoy_FastForward",       0, &HKJoyMapping[HK_FastForward],       -1, NULL, 0},
-    {"HKJoy_FastForwardToggle", 0, &HKJoyMapping[HK_FastForwardToggle], -1, NULL, 0},
+    {"HKJoy_Lid",                 0, &HKJoyMapping[HK_Lid],                 -1, NULL, 0},
+    {"HKJoy_Mic",                 0, &HKJoyMapping[HK_Mic],                 -1, NULL, 0},
+    {"HKJoy_Pause",               0, &HKJoyMapping[HK_Pause],               -1, NULL, 0},
+    {"HKJoy_Reset",               0, &HKJoyMapping[HK_Reset],               -1, NULL, 0},
+    {"HKJoy_FastForward",         0, &HKJoyMapping[HK_FastForward],         -1, NULL, 0},
+    {"HKJoy_FastForwardToggle",   0, &HKJoyMapping[HK_FastForwardToggle],   -1, NULL, 0},
+    {"HKJoy_SolarSensorDecrease", 0, &HKJoyMapping[HK_SolarSensorDecrease], -1, NULL, 0},
+    {"HKJoy_SolarSensorIncrease", 0, &HKJoyMapping[HK_SolarSensorIncrease], -1, NULL, 0},
+
+    {"JoystickID", 0, &JoystickID, 0, NULL, 0},
 
     {"WindowWidth",  0, &WindowWidth,  256, NULL, 0},
     {"WindowHeight", 0, &WindowHeight, 384, NULL, 0},
-    {"WindowMax", 0, &WindowMaximized, 0, NULL, 0},
+    {"WindowMax",    0, &WindowMaximized, 0, NULL, 0},
 
     {"ScreenRotation", 0, &ScreenRotation, 0, NULL, 0},
     {"ScreenGap",      0, &ScreenGap,      0, NULL, 0},
@@ -109,9 +124,12 @@ ConfigEntry PlatformConfigFile[] =
     {"ScreenFilter",   0, &ScreenFilter,   1, NULL, 0},
 
     {"ScreenUseGL",     0, &ScreenUseGL,     1, NULL, 0},
+    {"ScreenVSync",     0, &ScreenVSync,     0, NULL, 0},
     {"ScreenRatio",     0, &ScreenRatio,     0, NULL, 0},
 
-    {"LimitFPS", 0, &LimitFPS, 1, NULL, 0},
+    {"LimitFPS", 0, &LimitFPS, 0, NULL, 0},
+    {"AudioSync", 0, &AudioSync, 1, NULL, 0},
+    {"ShowOSD", 0, &ShowOSD, 1, NULL, 0},
 
     {"DirectBoot", 0, &DirectBoot, 1, NULL, 0},
 
