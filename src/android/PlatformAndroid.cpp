@@ -30,6 +30,7 @@
 
 #include <unistd.h>
 #include <arpa/inet.h>
+//#include <egl/egl.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -90,11 +91,6 @@ namespace Platform
     int PCapRXNum;
 
 
-    void StopEmu()
-    {
-        Stop(true);
-    }
-
     FILE* OpenFile(const char* path, const char* mode, bool mustexist)
     {
         FILE* file = fopen(path, mode);
@@ -119,6 +115,11 @@ namespace Platform
         FILE* file = OpenFile(configFile, mode, false);
         delete[] configFile;
         return file;
+    }
+
+    FILE* OpenDataFile(const char* path)
+    {
+        return OpenLocalFile(path, "rb");
     }
 
     void* Thread_Create(void (*func)())
@@ -198,6 +199,11 @@ namespace Platform
         pthread_mutex_unlock(&semaphore->mutex);
     }
 
+    void* GL_GetProcAddress(const char* proc)
+    {
+        return NULL;
+        //return eglGetProcAddress(proc);
+    }
 
     bool MP_Init()
     {
@@ -362,5 +368,9 @@ namespace Platform
             return LAN_PCap::RecvPacket(data);
         else
             return LAN_Socket::RecvPacket(data);
+    }
+
+    void StopEmu()
+    {
     }
 }

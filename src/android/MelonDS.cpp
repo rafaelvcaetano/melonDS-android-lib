@@ -2,6 +2,7 @@
 #include "MelonDS.h"
 #include "../NDS.h"
 #include "../GPU.h"
+#include "../GPU3D.h"
 #include "../SPU.h"
 #include "../Platform.h"
 #include "OboeCallback.h"
@@ -11,10 +12,7 @@ u32* frameBuffer;
 u64 startTick = 0;
 u64 lastTick = startTick;
 u64 lastMeasureTick = lastTick;
-u32 fpsLimitCount = 0;
-u32 nFrames = 0;
 u32 currentFps = 0;
-bool limitFps = true;
 oboe::AudioStream *audioStream;
 
 namespace MelonDSAndroid
@@ -44,6 +42,7 @@ namespace MelonDSAndroid
         }
 
         NDS::Init();
+        GPU3D::InitRenderer(false);
     }
 
     bool loadRom(char* romPath, char* sramPath, bool loadDirect)
@@ -60,30 +59,15 @@ namespace MelonDSAndroid
 
     void loop(u64 currentTicks)
     {
-        u32 nlines = NDS::RunFrame();
-        memcpy(frameBuffer, GPU::Framebuffer, 256 * 384 * 4);
+        NDS::RunFrame();
 
-        float framerate;
-        if (nlines == 263)
-            framerate = 1000.0f / 60.0f;
-        else
-            framerate = ((1000.0f * nlines) / 263.0f) / 60.0f;
-
-        fpsLimitCount++;
-        lastTick = currentTicks;
-
-        u64 wantedtick = startTick + (u32) ((float) fpsLimitCount * framerate);
-        if (currentTicks < wantedtick && limitFps)
+        int frontbuf = GPU::FrontBuffer;
+        if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
         {
-            // TODO: delay execution if one day this runs fast enough
-        }
-        else
-        {
-            fpsLimitCount = 0;
-            startTick = currentTicks;
+            memcpy(frameBuffer, GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
+            memcpy(&frameBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
         }
 
-        nFrames++;
         u32 delta = currentTicks - lastMeasureTick;
         lastMeasureTick = currentTicks;
         currentFps = 1000 / delta;
@@ -110,6 +94,7 @@ namespace MelonDSAndroid
     void cleanup()
     {
         NDS::DeInit();
+        GPU3D::DeInit();
         audioStream->requestStop();
         audioStream = NULL;
 

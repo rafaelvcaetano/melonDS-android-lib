@@ -6,6 +6,7 @@ set(ANDROID_SOURCES
         LAN_Socket.cpp
         MelonDS.cpp
         OboeCallback.cpp
+        OpenGLRenderer.cpp
         PlatformAndroid.cpp
         PlatformConfig.cpp
         ifaddrs.c
