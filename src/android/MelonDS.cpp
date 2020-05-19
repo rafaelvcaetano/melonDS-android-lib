@@ -45,9 +45,19 @@ namespace MelonDSAndroid
         GPU3D::InitRenderer(false);
     }
 
-    bool loadRom(char* romPath, char* sramPath, bool loadDirect)
+    int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
     {
-        return NDS::LoadROM(romPath, sramPath, loadDirect);
+        bool loaded = NDS::LoadROM(romPath, sramPath, loadDirect);
+        if (!loaded)
+            return 2;
+
+        if (loadGbaRom)
+        {
+            if (!NDS::LoadGBAROM(gbaRom, gbaSram))
+                return 1;
+        }
+
+        return 0;
     }
 
     void start(u64 initialTicks)

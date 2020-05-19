@@ -2,7 +2,8 @@
 
 Android port of the DS emulator, melonDS.
 
-This is just the core library with the appropriate changes required to make melonDS build for Android. Further information will be provided soon, as well as a working frontend.
+This is just the core library with the appropriate changes required to make melonDS build for Android. An example of a
+working frontend can be found in the [melonDS Android](https://github.com/rafaelvcaetano/melonDS-android) repository.
 
 ## License
 [![GNU GPLv3 Image](https://www.gnu.org/graphics/gplv3-127x51.png)](http://www.gnu.org/licenses/gpl-3.0.en.html)
