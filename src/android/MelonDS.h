@@ -23,13 +23,11 @@ namespace MelonDSAndroid {
      * failed to load, 2 if the NDS ROM failed to load
      */
     extern int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram);
-    extern void start(u64 initialTicks);
-    extern void loop(u64 currentTicks);
+    extern void start();
+    extern u32 loop();
     extern void pause();
     extern void resume();
     extern void copyFrameBuffer(void* dstBuffer);
-    extern int getFPS();
-    extern float getTargetFPS();
     extern void cleanup();
 }
 

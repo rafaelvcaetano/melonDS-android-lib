@@ -9,11 +9,6 @@
 #include <android/asset_manager.h>
 
 u32* frameBuffer;
-
-u64 startTick = 0;
-u64 lastTick = startTick;
-u64 lastMeasureTick = lastTick;
-u32 currentFps = 0;
 oboe::AudioStream *audioStream;
 
 namespace MelonDSAndroid
@@ -63,16 +58,15 @@ namespace MelonDSAndroid
         return 0;
     }
 
-    void start(u64 initialTicks)
+    void start()
     {
-        startTick = initialTicks;
         audioStream->requestStart();
         memset(frameBuffer, 0, 256 * 384 * 4);
     }
 
-    void loop(u64 currentTicks)
+    u32 loop()
     {
-        NDS::RunFrame();
+        u32 nLines = NDS::RunFrame();
 
         int frontbuf = GPU::FrontBuffer;
         if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
@@ -81,9 +75,7 @@ namespace MelonDSAndroid
             memcpy(&frameBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
         }
 
-        u32 delta = currentTicks - lastMeasureTick;
-        lastMeasureTick = currentTicks;
-        currentFps = 1000 / delta;
+        return nLines;
     }
 
     void pause() {
@@ -97,11 +89,6 @@ namespace MelonDSAndroid
     void copyFrameBuffer(void* dstBuffer)
     {
         memcpy(dstBuffer, frameBuffer, 256 * 384 * 4);
-    }
-
-    int getFPS()
-    {
-        return currentFps;
     }
 
     void cleanup()
