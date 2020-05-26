@@ -25,6 +25,7 @@
 #include "../Platform.h"
 #include "MelonDS.h"
 #include "PlatformConfig.h"
+#include "android_fopen.h"
 #include "LAN_Socket.h"
 #include "LAN_PCap.h"
 
@@ -93,12 +94,14 @@ namespace Platform
 
     FILE* OpenFile(const char* path, const char* mode, bool mustexist)
     {
-        FILE* file = fopen(path, mode);
-
-        if (file)
-            return file;
-
-        return NULL;
+        if (mustexist)
+        {
+            FILE* file = fopen(path, "rb");
+            if (file)
+                return freopen(path, mode, file);
+        }
+        else
+            return fopen(path, mode);
     }
 
     FILE* OpenLocalFile(const char* path, const char* mode)
@@ -119,7 +122,7 @@ namespace Platform
 
     FILE* OpenDataFile(const char* path)
     {
-        return OpenLocalFile(path, "rb");
+        return android_fopen(MelonDSAndroid::assetManager, path, "rb");
     }
 
     void* Thread_Create(void (*func)())

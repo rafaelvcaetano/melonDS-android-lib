@@ -6,6 +6,7 @@
 #include "../SPU.h"
 #include "../Platform.h"
 #include "OboeCallback.h"
+#include <android/asset_manager.h>
 
 u32* frameBuffer;
 
@@ -18,10 +19,12 @@ oboe::AudioStream *audioStream;
 namespace MelonDSAndroid
 {
     char* configDir;
+    AAssetManager* assetManager;
 
-    void setup(char* configDirPath)
+    void setup(char* configDirPath, AAssetManager* androidAssetManager)
     {
         configDir = configDirPath;
+        assetManager = androidAssetManager;
 
         frameBuffer = new u32[256 * 384 * 4];
 

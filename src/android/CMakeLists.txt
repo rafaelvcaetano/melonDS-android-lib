@@ -10,10 +10,12 @@ set(ANDROID_SOURCES
         PlatformAndroid.cpp
         PlatformConfig.cpp
         ifaddrs.c
+        android_fopen.c
 )
 
 add_subdirectory(${OBOE} ./oboe)
 # Include root dir so that pcap can be found. Probably a bad idea
 include_directories(${OBOE}/include ../)
 add_library(melonDS-lib SHARED ${ANDROID_SOURCES})
-target_link_libraries(melonDS-lib core oboe)
+find_library(android-lib android)
+target_link_libraries(melonDS-lib ${android-lib} core oboe)
