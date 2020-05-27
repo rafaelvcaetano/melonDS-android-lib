@@ -94,7 +94,6 @@ namespace MelonDSAndroid
     void cleanup()
     {
         NDS::DeInit();
-        GPU3D::DeInit();
         audioStream->requestStop();
         audioStream = NULL;
 

@@ -149,6 +149,7 @@ namespace Platform
         Semaphore* semaphore = (Semaphore*) malloc(sizeof(Semaphore));
         pthread_mutex_init(&semaphore->mutex, NULL);
         pthread_cond_init(&semaphore->cond, NULL);
+        semaphore->val = 0;
         return semaphore;
     }
 
