@@ -16,15 +16,16 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL Release)
-	set(CMAKE_CXX_FLAGS "-O3 -flto")
+	set(CMAKE_CXX_FLAGS_RELEASE "-O3 -flto")
 	#option(ENABLE_LTO "Enable link-time optimization" ON)
 else()
 	#set(CMAKE_CXX_FLAGS "-g")
 	#option(ENABLE_LTO "Enable link-time optimization" OFF)
 endif()
 
+
 if (CMAKE_BUILD_TYPE STREQUAL Debug)
-	set(CMAKE_CXX_FLAGS "-g")
+	set(CMAKE_CXX_FLAGS_DEBUG "-g")
 	#add_compile_options(-Og)
 endif()
 

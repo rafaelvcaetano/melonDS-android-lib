@@ -95,6 +95,7 @@ namespace MelonDSAndroid
     {
         NDS::DeInit();
         audioStream->requestStop();
+        audioStream->close();
         audioStream = NULL;
 
         free(frameBuffer);

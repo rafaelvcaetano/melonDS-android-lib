@@ -13,6 +13,7 @@ set(ANDROID_SOURCES
         android_fopen.c
 )
 
+set(OBOE ./oboe)
 add_subdirectory(${OBOE} ./oboe)
 # Include root dir so that pcap can be found. Probably a bad idea
 include_directories(${OBOE}/include ../)
