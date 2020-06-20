@@ -28,6 +28,8 @@ namespace MelonDSAndroid {
     extern void pause();
     extern void resume();
     extern void copyFrameBuffer(void* dstBuffer);
+    extern bool saveState(const char* path);
+    extern bool loadState(const char* path);
     extern void cleanup();
 }
 

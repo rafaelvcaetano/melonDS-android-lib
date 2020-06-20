@@ -91,6 +91,43 @@ namespace MelonDSAndroid
         memcpy(dstBuffer, frameBuffer, 256 * 384 * 4);
     }
 
+    bool saveState(const char* path)
+    {
+        Savestate* savestate = new Savestate(path, true);
+        if (savestate->Error)
+        {
+            delete savestate;
+            return false;
+        }
+        else
+        {
+            NDS::DoSavestate(savestate);
+            delete savestate;
+            return true;
+        }
+    }
+
+    bool loadState(const char* path)
+    {
+        bool success = true;
+
+        // TODO: create backup
+
+        Savestate* savestate = new Savestate(path, false);
+        if (savestate->Error)
+        {
+            delete savestate;
+            success = false;
+
+            // TODO: restore backup
+        }
+
+        NDS::DoSavestate(savestate);
+        delete savestate;
+
+        return success;
+    }
+
     void cleanup()
     {
         NDS::DeInit();
