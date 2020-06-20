@@ -7,6 +7,7 @@
 #include "../Platform.h"
 #include "OboeCallback.h"
 #include <android/asset_manager.h>
+#include <cstring>
 
 u32* frameBuffer;
 oboe::AudioStream *audioStream;
@@ -111,19 +112,31 @@ namespace MelonDSAndroid
     {
         bool success = true;
 
-        // TODO: create backup
+        unsigned int pathLength = strlen(configDir) + strlen("backup.mln") + 1;
+        char* backupPath = new char[pathLength];
+        strcpy(backupPath, configDir);
+        strcat(backupPath, "backup.mln");
+
+        Savestate* backup = new Savestate(backupPath, true);
+        NDS::DoSavestate(backup);
+        delete backup;
 
         Savestate* savestate = new Savestate(path, false);
         if (savestate->Error)
         {
             delete savestate;
-            success = false;
 
-            // TODO: restore backup
+            savestate = new Savestate(backupPath, false);
+            success = false;
         }
 
         NDS::DoSavestate(savestate);
         delete savestate;
+
+        // Delete backup file
+        remove(backupPath);
+
+        delete[] backupPath;
 
         return success;
     }
