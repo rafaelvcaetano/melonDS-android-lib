@@ -15,12 +15,20 @@ namespace MelonDSAndroid
 
     void pressKey(u32 key)
     {
-        NDS::PressKey(key);
+        // Special handling for Lid input
+        if (key == 16 + 7)
+            NDS::SetLidClosed(true);
+        else
+            NDS::PressKey(key);
     }
 
     void releaseKey(u32 key)
     {
-        NDS::ReleaseKey(key);
+        // Special handling for Lid input
+        if (key == 16 + 7)
+            NDS::SetLidClosed(false);
+        else
+            NDS::ReleaseKey(key);
     }
 }
 
