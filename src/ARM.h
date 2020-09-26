@@ -24,7 +24,10 @@
 #include "types.h"
 #include "NDS.h"
 
-#define ROR(x, n) (((x) >> (n)) | ((x) << (32-(n))))
+inline u32 ROR(u32 x, u32 n)
+{
+    return (x >> (n&0x1F)) | (x << ((32-n)&0x1F));
+}
 
 enum
 {
@@ -32,15 +35,20 @@ enum
     RWFlags_ForceUser = (1<<21),
 };
 
+const u32 ITCMPhysicalSize = 0x8000;
+const u32 DTCMPhysicalSize = 0x4000;
+
 class ARM
 {
 public:
     ARM(u32 num);
-    ~ARM(); // destroy shit
+    virtual ~ARM(); // destroy shit
 
     virtual void Reset();
 
     virtual void DoSavestate(Savestate* file);
+
+    virtual void FillPipeline() = 0;
 
     virtual void JumpTo(u32 addr, bool restorecpsr = false) = 0;
     void RestoreCPSR();
@@ -52,6 +60,9 @@ public:
     }
 
     virtual void Execute() = 0;
+#ifdef JIT_ENABLED
+    virtual void ExecuteJIT() = 0;
+#endif
 
     bool CheckCondition(u32 code)
     {
@@ -107,9 +118,16 @@ public:
     u32 Num;
 
     s32 Cycles;
-    u32 Halted;
-
-    u32 IRQ; // nonzero to trigger IRQ
+    union
+    {
+        struct
+        {
+            u8 Halted;
+            u8 IRQ; // nonzero to trigger IRQ
+            u8 IdleLoop;
+        };
+        u32 StopExecution;
+    };
 
     u32 CodeRegion;
     s32 CodeCycles;
@@ -131,13 +149,27 @@ public:
 
     NDS::MemRegion CodeMem;
 
+#ifdef JIT_ENABLED
+    u32 FastBlockLookupStart, FastBlockLookupSize;
+    u64* FastBlockLookup;
+#endif
+
     static u32 ConditionTable[16];
+
+protected:
+    u8 (*BusRead8)(u32 addr);
+    u16 (*BusRead16)(u32 addr);
+    u32 (*BusRead32)(u32 addr);
+    void (*BusWrite8)(u32 addr, u8 val);
+    void (*BusWrite16)(u32 addr, u16 val);
+    void (*BusWrite32)(u32 addr, u32 val);
 };
 
 class ARMv5 : public ARM
 {
 public:
     ARMv5();
+    ~ARMv5();
 
     void Reset();
 
@@ -145,12 +177,17 @@ public:
 
     void UpdateRegionTimings(u32 addrstart, u32 addrend);
 
+    void FillPipeline();
+
     void JumpTo(u32 addr, bool restorecpsr = false);
 
     void PrefetchAbort();
     void DataAbort();
 
     void Execute();
+#ifdef JIT_ENABLED
+    void ExecuteJIT();
+#endif
 
     // all code accesses are forced nonseq 32bit
     u32 CodeRead32(u32 addr, bool branch);
@@ -229,10 +266,14 @@ public:
 
     u32 DTCMSetting, ITCMSetting;
 
-    u8 ITCM[0x8000];
+    // for aarch64 JIT they need to go up here
+    // to be addressable by a 12-bit immediate
     u32 ITCMSize;
-    u8 DTCM[0x4000];
     u32 DTCMBase, DTCMSize;
+    s32 RegionCodeCycles;
+
+    u8 ITCM[ITCMPhysicalSize];
+    u8* DTCM;
 
     u8 ICache[0x2000];
     u32 ICacheTags[64*4];
@@ -257,8 +298,9 @@ public:
     // code/16N/32N/32S
     u8 MemTimings[0x100000][4];
 
-    s32 RegionCodeCycles;
     u8* CurICacheLine;
+
+    bool (*GetMemRegion)(u32 addr, bool write, NDS::MemRegion* region);
 };
 
 class ARMv4 : public ARM
@@ -266,84 +308,91 @@ class ARMv4 : public ARM
 public:
     ARMv4();
 
+    void Reset();
+
+    void FillPipeline();
+
     void JumpTo(u32 addr, bool restorecpsr = false);
 
     void Execute();
+#ifdef JIT_ENABLED
+    void ExecuteJIT();
+#endif
 
     u16 CodeRead16(u32 addr)
     {
-        return NDS::ARM7Read16(addr);
+        return BusRead16(addr);
     }
 
     u32 CodeRead32(u32 addr)
     {
-        return NDS::ARM7Read32(addr);
+        return BusRead32(addr);
     }
 
     void DataRead8(u32 addr, u32* val)
     {
-        *val = NDS::ARM7Read8(addr);
-        DataRegion = addr >> 24;
-        DataCycles = NDS::ARM7MemTimings[DataRegion][0];
+        *val = BusRead8(addr);
+        DataRegion = addr;
+        DataCycles = NDS::ARM7MemTimings[addr >> 15][0];
     }
 
     void DataRead16(u32 addr, u32* val)
     {
         addr &= ~1;
 
-        *val = NDS::ARM7Read16(addr);
-        DataRegion = addr >> 24;
-        DataCycles = NDS::ARM7MemTimings[DataRegion][0];
+        *val = BusRead16(addr);
+        DataRegion = addr;
+        DataCycles = NDS::ARM7MemTimings[addr >> 15][0];
     }
 
     void DataRead32(u32 addr, u32* val)
     {
         addr &= ~3;
 
-        *val = NDS::ARM7Read32(addr);
-        DataRegion = addr >> 24;
-        DataCycles = NDS::ARM7MemTimings[DataRegion][2];
+        *val = BusRead32(addr);
+        DataRegion = addr;
+        DataCycles = NDS::ARM7MemTimings[addr >> 15][2];
     }
 
     void DataRead32S(u32 addr, u32* val)
     {
         addr &= ~3;
 
-        *val = NDS::ARM7Read32(addr);
-        DataCycles += NDS::ARM7MemTimings[DataRegion][3];
+        *val = BusRead32(addr);
+        DataCycles += NDS::ARM7MemTimings[addr >> 15][3];
     }
 
     void DataWrite8(u32 addr, u8 val)
     {
-        NDS::ARM7Write8(addr, val);
-        DataRegion = addr >> 24;
-        DataCycles = NDS::ARM7MemTimings[DataRegion][0];
+        BusWrite8(addr, val);
+        DataRegion = addr;
+        DataCycles = NDS::ARM7MemTimings[addr >> 15][0];
     }
 
     void DataWrite16(u32 addr, u16 val)
     {
         addr &= ~1;
 
-        NDS::ARM7Write16(addr, val);
-        DataRegion = addr >> 24;
-        DataCycles = NDS::ARM7MemTimings[DataRegion][0];
+        BusWrite16(addr, val);
+        DataRegion = addr;
+        DataCycles = NDS::ARM7MemTimings[addr >> 15][0];
     }
 
     void DataWrite32(u32 addr, u32 val)
     {
         addr &= ~3;
 
-        NDS::ARM7Write32(addr, val);
-        DataRegion = addr >> 24;
-        DataCycles = NDS::ARM7MemTimings[DataRegion][2];
+        BusWrite32(addr, val);
+        DataRegion = addr;
+        DataCycles = NDS::ARM7MemTimings[addr >> 15][2];
     }
 
     void DataWrite32S(u32 addr, u32 val)
     {
         addr &= ~3;
 
-        NDS::ARM7Write32(addr, val);
-        DataCycles += NDS::ARM7MemTimings[DataRegion][3];
+        BusWrite32(addr, val);
+        DataCycles += NDS::ARM7MemTimings[addr >> 15][3];
     }
 
 
@@ -365,7 +414,7 @@ public:
         s32 numC = NDS::ARM7MemTimings[CodeCycles][(CPSR&0x20)?0:2];
         s32 numD = DataCycles;
 
-        if (DataRegion == 0x02) // mainRAM
+        if ((DataRegion >> 24) == 0x02) // mainRAM
         {
             if (CodeRegion == 0x02)
                 Cycles += numC + numD;
@@ -392,7 +441,7 @@ public:
         s32 numC = NDS::ARM7MemTimings[CodeCycles][(CPSR&0x20)?0:2];
         s32 numD = DataCycles;
 
-        if (DataRegion == 0x02)
+        if ((DataRegion >> 24) == 0x02)
         {
             if (CodeRegion == 0x02)
                 Cycles += numC + numD;
@@ -415,6 +464,14 @@ namespace ARMInterpreter
 
 void A_UNK(ARM* cpu);
 void T_UNK(ARM* cpu);
+
+}
+
+namespace NDS
+{
+
+extern ARMv5* ARM9;
+extern ARMv4* ARM7;
 
 }
 

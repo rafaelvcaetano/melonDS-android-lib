@@ -19,10 +19,15 @@
 #include <stdio.h>
 #include <string.h>
 #include "NDS.h"
+#include "DSi.h"
 #include "NDSCart.h"
 #include "ARM.h"
 #include "CRC32.h"
+#include "DSi_AES.h"
 #include "Platform.h"
+#include "Config.h"
+#include "ROMList.h"
+#include "melonDLDI.h"
 
 
 namespace NDSCart_SRAM
@@ -461,11 +466,13 @@ u16 SPICnt;
 u32 ROMCnt;
 
 u8 ROMCommand[8];
-u32 ROMDataOut;
+u32 ROMData;
 
-u8 DataOut[0x4000];
-u32 DataOutPos;
-u32 DataOutLen;
+u8 TransferData[0x4000];
+u32 TransferPos;
+u32 TransferLen;
+u32 TransferDir;
+u8 TransferCmd[8];
 
 bool CartInserted;
 u8* CartROM;
@@ -473,6 +480,9 @@ u32 CartROMSize;
 u32 CartCRC;
 u32 CartID;
 bool CartIsHomebrew;
+bool CartIsDSi;
+
+FILE* CartSD;
 
 u32 CmdEncMode;
 u32 DataEncMode;
@@ -485,6 +495,7 @@ u64 Key2_Y;
 
 void ROMCommand_Retail(u8* cmd);
 void ROMCommand_RetailNAND(u8* cmd);
+void ROMCommand_Homebrew(u8* cmd);
 
 void (*ROMCommandHandler)(u8* cmd);
 
@@ -555,9 +566,13 @@ void Key1_ApplyKeycode(u32* keycode, u32 mod)
     }
 }
 
-void Key1_InitKeycode(u32 idcode, u32 level, u32 mod)
+void Key1_InitKeycode(bool dsi, u32 idcode, u32 level, u32 mod)
 {
-    memcpy(Key1_KeyBuf, &NDS::ARM7BIOS[0x30], 0x1048); // hax
+    // TODO: source the key data from different possible places
+    if (dsi && NDS::ConsoleType==1)
+        memcpy(Key1_KeyBuf, &DSi::ARM7iBIOS[0xC6D0], 0x1048); // hax
+    else
+        memcpy(Key1_KeyBuf, &NDS::ARM7BIOS[0x30], 0x1048); // hax
 
     u32 keycode[3] = {idcode, idcode>>1, idcode<<1};
     if (level >= 1) Key1_ApplyKeycode(keycode, mod);
@@ -592,11 +607,22 @@ void Key2_Encrypt(u8* data, u32 len)
 }
 
 
+void ApplyModcrypt(u32 addr, u32 len, u8* iv)
+{return;
+    u8 key[16];
+
+    DSi_AES::GetModcryptKey(&CartROM[0], key);
+    DSi_AES::ApplyModcrypt(&CartROM[addr], len, key, iv);
+}
+
+
 bool Init()
 {
     if (!NDSCart_SRAM::Init()) return false;
 
     CartROM = NULL;
+
+    CartSD = NULL;
 
     return true;
 }
@@ -605,37 +631,29 @@ void DeInit()
 {
     if (CartROM) delete[] CartROM;
 
+    if (CartSD) fclose(CartSD);
+
     NDSCart_SRAM::DeInit();
 }
 
 void Reset()
 {
-    SPICnt = 0;
-    ROMCnt = 0;
-
-    memset(ROMCommand, 0, 8);
-    ROMDataOut = 0;
-
-    Key2_X = 0;
-    Key2_Y = 0;
-
-    memset(DataOut, 0, 0x4000);
-    DataOutPos = 0;
-    DataOutLen = 0;
-
     CartInserted = false;
     if (CartROM) delete[] CartROM;
     CartROM = NULL;
     CartROMSize = 0;
     CartID = 0;
     CartIsHomebrew = false;
+    CartIsDSi = false;
+
+    if (CartSD) fclose(CartSD);
+    CartSD = NULL;
 
     ROMCommandHandler = NULL;
 
-    CmdEncMode = 0;
-    DataEncMode = 0;
-
     NDSCart_SRAM::Reset();
+
+    ResetCart();
 }
 
 void DoSavestate(Savestate* file)
@@ -646,11 +664,13 @@ void DoSavestate(Savestate* file)
     file->Var32(&ROMCnt);
 
     file->VarArray(ROMCommand, 8);
-    file->Var32(&ROMDataOut);
+    file->Var32(&ROMData);
 
-    file->VarArray(DataOut, 0x4000);
-    file->Var32(&DataOutPos);
-    file->Var32(&DataOutLen);
+    file->VarArray(TransferData, 0x4000);
+    file->Var32(&TransferPos);
+    file->Var32(&TransferLen);
+    file->Var32(&TransferDir);
+    file->VarArray(TransferCmd, 8);
 
     // cart inserted/len/ROM/etc should be already populated
     // savestate should be loaded after the right game is loaded
@@ -666,10 +686,8 @@ void DoSavestate(Savestate* file)
 }
 
 
-void ApplyDLDIPatch()
+void ApplyDLDIPatch(const u8* patch, u32 len)
 {
-    // TODO: embed patches? let the user choose? default to some builtin driver?
-
     u32 offset = *(u32*)&CartROM[0x20];
     u32 size = *(u32*)&CartROM[0x2C];
 
@@ -692,23 +710,7 @@ void ApplyDLDIPatch()
         return;
     }
 
-    printf("DLDI shit found at %08X (%08X)\n", dldioffset, offset+dldioffset);
-
-    FILE* f = fopen("dldi.bin", "rb");
-    if (!f)
-    {
-        printf("no DLDI patch available. oh well\n");
-        return;
-    }
-
-    u32 dldisize;
-    fseek(f, 0, SEEK_END);
-    dldisize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    u8* patch = new u8[dldisize];
-    fread(patch, dldisize, 1, f);
-    fclose(f);
+    printf("DLDI structure found at %08X (%08X)\n", dldioffset, offset+dldioffset);
 
     if (*(u32*)&patch[0] != 0xBF8DA5ED ||
         *(u32*)&patch[4] != 0x69684320 ||
@@ -739,7 +741,7 @@ void ApplyDLDIPatch()
     u32 patchsize = 1 << patch[0x0D];
     u32 patchend = patchbase + patchsize;
 
-    memcpy(&binary[dldioffset], patch, dldisize);
+    memcpy(&binary[dldioffset], patch, len);
 
     *(u32*)&binary[dldioffset+0x40] += delta;
     *(u32*)&binary[dldioffset+0x44] += delta;
@@ -803,39 +805,25 @@ void ApplyDLDIPatch()
         memset(&binary[dldioffset+fixstart], 0, fixend-fixstart);
     }
 
-    delete[] patch;
     printf("applied DLDI patch\n");
 }
 
 
-bool ReadROMParams(u32 gamecode, u32* params)
+bool ReadROMParams(u32 gamecode, ROMListEntry* params)
 {
-    // format for romlist.bin:
-    // [gamecode] [ROM size] [save type] [reserved]
-    // list must be sorted by gamecode
-
-    FILE* f = Platform::OpenDataFile("romlist.bin");
-    if (!f) return false;
-
-    fseek(f, 0, SEEK_END);
-    u32 len = (u32)ftell(f);
-    u32 maxlen = len;
-    len >>= 4; // 16 bytes per entry
+    u32 len = sizeof(ROMList) / sizeof(ROMListEntry);
 
     u32 offset = 0;
     u32 chk_size = len >> 1;
     for (;;)
     {
         u32 key = 0;
-        fseek(f, offset + (chk_size << 4), SEEK_SET);
-        fread(&key, 4, 1, f);
-
-        printf("chk_size=%d, key=%08X, wanted=%08X, offset=%08X\n", chk_size, key, gamecode, offset);
+        ROMListEntry* curentry = &ROMList[offset + chk_size];
+        key = curentry->GameCode;
 
         if (key == gamecode)
         {
-            fread(params, 4, 3, f);
-            fclose(f);
+            memcpy(params, curentry, sizeof(ROMListEntry));
             return true;
         }
         else
@@ -843,22 +831,20 @@ bool ReadROMParams(u32 gamecode, u32* params)
             if (key < gamecode)
             {
                 if (chk_size == 0)
-                    offset += 0x10;
+                    offset++;
                 else
-                    offset += (chk_size << 4);
+                    offset += chk_size;
             }
             else if (chk_size == 0)
             {
-                fclose(f);
                 return false;
             }
 
             chk_size >>= 1;
         }
 
-        if (offset >= maxlen)
+        if (offset >= len)
         {
-            fclose(f);
             return false;
         }
     }
@@ -867,15 +853,20 @@ bool ReadROMParams(u32 gamecode, u32* params)
 
 void DecryptSecureArea(u8* out)
 {
+    // TODO: source decryption data from different possible sources
+    // * original DS-mode ARM7 BIOS has the key data at 0x30
+    // * .srl ROMs (VC dumps) have encrypted secure areas but have precomputed
+    //   decryption data at 0x1000 (and at the beginning of the DSi region if any)
+
     u32 gamecode = *(u32*)&CartROM[0x0C];
     u32 arm9base = *(u32*)&CartROM[0x20];
 
     memcpy(out, &CartROM[arm9base], 0x800);
 
-    Key1_InitKeycode(gamecode, 2, 2);
+    Key1_InitKeycode(false, gamecode, 2, 2);
     Key1_Decrypt((u32*)&out[0]);
 
-    Key1_InitKeycode(gamecode, 3, 2);
+    Key1_InitKeycode(false, gamecode, 3, 2);
     for (u32 i = 0; i < 0x800; i += 8)
         Key1_Decrypt((u32*)&out[i]);
 
@@ -898,6 +889,7 @@ bool LoadROM(const char* path, const char* sram, bool direct)
 {
     // TODO: streaming mode? for really big ROMs or systems with limited RAM
     // for now we're lazy
+    // also TODO: validate what we're loading!!
 
     FILE* f = Platform::OpenFile(path, "rb");
     if (!f)
@@ -919,6 +911,11 @@ bool LoadROM(const char* path, const char* sram, bool direct)
     fread(&gamecode, 4, 1, f);
     printf("Game code: %c%c%c%c\n", gamecode&0xFF, (gamecode>>8)&0xFF, (gamecode>>16)&0xFF, gamecode>>24);
 
+    u8 unitcode;
+    fseek(f, 0x12, SEEK_SET);
+    fread(&unitcode, 1, 1, f);
+    CartIsDSi = (unitcode & 0x02) != 0;
+
     CartROM = new u8[CartROMSize];
     memset(CartROM, 0, CartROMSize);
     fseek(f, 0, SEEK_SET);
@@ -930,22 +927,23 @@ bool LoadROM(const char* path, const char* sram, bool direct)
     CartCRC = CRC32(CartROM, CartROMSize);
     printf("ROM CRC32: %08X\n", CartCRC);
 
-    u32 romparams[3];
-    if (!ReadROMParams(gamecode, romparams))
+    ROMListEntry romparams;
+    if (!ReadROMParams(gamecode, &romparams))
     {
         // set defaults
         printf("ROM entry not found\n");
 
-        romparams[0] = CartROMSize;
+        romparams.GameCode = gamecode;
+        romparams.ROMSize = CartROMSize;
         if (*(u32*)&CartROM[0x20] < 0x4000)
-            romparams[1] = 0; // no saveRAM for homebrew
+            romparams.SaveMemType = 0; // no saveRAM for homebrew
         else
-            romparams[1] = 2; // assume EEPROM 64k (TODO FIXME)
+            romparams.SaveMemType = 2; // assume EEPROM 64k (TODO FIXME)
     }
     else
-        printf("ROM entry: %08X %08X %08X\n", romparams[0], romparams[1], romparams[2]);
+        printf("ROM entry: %08X %08X\n", romparams.ROMSize, romparams.SaveMemType);
 
-    if (romparams[0] != len) printf("!! bad ROM size %d (expected %d) rounded to %d\n", len, romparams[0], CartROMSize);
+    if (romparams.ROMSize != len) printf("!! bad ROM size %d (expected %d) rounded to %d\n", len, romparams.ROMSize, CartROMSize);
 
     // generate a ROM ID
     // note: most games don't check the actual value
@@ -957,8 +955,11 @@ bool LoadROM(const char* path, const char* sram, bool direct)
     else
         CartID |= (0x100 - (CartROMSize >> 28)) << 8;
 
-    if (romparams[1] == 8)
+    if (romparams.SaveMemType == 8)
         CartID |= 0x08000000; // NAND flag
+
+    if (CartIsDSi)
+        CartID |= 0x40000000;
 
     printf("Cart ID: %08X\n", CartID);
 
@@ -975,19 +976,21 @@ bool LoadROM(const char* path, const char* sram, bool direct)
 
                 strncpy((char*)&CartROM[arm9base], "encryObj", 8);
 
-                Key1_InitKeycode(gamecode, 3, 2);
+                Key1_InitKeycode(false, gamecode, 3, 2);
                 for (u32 i = 0; i < 0x800; i += 8)
                     Key1_Encrypt((u32*)&CartROM[arm9base + i]);
 
-                Key1_InitKeycode(gamecode, 2, 2);
+                Key1_InitKeycode(false, gamecode, 2, 2);
                 Key1_Encrypt((u32*)&CartROM[arm9base]);
             }
         }
-        else
-        {
-            CartIsHomebrew = true;
-            //ApplyDLDIPatch();
-        }
+    }
+
+    if ((arm9base < 0x4000) || (gamecode == 0x23232323))
+    {
+        CartIsHomebrew = true;
+        if (Config::DLDIEnable)
+            ApplyDLDIPatch(melonDLDI, sizeof(melonDLDI));
     }
 
     if (direct)
@@ -1001,18 +1004,26 @@ bool LoadROM(const char* path, const char* sram, bool direct)
     CartInserted = true;
 
     // TODO: support more fancy cart types (homebrew?, flashcarts, etc)
-    if (CartID & 0x08000000)
+    if (CartIsHomebrew)
+        ROMCommandHandler = ROMCommand_Homebrew;
+    else if (CartID & 0x08000000)
         ROMCommandHandler = ROMCommand_RetailNAND;
     else
         ROMCommandHandler = ROMCommand_Retail;
 
     // encryption
-    Key1_InitKeycode(gamecode, 2, 2);
-
+    Key1_InitKeycode(false, gamecode, 2, 2);
 
     // save
     printf("Save file: %s\n", sram);
-    NDSCart_SRAM::LoadSave(sram, romparams[1]);
+    NDSCart_SRAM::LoadSave(sram, romparams.SaveMemType);
+
+    if (CartIsHomebrew && Config::DLDIEnable)
+    {
+        CartSD = Platform::OpenLocalFile(Config::DLDISDPath, "r+b");
+    }
+    else
+        CartSD = NULL;
 
     return true;
 }
@@ -1023,6 +1034,36 @@ void RelocateSave(const char* path, bool write)
     NDSCart_SRAM::RelocateSave(path, write);
 }
 
+int ImportSRAM(const u8* data, u32 length)
+{
+    memcpy(NDSCart_SRAM::SRAM, data, std::min(length, NDSCart_SRAM::SRAMLength));
+    return length - NDSCart_SRAM::SRAMLength;
+}
+
+void ResetCart()
+{
+    // CHECKME: what if there is a transfer in progress?
+
+    SPICnt = 0;
+    ROMCnt = 0;
+
+    memset(ROMCommand, 0, 8);
+    ROMData = 0;
+
+    Key2_X = 0;
+    Key2_Y = 0;
+
+    memset(TransferData, 0, 0x4000);
+    TransferPos = 0;
+    TransferLen = 0;
+    TransferDir = 0;
+    memset(TransferCmd, 0, 8);
+    TransferCmd[0] = 0xFF;
+
+    CmdEncMode = 0;
+    DataEncMode = 0;
+}
+
 void ReadROM(u32 addr, u32 len, u32 offset)
 {
     if (!CartInserted) return;
@@ -1031,7 +1072,7 @@ void ReadROM(u32 addr, u32 len, u32 offset)
     if ((addr+len) > CartROMSize)
         len = CartROMSize - addr;
 
-    memcpy(DataOut+offset, CartROM+addr, len);
+    memcpy(TransferData+offset, CartROM+addr, len);
 }
 
 void ReadROM_B7(u32 addr, u32 len, u32 offset)
@@ -1045,7 +1086,7 @@ void ReadROM_B7(u32 addr, u32 len, u32 offset)
             addr = 0x8000 + (addr & 0x1FF);
     }
 
-    memcpy(DataOut+offset, CartROM+addr, len);
+    memcpy(TransferData+offset, CartROM+addr, len);
 }
 
 
@@ -1055,16 +1096,41 @@ void ROMEndTransfer(u32 param)
 
     if (SPICnt & (1<<14))
         NDS::SetIRQ((NDS::ExMemCnt[0]>>11)&0x1, NDS::IRQ_CartSendDone);
+
+    if (TransferDir == 1)
+    {
+        // finish a write
+
+        u8* cmd = TransferCmd;
+        switch (cmd[0])
+        {
+        case 0xC1:
+            {
+                u32 sector = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
+                u64 addr = sector * 0x200ULL;
+
+                if (CartSD)
+                {
+                    fseek(CartSD, addr, SEEK_SET);
+                    fwrite(TransferData, TransferLen, 1, CartSD);
+                }
+            }
+            break;
+        }
+    }
 }
 
 void ROMPrepareData(u32 param)
 {
-    if (DataOutPos >= DataOutLen)
-        ROMDataOut = 0;
-    else
-        ROMDataOut = *(u32*)&DataOut[DataOutPos];
+    if (TransferDir == 0)
+    {
+        if (TransferPos >= TransferLen)
+            ROMData = 0;
+        else
+            ROMData = *(u32*)&TransferData[TransferPos];
 
-    DataOutPos += 4;
+        TransferPos += 4;
+    }
 
     ROMCnt |= (1<<23);
 
@@ -1082,16 +1148,16 @@ void ROMCommand_Retail(u8* cmd)
     case 0xB7:
         {
             u32 addr = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
-            memset(DataOut, 0, DataOutLen);
+            memset(TransferData, 0, TransferLen);
 
-            if (((addr + DataOutLen - 1) >> 12) != (addr >> 12))
+            if (((addr + TransferLen - 1) >> 12) != (addr >> 12))
             {
                 u32 len1 = 0x1000 - (addr & 0xFFF);
                 ReadROM_B7(addr, len1, 0);
-                ReadROM_B7(addr+len1, DataOutLen-len1, len1);
+                ReadROM_B7(addr+len1, TransferLen-len1, len1);
             }
             else
-                ReadROM_B7(addr, DataOutLen, 0);
+                ReadROM_B7(addr, TransferLen, 0);
         }
         break;
 
@@ -1112,8 +1178,8 @@ void ROMCommand_RetailNAND(u8* cmd)
 
             // Jam with the Band stores words 6-9 of this at 0x02131BB0
             // it doesn't seem to use those anywhere later
-            for (u32 pos = 0; pos < DataOutLen; pos += 4)
-                *(u32*)&DataOut[pos] = 0;
+            for (u32 pos = 0; pos < TransferLen; pos += 4)
+                *(u32*)&TransferData[pos] = 0;
         }
         break;
 
@@ -1126,16 +1192,16 @@ void ROMCommand_RetailNAND(u8* cmd)
     case 0xB7:
         {
             u32 addr = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
-            memset(DataOut, 0, DataOutLen);
+            memset(TransferData, 0, TransferLen);
 
-            if (((addr + DataOutLen - 1) >> 12) != (addr >> 12))
+            if (((addr + TransferLen - 1) >> 12) != (addr >> 12))
             {
                 u32 len1 = 0x1000 - (addr & 0xFFF);
                 ReadROM_B7(addr, len1, 0);
-                ReadROM_B7(addr+len1, DataOutLen-len1, len1);
+                ReadROM_B7(addr+len1, TransferLen-len1, len1);
             }
             else
-                ReadROM_B7(addr, DataOutLen, 0);
+                ReadROM_B7(addr, TransferLen, 0);
         }
         break;
 
@@ -1145,13 +1211,59 @@ void ROMCommand_RetailNAND(u8* cmd)
             // * bit7: busy? error?
             // * bit5: accessing savemem
 
-            for (u32 pos = 0; pos < DataOutLen; pos += 4)
-                *(u32*)&DataOut[pos] = NDSCart_SRAM::StatusReg * 0x01010101;
+            for (u32 pos = 0; pos < TransferLen; pos += 4)
+                *(u32*)&TransferData[pos] = NDSCart_SRAM::StatusReg * 0x01010101;
         }
         break;
 
     default:
-        printf("unknown NAND command %02X %04Xn", cmd[0], DataOutLen);
+        printf("unknown NAND command %02X %04Xn", cmd[0], TransferLen);
+        break;
+    }
+}
+
+void ROMCommand_Homebrew(u8* cmd)
+{
+    switch (cmd[0])
+    {
+    case 0xB7:
+        {
+            u32 addr = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
+            memset(TransferData, 0, TransferLen);
+
+            if (((addr + TransferLen - 1) >> 12) != (addr >> 12))
+            {
+                u32 len1 = 0x1000 - (addr & 0xFFF);
+                ReadROM_B7(addr, len1, 0);
+                ReadROM_B7(addr+len1, TransferLen-len1, len1);
+            }
+            else
+                ReadROM_B7(addr, TransferLen, 0);
+        }
+        break;
+
+    case 0xC0: // SD read
+        {
+            u32 sector = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
+            u64 addr = sector * 0x200ULL;
+
+            if (CartSD)
+            {
+                fseek(CartSD, addr, SEEK_SET);
+                fread(TransferData, TransferLen, 1, CartSD);
+            }
+        }
+        break;
+
+    case 0xC1: // SD write
+        {
+            TransferDir = 1;
+            memcpy(TransferCmd, cmd, 8);
+        }
+        break;
+
+    default:
+        printf("unknown homebrew cart command %02X\n", cmd[0]);
         break;
     }
 }
@@ -1191,13 +1303,13 @@ void WriteROMCnt(u32 val)
     else if (datasize > 0)
         datasize = 0x100 << datasize;
 
-    DataOutPos = 0;
-    DataOutLen = datasize;
+    TransferPos = 0;
+    TransferLen = datasize;
 
     // handle KEY1 encryption as needed.
     // KEY2 encryption is implemented in hardware and doesn't need to be handled.
     u8 cmd[8];
-    if (CmdEncMode == 1)
+    if (CmdEncMode == 1 || CmdEncMode == 11)
     {
         *(u32*)&cmd[0] = ByteSwap(*(u32*)&ROMCommand[4]);
         *(u32*)&cmd[4] = ByteSwap(*(u32*)&ROMCommand[0]);
@@ -1218,36 +1330,52 @@ void WriteROMCnt(u32 val)
            cmd[4], cmd[5], cmd[6], cmd[7],
            datasize);*/
 
+    // default is read
+    // commands that do writes will change this
+    TransferDir = 0;
+
     switch (cmd[0])
     {
     case 0x9F:
-        memset(DataOut, 0xFF, DataOutLen);
+        memset(TransferData, 0xFF, TransferLen);
         break;
 
     case 0x00:
-        memset(DataOut, 0, DataOutLen);
-        if (DataOutLen > 0x1000)
+        memset(TransferData, 0, TransferLen);
+        if (TransferLen > 0x1000)
         {
             ReadROM(0, 0x1000, 0);
-            for (u32 pos = 0x1000; pos < DataOutLen; pos += 0x1000)
-                memcpy(DataOut+pos, DataOut, 0x1000);
+            for (u32 pos = 0x1000; pos < TransferLen; pos += 0x1000)
+                memcpy(TransferData+pos, TransferData, 0x1000);
         }
         else
-            ReadROM(0, DataOutLen, 0);
+            ReadROM(0, TransferLen, 0);
         break;
 
     case 0x90:
     case 0xB8:
-        for (u32 pos = 0; pos < DataOutLen; pos += 4)
-            *(u32*)&DataOut[pos] = CartID;
+        for (u32 pos = 0; pos < TransferLen; pos += 4)
+            *(u32*)&TransferData[pos] = CartID;
         break;
 
     case 0x3C:
-        if (CartInserted) CmdEncMode = 1;
+        if (CartInserted)
+        {
+            CmdEncMode = 1;
+            Key1_InitKeycode(false, *(u32*)&CartROM[0xC], 2, 2);
+        }
+        break;
+
+    case 0x3D:
+        if (CartInserted && CartIsDSi)
+        {
+            CmdEncMode = 11;
+            Key1_InitKeycode(true, *(u32*)&CartROM[0xC], 1, 2);
+        }
         break;
 
     default:
-        if (CmdEncMode == 1)
+        if (CmdEncMode == 1 || CmdEncMode == 11)
         {
             switch (cmd[0] & 0xF0)
             {
@@ -1256,13 +1384,19 @@ void WriteROMCnt(u32 val)
                 break;
 
             case 0x10:
-                for (u32 pos = 0; pos < DataOutLen; pos += 4)
-                    *(u32*)&DataOut[pos] = CartID;
+                for (u32 pos = 0; pos < TransferLen; pos += 4)
+                    *(u32*)&TransferData[pos] = CartID;
                 break;
 
             case 0x20:
                 {
                     u32 addr = (cmd[2] & 0xF0) << 8;
+                    if (CmdEncMode == 11)
+                    {
+                        u32 arm9i_base = *(u32*)&CartROM[0x1C0];
+                        addr -= 0x4000;
+                        addr += arm9i_base;
+                    }
                     ReadROM(addr, 0x1000, 0);
                 }
                 break;
@@ -1301,29 +1435,52 @@ void WriteROMCnt(u32 val)
         NDS::ScheduleEvent(NDS::Event_ROMTransfer, false, xfercycle*(cmddelay+4), ROMPrepareData, 0);
 }
 
+void AdvanceROMTransfer()
+{
+    ROMCnt &= ~(1<<23);
+
+    if (TransferPos < TransferLen)
+    {
+        u32 xfercycle = (ROMCnt & (1<<27)) ? 8 : 5;
+        u32 delay = 4;
+        if (!(ROMCnt & (1<<30)))
+        {
+            if (!(TransferPos & 0x1FF))
+                delay += ((ROMCnt >> 16) & 0x3F);
+        }
+
+        NDS::ScheduleEvent(NDS::Event_ROMTransfer, false, xfercycle*delay, ROMPrepareData, 0);
+    }
+    else
+        ROMEndTransfer(0);
+}
+
 u32 ReadROMData()
 {
     if (ROMCnt & (1<<23))
     {
-        ROMCnt &= ~(1<<23);
-
-        if (DataOutPos < DataOutLen)
-        {
-            u32 xfercycle = (ROMCnt & (1<<27)) ? 8 : 5;
-            u32 delay = 4;
-            if (!(ROMCnt & (1<<30)))
-            {
-                if (!(DataOutPos & 0x1FF))
-                    delay += ((ROMCnt >> 16) & 0x3F);
-            }
-
-            NDS::ScheduleEvent(NDS::Event_ROMTransfer, false, xfercycle*delay, ROMPrepareData, 0);
-        }
-        else
-            ROMEndTransfer(0);
+        AdvanceROMTransfer();
     }
 
-    return ROMDataOut;
+    return ROMData;
+}
+
+void WriteROMData(u32 val)
+{
+    ROMData = val;
+
+    if (ROMCnt & (1<<23))
+    {
+        if (TransferDir == 1)
+        {
+            if (TransferPos < TransferLen)
+                *(u32*)&TransferData[TransferPos] = ROMData;
+
+            TransferPos += 4;
+        }
+
+        AdvanceROMTransfer();
+    }
 }
 
 

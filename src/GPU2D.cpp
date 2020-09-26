@@ -35,9 +35,6 @@
 // * [Gericom] bit15 is used as bottom green bit for palettes. TODO: check where this applies.
 //   tested on the normal BG palette and applies there
 //
-// oh also, changing DISPCNT bit16-17 midframe doesn't work (ignored? applied for next frame?)
-// TODO, eventually: check whether other DISPCNT bits can be changed midframe
-//
 // for VRAM display mode, VRAM must be mapped to LCDC
 //
 // FIFO display mode:
@@ -78,7 +75,10 @@
 // * for rotscaled sprites: coordinates that are inside the sprite are clamped to the sprite region
 //   after being transformed for mosaic
 
-// TODO: find which parts of DISPCNT are latched. for example, not possible to change video mode midframe.
+// TODO: master brightness, display capture and mainmem FIFO are separate circuitry, distinct from
+// the tile renderers.
+// for example these aren't affected by POWCNT GPU-disable bits.
+// to model the hardware more accurately, the relevant logic should be moved to GPU.cpp.
 
 
 GPU2D::GPU2D(u32 num)
@@ -102,6 +102,7 @@ GPU2D::~GPU2D()
 
 void GPU2D::Reset()
 {
+    Enabled = false;
     DispCnt = 0;
     memset(BGCnt, 0, 4*2);
     memset(BGXPos, 0, 4*2);
@@ -202,16 +203,8 @@ void GPU2D::DoSavestate(Savestate* file)
         file->Var32(&CaptureCnt);
     }
 
-    if (file->IsAtleastVersion(2, 1))
-    {
-        file->Var32(&Win0Active);
-        file->Var32(&Win1Active);
-    }
-    else
-    {
-        Win0Active = 0;
-        Win1Active = 0;
-    }
+    file->Var32(&Win0Active);
+    file->Var32(&Win1Active);
 
     if (!file->Saving)
     {
@@ -232,7 +225,7 @@ void GPU2D::SetFramebuffer(u32* buf)
     Framebuffer = buf;
 }
 
-void GPU2D::SetDisplaySettings(bool accel)
+void GPU2D::SetRenderSettings(bool accel)
 {
     Accelerated = accel;
 
@@ -317,8 +310,6 @@ u32 GPU2D::Read32(u32 addr)
 
 void GPU2D::Write8(u32 addr, u8 val)
 {
-    if (!Enabled) return;
-
     switch (addr & 0x00000FFF)
     {
     case 0x000:
@@ -337,7 +328,12 @@ void GPU2D::Write8(u32 addr, u8 val)
         DispCnt = (DispCnt & 0x00FFFFFF) | (val << 24);
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
+    }
 
+    if (!Enabled) return;
+
+    switch (addr & 0x00000FFF)
+    {
     case 0x008: BGCnt[0] = (BGCnt[0] & 0xFF00) | val; return;
     case 0x009: BGCnt[0] = (BGCnt[0] & 0x00FF) | (val << 8); return;
     case 0x00A: BGCnt[1] = (BGCnt[1] & 0xFF00) | val; return;
@@ -413,8 +409,6 @@ void GPU2D::Write8(u32 addr, u8 val)
 
 void GPU2D::Write16(u32 addr, u16 val)
 {
-    if (!Enabled) return;
-
     switch (addr & 0x00000FFF)
     {
     case 0x000:
@@ -426,6 +420,22 @@ void GPU2D::Write16(u32 addr, u16 val)
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
 
+    case 0x068:
+        DispFIFO[DispFIFOWritePtr] = val;
+        return;
+    case 0x06A:
+        DispFIFO[DispFIFOWritePtr+1] = val;
+        DispFIFOWritePtr += 2;
+        DispFIFOWritePtr &= 0xF;
+        return;
+
+    case 0x06C: MasterBrightness = val; return;
+    }
+
+    if (!Enabled) return;
+
+    switch (addr & 0x00000FFF)
+    {
     case 0x008: BGCnt[0] = val; return;
     case 0x00A: BGCnt[1] = val; return;
     case 0x00C: BGCnt[2] = val; return;
@@ -534,17 +544,6 @@ void GPU2D::Write16(u32 addr, u16 val)
         EVY = val & 0x1F;
         if (EVY > 16) EVY = 16;
         return;
-
-    case 0x068:
-        DispFIFO[DispFIFOWritePtr] = val;
-        return;
-    case 0x06A:
-        DispFIFO[DispFIFOWritePtr+1] = val;
-        DispFIFOWritePtr += 2;
-        DispFIFOWritePtr &= 0xF;
-        return;
-
-    case 0x06C: MasterBrightness = val; return;
     }
 
     //printf("unknown GPU write16 %08X %04X\n", addr, val);
@@ -552,8 +551,6 @@ void GPU2D::Write16(u32 addr, u16 val)
 
 void GPU2D::Write32(u32 addr, u32 val)
 {
-    if (!Enabled) return;
-
     switch (addr & 0x00000FFF)
     {
     case 0x000:
@@ -561,6 +558,24 @@ void GPU2D::Write32(u32 addr, u32 val)
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
 
+    case 0x064:
+        // TODO: check what happens when writing to it during display
+        // esp. if a capture is happening
+        CaptureCnt = val & 0xEF3F1F1F;
+        return;
+
+    case 0x068:
+        DispFIFO[DispFIFOWritePtr] = val & 0xFFFF;
+        DispFIFO[DispFIFOWritePtr+1] = val >> 16;
+        DispFIFOWritePtr += 2;
+        DispFIFOWritePtr &= 0xF;
+        return;
+    }
+
+    if (!Enabled) return;
+
+    switch (addr & 0x00000FFF)
+    {
     case 0x028:
         if (val & 0x08000000) val |= 0xF0000000;
         BGXRef[0] = val;
@@ -581,19 +596,6 @@ void GPU2D::Write32(u32 addr, u32 val)
         if (val & 0x08000000) val |= 0xF0000000;
         BGYRef[1] = val;
         if (GPU::VCount < 192) BGYRefInternal[1] = BGYRef[1];
-        return;
-
-    case 0x064:
-        // TODO: check what happens when writing to it during display
-        // esp. if a capture is happening
-        CaptureCnt = val & 0xEF3F1F1F;
-        return;
-
-    case 0x068:
-        DispFIFO[DispFIFOWritePtr] = val & 0xFFFF;
-        DispFIFO[DispFIFOWritePtr+1] = val >> 16;
-        DispFIFOWritePtr += 2;
-        DispFIFOWritePtr &= 0xF;
         return;
     }
 
@@ -728,6 +730,8 @@ u32 GPU2D::ColorComposite(int i, u32 val1, u32 val2)
     case 3: return ColorBrightnessDown(val1, EVY);
     case 4: return ColorBlend5(val1, val2);
     }
+
+    return val1;
 }
 
 
@@ -811,7 +815,6 @@ void GPU2D::DrawScanline(u32 line)
             int i = 0;
             for (; i < (stride & ~1); i+=2)
                 *(u64*)&dst[i] = *(u64*)&BGOBJLine[i];
-            if (stride & 1) dst[i] = BGOBJLine[i];
         }
         break;
 

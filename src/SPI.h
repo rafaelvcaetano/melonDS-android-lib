@@ -28,7 +28,9 @@ void SetupDirectBoot();
 
 u8 GetConsoleType();
 u8 GetWifiVersion();
+u8 GetNWifiVersion();
 u8 GetRFVersion();
+u8* GetWifiMAC();
 
 }
 
@@ -37,6 +39,9 @@ namespace SPI_TSC
 
 void SetTouchCoords(u16 x, u16 y);
 void MicInputFrame(s16* data, int samples);
+
+u8 Read();
+void Write(u8 val, u32 hold);
 
 }
 
@@ -50,7 +55,6 @@ void DeInit();
 void Reset();
 void DoSavestate(Savestate* file);
 
-u16 ReadCnt();
 void WriteCnt(u16 val);
 
 u8 ReadData();

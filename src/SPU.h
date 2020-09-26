@@ -69,6 +69,7 @@ public:
     u8 VolumeShift;
     u8 Pan;
 
+    bool KeyOn;
     u32 Timer;
     s32 Pos;
     s16 CurSample;
@@ -105,7 +106,7 @@ public:
 
         if ((val & (1<<31)) && !(oldcnt & (1<<31)))
         {
-            Start();
+            KeyOn = true;
         }
     }
 
@@ -142,6 +143,9 @@ public:
     }
 
     void PanOutput(s32* inbuf, u32 samples, s32* leftbuf, s32* rightbuf);
+
+private:
+    u32 (*BusRead32)(u32 addr);
 };
 
 class CaptureUnit
@@ -196,6 +200,9 @@ public:
     }
 
     void Run(s32 sample);
+
+private:
+    void (*BusWrite32)(u32 addr, u32 val);
 };
 
 }

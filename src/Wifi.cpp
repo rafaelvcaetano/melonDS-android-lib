@@ -188,6 +188,8 @@ void Reset()
         IOPORT(0x000) = 0x1440;
     else if (console == 0x20)
         IOPORT(0x000) = 0xC340;
+    else if (NDS::ConsoleType == 1 && console == 0x57)
+        IOPORT(0x000) = 0xC340; // DSi has the modern DS-wifi variant
     else
     {
         printf("wifi: unknown console type %02X\n", console);
@@ -235,7 +237,7 @@ void DoSavestate(Savestate* file)
 
     file->Var64(&USCounter);
     file->Var64(&USCompare);
-    file->Var32((u32*)&BlockBeaconIRQ14);
+    file->Bool32(&BlockBeaconIRQ14);
 
     file->Var32(&ComStatus);
     file->Var32(&TXCurSlot);
@@ -814,6 +816,9 @@ bool CheckRX(bool block)
     if (!(IOPORT(W_RXCnt) & 0x8000))
         return false;
 
+    if (IOPORT(W_RXBufBegin) == IOPORT(W_RXBufEnd))
+        return false;
+
     u16 framelen;
     u16 framectl;
     u8 txrate;
@@ -1047,7 +1052,7 @@ void USTimer(u32 param)
         if (!(RXTime & RXHalfwordTimeMask))
         {
             u16 addr = IOPORT(W_RXTXAddr) << 1;
-            *(u16*)&RAM[addr] = *(u16*)&RXBuffer[RXBufferPtr];
+            if (addr < 0x1FFF) *(u16*)&RAM[addr] = *(u16*)&RXBuffer[RXBufferPtr];
 
             IncrementRXAddr(addr);
             RXBufferPtr += 2;
@@ -1144,7 +1149,7 @@ void RFTransfer_Type3()
 // TODO: wifi waitstates
 
 u16 Read(u32 addr)
-{
+{//printf("WIFI READ %08X\n", addr);
     if (addr >= 0x04810000)
         return 0;
 
@@ -1234,7 +1239,7 @@ u16 Read(u32 addr)
 }
 
 void Write(u32 addr, u16 val)
-{
+{//printf("WIFI WRITE %08X %04X\n", addr, val);
     if (addr >= 0x04810000)
         return;
 

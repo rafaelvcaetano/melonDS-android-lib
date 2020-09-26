@@ -19,8 +19,13 @@
 #include <stdio.h>
 #include <string.h>
 #include "NDS.h"
+#include "DSi.h"
 #include "ARM.h"
 
+#ifdef JIT_ENABLED
+#include "ARMJIT.h"
+#include "ARMJIT_Memory.h"
+#endif
 
 // access timing for cached regions
 // this would be an average between cache hits and cache misses
@@ -40,8 +45,8 @@ void ARMv5::CP15Reset()
     DTCMSetting = 0;
     ITCMSetting = 0;
 
-    memset(ITCM, 0, 0x8000);
-    memset(DTCM, 0, 0x4000);
+    memset(ITCM, 0, ITCMPhysicalSize);
+    memset(DTCM, 0, DTCMPhysicalSize);
 
     ITCMSize = 0;
     DTCMBase = 0xFFFFFFFF;
@@ -73,8 +78,8 @@ void ARMv5::CP15DoSavestate(Savestate* file)
     file->Var32(&DTCMSetting);
     file->Var32(&ITCMSetting);
 
-    file->VarArray(ITCM, 0x8000);
-    file->VarArray(DTCM, 0x4000);
+    file->VarArray(ITCM, ITCMPhysicalSize);
+    file->VarArray(DTCM, DTCMPhysicalSize);
 
     file->Var32(&PU_CodeCacheable);
     file->Var32(&PU_DataCacheable);
@@ -96,17 +101,27 @@ void ARMv5::CP15DoSavestate(Savestate* file)
 
 void ARMv5::UpdateDTCMSetting()
 {
+    u32 newDTCMBase;
+    u32 newDTCMSize;
     if (CP15Control & (1<<16))
     {
-        DTCMBase = DTCMSetting & 0xFFFFF000;
-        DTCMSize = 0x200 << ((DTCMSetting >> 1) & 0x1F);
-        //printf("DTCM [%08X] enabled at %08X, size %X\n", DTCMSetting, DTCMBase, DTCMSize);
+        newDTCMBase = DTCMSetting & 0xFFFFF000;
+        newDTCMSize = 0x200 << ((DTCMSetting >> 1) & 0x1F);
+        //printf("DTCM [%08X] enabled at %08X, size %X\n", DTCMSetting, newDTCMBase, newDTCMSize);
     }
     else
     {
-        DTCMBase = 0xFFFFFFFF;
-        DTCMSize = 0;
+        newDTCMBase = 0xFFFFFFFF;
+        newDTCMSize = 0;
         //printf("DTCM disabled\n");
+    }
+    if (newDTCMBase != DTCMBase || newDTCMSize != DTCMSize)
+    {
+#ifdef JIT_ENABLED
+        ARMJIT_Memory::RemapDTCM(newDTCMBase, newDTCMSize);
+#endif
+        DTCMBase = newDTCMBase;
+        DTCMSize = newDTCMSize;
     }
 }
 
@@ -561,12 +576,15 @@ void ARMv5::CP15Write(u32 id, u32 val)
 
     case 0x750:
         ICacheInvalidateAll();
+        //Halt(255);
         return;
     case 0x751:
         ICacheInvalidateByAddr(val);
+        //Halt(255);
         return;
     case 0x752:
         printf("CP15: ICACHE INVALIDATE WEIRD. %08X\n", val);
+        //Halt(255);
         return;
 
 
@@ -594,9 +612,33 @@ void ARMv5::CP15Write(u32 id, u32 val)
         ITCMSetting = val;
         UpdateITCMSetting();
         return;
+
+    case 0xF00:
+        //printf("cache debug index register %08X\n", val);
+        return;
+
+    case 0xF10:
+        //printf("cache debug instruction tag %08X\n", val);
+        return;
+
+    case 0xF20:
+        //printf("cache debug data tag %08X\n", val);
+        return;
+
+    case 0xF30:
+        //printf("cache debug instruction cache %08X\n", val);
+        return;
+
+    case 0xF40:
+        //printf("cache debug data cache %08X\n", val);
+        return;
+
     }
 
-    if ((id&0xF00)!=0x700)
+    if ((id & 0xF00) == 0xF00) // test/debug shit?
+        return;
+
+    if ((id & 0xF00) != 0x700)
         printf("unknown CP15 write op %03X %08X\n", id, val);
 }
 
@@ -690,6 +732,9 @@ u32 ARMv5::CP15Read(u32 id)
         return ITCMSetting;
     }
 
+    if ((id & 0xF00) == 0xF00) // test/debug shit?
+        return 0;
+
     printf("unknown CP15 read op %03X\n", id);
     return 0;
 }
@@ -703,7 +748,7 @@ u32 ARMv5::CodeRead32(u32 addr, bool branch)
     if (addr < ITCMSize)
     {
         CodeCycles = 1;
-        return *(u32*)&ITCM[addr & 0x7FFF];
+        return *(u32*)&ITCM[addr & (ITCMPhysicalSize - 1)];
     }
 
     CodeCycles = RegionCodeCycles;
@@ -719,68 +764,74 @@ u32 ARMv5::CodeRead32(u32 addr, bool branch)
 
     if (CodeMem.Mem) return *(u32*)&CodeMem.Mem[addr & CodeMem.Mask];
 
-    return NDS::ARM9Read32(addr);
+    return BusRead32(addr);
 }
 
 
 void ARMv5::DataRead8(u32 addr, u32* val)
 {
+    DataRegion = addr;
+
     if (addr < ITCMSize)
     {
         DataCycles = 1;
-        *val = *(u8*)&ITCM[addr & 0x7FFF];
+        *val = *(u8*)&ITCM[addr & (ITCMPhysicalSize - 1)];
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles = 1;
-        *val = *(u8*)&DTCM[(addr - DTCMBase) & 0x3FFF];
+        *val = *(u8*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)];
         return;
     }
 
-    *val = NDS::ARM9Read8(addr);
+    *val = BusRead8(addr);
     DataCycles = MemTimings[addr >> 12][1];
 }
 
 void ARMv5::DataRead16(u32 addr, u32* val)
 {
+    DataRegion = addr;
+
     addr &= ~1;
 
     if (addr < ITCMSize)
     {
         DataCycles = 1;
-        *val = *(u16*)&ITCM[addr & 0x7FFF];
+        *val = *(u16*)&ITCM[addr & (ITCMPhysicalSize - 1)];
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles = 1;
-        *val = *(u16*)&DTCM[(addr - DTCMBase) & 0x3FFF];
+        *val = *(u16*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)];
         return;
     }
 
-    *val = NDS::ARM9Read16(addr);
+    *val = BusRead16(addr);
     DataCycles = MemTimings[addr >> 12][1];
 }
 
 void ARMv5::DataRead32(u32 addr, u32* val)
 {
+    DataRegion = addr;
+
     addr &= ~3;
 
     if (addr < ITCMSize)
     {
         DataCycles = 1;
-        *val = *(u32*)&ITCM[addr & 0x7FFF];
+        *val = *(u32*)&ITCM[addr & (ITCMPhysicalSize - 1)];
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles = 1;
-        *val = *(u32*)&DTCM[(addr - DTCMBase) & 0x3FFF];
+        *val = *(u32*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)];
         return;
     }
 
-    *val = NDS::ARM9Read32(addr);
+    *val = BusRead32(addr);
     DataCycles = MemTimings[addr >> 12][2];
 }
 
@@ -791,78 +842,93 @@ void ARMv5::DataRead32S(u32 addr, u32* val)
     if (addr < ITCMSize)
     {
         DataCycles += 1;
-        *val = *(u32*)&ITCM[addr & 0x7FFF];
+        *val = *(u32*)&ITCM[addr & (ITCMPhysicalSize - 1)];
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles += 1;
-        *val = *(u32*)&DTCM[(addr - DTCMBase) & 0x3FFF];
+        *val = *(u32*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)];
         return;
     }
 
-    *val = NDS::ARM9Read32(addr);
+    *val = BusRead32(addr);
     DataCycles += MemTimings[addr >> 12][3];
 }
 
 void ARMv5::DataWrite8(u32 addr, u8 val)
 {
+    DataRegion = addr;
+
     if (addr < ITCMSize)
     {
         DataCycles = 1;
-        *(u8*)&ITCM[addr & 0x7FFF] = val;
+        *(u8*)&ITCM[addr & (ITCMPhysicalSize - 1)] = val;
+#ifdef JIT_ENABLED
+        ARMJIT::CheckAndInvalidate<0, ARMJIT_Memory::memregion_ITCM>(addr);
+#endif
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles = 1;
-        *(u8*)&DTCM[(addr - DTCMBase) & 0x3FFF] = val;
+        *(u8*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)] = val;
         return;
     }
 
-    NDS::ARM9Write8(addr, val);
+    BusWrite8(addr, val);
     DataCycles = MemTimings[addr >> 12][1];
 }
 
 void ARMv5::DataWrite16(u32 addr, u16 val)
 {
+    DataRegion = addr;
+
     addr &= ~1;
 
     if (addr < ITCMSize)
     {
         DataCycles = 1;
-        *(u16*)&ITCM[addr & 0x7FFF] = val;
+        *(u16*)&ITCM[addr & (ITCMPhysicalSize - 1)] = val;
+#ifdef JIT_ENABLED
+        ARMJIT::CheckAndInvalidate<0, ARMJIT_Memory::memregion_ITCM>(addr);
+#endif
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles = 1;
-        *(u16*)&DTCM[(addr - DTCMBase) & 0x3FFF] = val;
+        *(u16*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)] = val;
         return;
     }
 
-    NDS::ARM9Write16(addr, val);
+    BusWrite16(addr, val);
     DataCycles = MemTimings[addr >> 12][1];
 }
 
 void ARMv5::DataWrite32(u32 addr, u32 val)
 {
+    DataRegion = addr;
+
     addr &= ~3;
 
     if (addr < ITCMSize)
     {
         DataCycles = 1;
-        *(u32*)&ITCM[addr & 0x7FFF] = val;
+        *(u32*)&ITCM[addr & (ITCMPhysicalSize - 1)] = val;
+#ifdef JIT_ENABLED
+        ARMJIT::CheckAndInvalidate<0, ARMJIT_Memory::memregion_ITCM>(addr);
+#endif
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles = 1;
-        *(u32*)&DTCM[(addr - DTCMBase) & 0x3FFF] = val;
+        *(u32*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)] = val;
         return;
     }
 
-    NDS::ARM9Write32(addr, val);
+    BusWrite32(addr, val);
     DataCycles = MemTimings[addr >> 12][2];
 }
 
@@ -873,17 +939,20 @@ void ARMv5::DataWrite32S(u32 addr, u32 val)
     if (addr < ITCMSize)
     {
         DataCycles += 1;
-        *(u32*)&ITCM[addr & 0x7FFF] = val;
+        *(u32*)&ITCM[addr & (ITCMPhysicalSize - 1)] = val;
+#ifdef JIT_ENABLED
+        ARMJIT::CheckAndInvalidate<0, ARMJIT_Memory::memregion_ITCM>(addr);
+#endif
         return;
     }
     if (addr >= DTCMBase && addr < (DTCMBase + DTCMSize))
     {
         DataCycles += 1;
-        *(u32*)&DTCM[(addr - DTCMBase) & 0x3FFF] = val;
+        *(u32*)&DTCM[(addr - DTCMBase) & (DTCMPhysicalSize - 1)] = val;
         return;
     }
 
-    NDS::ARM9Write32(addr, val);
+    BusWrite32(addr, val);
     DataCycles += MemTimings[addr >> 12][3];
 }
 
@@ -896,6 +965,6 @@ void ARMv5::GetCodeMemRegion(u32 addr, NDS::MemRegion* region)
         return;
     }*/
 
-    NDS::ARM9GetMemRegion(addr, false, &CodeMem);
+    GetMemRegion(addr, false, &CodeMem);
 }
 

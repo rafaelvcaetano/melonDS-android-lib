@@ -157,8 +157,6 @@ u32 NumCommands, CurCommand, ParamCount, TotalParams;
 bool GeometryEnabled;
 bool RenderingEnabled;
 
-int Renderer;
-
 u32 DispCnt;
 u8 AlphaRefVal, AlphaRef;
 
@@ -280,17 +278,11 @@ bool Init()
 
     CmdStallQueue = new FIFO<CmdFIFOEntry>(64);
 
-    Renderer = -1;
-    // SetRenderer() will be called to set it up later
-
     return true;
 }
 
 void DeInit()
 {
-    if (Renderer == 0) SoftRenderer::DeInit();
-    else               GLRenderer::DeInit();
-
     delete CmdFIFO;
     delete CmdPIPE;
 
@@ -391,8 +383,6 @@ void Reset()
     FlushAttributes = 0;
 
     ResetRenderingState();
-    if (Renderer == 0) SoftRenderer::Reset();
-    else               GLRenderer::Reset();
 }
 
 void DoSavestate(Savestate* file)
@@ -411,7 +401,32 @@ void DoSavestate(Savestate* file)
     file->Var32(&NumTestCommands);
 
     file->Var32(&DispCnt);
+    file->Var8(&AlphaRefVal);
     file->Var8(&AlphaRef);
+
+    file->VarArray(ToonTable, 32*2);
+    file->VarArray(EdgeTable, 8*2);
+
+    file->Var32(&FogColor);
+    file->Var32(&FogOffset);
+    file->VarArray(FogDensityTable, 32);
+
+    file->Var32(&ClearAttr1);
+    file->Var32(&ClearAttr2);
+
+    file->Var32(&RenderDispCnt);
+    file->Var8(&RenderAlphaRef);
+
+    file->VarArray(RenderToonTable, 32*2);
+    file->VarArray(RenderEdgeTable, 8*2);
+
+    file->Var32(&RenderFogColor);
+    file->Var32(&RenderFogOffset);
+    file->Var32(&RenderFogShift);
+    file->VarArray(RenderFogDensityTable, 34);
+
+    file->Var32(&RenderClearAttr1);
+    file->Var32(&RenderClearAttr2);
 
     file->Var32(&ZeroDotWLimit);
 
@@ -455,7 +470,7 @@ void DoSavestate(Savestate* file)
         file->VarArray(vtx->Color, sizeof(s32)*3);
         file->VarArray(vtx->TexCoords, sizeof(s16)*2);
 
-        file->Var32((u32*)&vtx->Clipped);
+        file->Bool32(&vtx->Clipped);
 
         file->VarArray(vtx->FinalPosition, sizeof(s32)*2);
         file->VarArray(vtx->FinalColor, sizeof(s32)*3);
@@ -481,9 +496,6 @@ void DoSavestate(Savestate* file)
     file->Var32(&NumPolygons);
     file->Var32(&NumOpaquePolygons);
 
-    file->Var32(&ClearAttr1);
-    file->Var32(&ClearAttr2);
-
     file->Var32(&FlushRequest);
     file->Var32(&FlushAttributes);
 
@@ -495,7 +507,7 @@ void DoSavestate(Savestate* file)
         file->VarArray(vtx->Color, sizeof(s32)*3);
         file->VarArray(vtx->TexCoords, sizeof(s16)*2);
 
-        file->Var32((u32*)&vtx->Clipped);
+        file->Bool32(&vtx->Clipped);
 
         file->VarArray(vtx->FinalPosition, sizeof(s32)*2);
         file->VarArray(vtx->FinalColor, sizeof(s32)*3);
@@ -533,17 +545,17 @@ void DoSavestate(Savestate* file)
 
         file->VarArray(poly->FinalZ, sizeof(s32)*10);
         file->VarArray(poly->FinalW, sizeof(s32)*10);
-        file->Var32((u32*)&poly->WBuffer);
+        file->Bool32(&poly->WBuffer);
 
         file->Var32(&poly->Attr);
         file->Var32(&poly->TexParam);
         file->Var32(&poly->TexPalette);
 
-        file->Var32((u32*)&poly->FacingView);
-        file->Var32((u32*)&poly->Translucent);
+        file->Bool32(&poly->FacingView);
+        file->Bool32(&poly->Translucent);
 
-        file->Var32((u32*)&poly->IsShadowMask);
-        file->Var32((u32*)&poly->IsShadow);
+        file->Bool32(&poly->IsShadowMask);
+        file->Bool32(&poly->IsShadow);
 
         if (file->IsAtleastVersion(4, 1))
             file->Var32((u32*)&poly->Type);
@@ -604,43 +616,6 @@ void SetEnabled(bool geometry, bool rendering)
     RenderingEnabled = rendering;
 
     if (!rendering) ResetRenderingState();
-}
-
-
-int InitRenderer(bool hasGL)
-{
-    int renderer = hasGL ? Config::_3DRenderer : 0;
-
-    if (renderer == 1)
-    {
-        if (!GLRenderer::Init())
-            renderer = 0;
-    }
-
-    if (renderer == 0) SoftRenderer::Init();
-
-    Renderer = renderer;
-    UpdateRendererConfig();
-    GPU::SetDisplaySettings(Renderer != 0);
-    return renderer;
-}
-
-void DeInitRenderer()
-{
-    if (Renderer == 0) SoftRenderer::DeInit();
-    else               GLRenderer::DeInit();
-}
-
-void UpdateRendererConfig()
-{
-    if (Renderer == 0)
-    {
-        SoftRenderer::SetupRenderThread();
-    }
-    else
-    {
-        GLRenderer::UpdateDisplaySettings();
-    }
 }
 
 
@@ -2470,7 +2445,7 @@ void CheckFIFODMA()
 
 void VCount144()
 {
-    if (Renderer == 0) SoftRenderer::VCount144();
+    if (GPU::Renderer == 0) SoftRenderer::VCount144();
 }
 
 
@@ -2552,14 +2527,14 @@ void VBlank()
 
 void VCount215()
 {
-    if (Renderer == 0) SoftRenderer::RenderFrame();
-    else               GLRenderer::RenderFrame();
+    if (GPU::Renderer == 0) SoftRenderer::RenderFrame();
+    else                    GLRenderer::RenderFrame();
 }
 
 u32* GetLine(int line)
 {
-    if (Renderer == 0) return SoftRenderer::GetLine(line);
-    else               return GLRenderer::GetLine(line);
+    if (GPU::Renderer == 0) return SoftRenderer::GetLine(line);
+    else                    return GLRenderer::GetLine(line);
 }
 
 
