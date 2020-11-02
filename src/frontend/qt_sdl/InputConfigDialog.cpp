@@ -179,7 +179,7 @@ void InputConfigDialog::on_InputConfigDialog_accepted()
         Config::HKJoyMapping[hk_addons[i]] = addonsJoyMap[i];
     }
 
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < 7; i++)
     {
         Config::HKKeyMapping[hk_general[i]] = hkGeneralKeyMap[i];
         Config::HKJoyMapping[hk_general[i]] = hkGeneralJoyMap[i];
@@ -228,7 +228,7 @@ void KeyMapButton::keyPressEvent(QKeyEvent* event)
 {
     if (!isChecked()) return QPushButton::keyPressEvent(event);
 
-    printf("KEY PRESSED = %08X %08X | %08X %08X %08X\n", event->key(), event->modifiers(), event->nativeVirtualKey(), event->nativeModifiers(), event->nativeScanCode());
+    printf("KEY PRESSED = %08X %08X | %08X %08X %08X\n", event->key(), (int)event->modifiers(), event->nativeVirtualKey(), event->nativeModifiers(), event->nativeScanCode());
 
     int key = event->key();
     int mod = event->modifiers();

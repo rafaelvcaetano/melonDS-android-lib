@@ -1,5 +1,5 @@
-#ifndef ARMJIT_COMPILER_H
-#define ARMJIT_COMPILER_H
+#ifndef ARMJIT_A64_COMPILER_H
+#define ARMJIT_A64_COMPILER_H
 
 #include "../ARM.h"
 #include "../ARMJIT.h"
@@ -187,6 +187,7 @@ public:
     void Comp_RegShiftReg(int op, bool S, Op2& op2, Arm64Gen::ARM64Reg rs);
 
     bool Comp_MemLoadLiteral(int size, bool signExtend, int rd, u32 addr);
+
     enum
     {
         memop_Writeback = 1 << 0,
