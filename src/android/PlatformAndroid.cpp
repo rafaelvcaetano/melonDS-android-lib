@@ -54,18 +54,20 @@ namespace Platform
         int val;
         pthread_mutex_t mutex;
         pthread_cond_t cond;
-    } Semaphore;
+    } AndroidSemaphore;
 
     typedef struct
     {
         pthread_t ID;
         void (*Func)();
 
-    } ThreadData;
+    } AndroidThread;
+
+    typedef pthread_mutex_t AndroidMutex;
 
     void* ThreadEntry(void* data)
     {
-        ThreadData* thread = (ThreadData*)data;
+        AndroidThread* thread = (AndroidThread*)data;
         thread->Func();
         return NULL;
     }
@@ -127,67 +129,54 @@ namespace Platform
         return android_fopen(MelonDSAndroid::assetManager, path, "rb");
     }
 
-    void* Thread_Create(void (*func)())
+    Thread* Thread_Create(void (*func)())
     {
-        ThreadData* data = new ThreadData;
+        AndroidThread* data = new AndroidThread;
         data->Func = func;
-        pthread_create(&data->ID, 0, ThreadEntry, data);
-        return data;
+        pthread_create(&data->ID, nullptr, ThreadEntry, data);
+        return (Thread*) data;
     }
 
-    void Thread_Free(void* thread)
+    void Thread_Free(Thread* thread)
     {
-        delete (ThreadData*)thread;
+        delete (AndroidThread*)thread;
     }
 
-    void Thread_Wait(void* thread)
+    void Thread_Wait(Thread* thread)
     {
-        pthread_t pthread = ((ThreadData*) thread)->ID;
+        pthread_t pthread = ((AndroidThread*) thread)->ID;
         pthread_join(pthread, NULL);
     }
 
-    void* Semaphore_Create()
+    Semaphore* Semaphore_Create()
     {
-        Semaphore* semaphore = (Semaphore*) malloc(sizeof(Semaphore));
+        AndroidSemaphore* semaphore = (AndroidSemaphore*) malloc(sizeof(AndroidSemaphore));
         pthread_mutex_init(&semaphore->mutex, NULL);
         pthread_cond_init(&semaphore->cond, NULL);
         semaphore->val = 0;
-        return semaphore;
+        return (Semaphore*) semaphore;
     }
 
-    void Semaphore_Free(void* sema)
+    void Semaphore_Free(Semaphore* sema)
     {
-        Semaphore* semaphore = (Semaphore*) sema;
+        AndroidSemaphore* semaphore = (AndroidSemaphore*) sema;
         pthread_mutex_destroy(&semaphore->mutex);
         pthread_cond_destroy(&semaphore->cond);
         free(semaphore);
     }
 
-    int Semaphore_TryWait(void* sema)
+    void Semaphore_Reset(Semaphore* sema)
     {
-        // TODO: is this properly implemented? everything seems to work OK so far
-
-        Semaphore* semaphore = (Semaphore*) sema;
+        AndroidSemaphore* semaphore = (AndroidSemaphore*) sema;
         pthread_mutex_lock(&semaphore->mutex);
-        if (semaphore->val == 0) {
-            pthread_mutex_unlock(&semaphore->mutex);
-            return -1;
-        }
-
-        pthread_cond_wait(&semaphore->cond, &semaphore->mutex);
-        semaphore->val--;
+        semaphore->val = 0;
+        pthread_cond_broadcast(&semaphore->cond);
         pthread_mutex_unlock(&semaphore->mutex);
-        return 0;
     }
 
-    void Semaphore_Reset(void* sema)
+    void Semaphore_Wait(Semaphore* sema)
     {
-        while (Semaphore_TryWait(sema) == 0);
-    }
-
-    void Semaphore_Wait(void* sema)
-    {
-        Semaphore* semaphore = (Semaphore*) sema;
+        AndroidSemaphore* semaphore = (AndroidSemaphore*) sema;
         pthread_mutex_lock(&semaphore->mutex);
         while (semaphore->val == 0)
             pthread_cond_wait(&semaphore->cond, &semaphore->mutex);
@@ -196,13 +185,36 @@ namespace Platform
         pthread_mutex_unlock(&semaphore->mutex);
     }
 
-    void Semaphore_Post(void* sema)
+    void Semaphore_Post(Semaphore* sema, int count)
     {
-        Semaphore* semaphore = (Semaphore*) sema;
+        AndroidSemaphore* semaphore = (AndroidSemaphore*) sema;
         pthread_mutex_lock(&semaphore->mutex);
-        semaphore->val++;
+        semaphore->val += count;
         pthread_cond_broadcast(&semaphore->cond);
         pthread_mutex_unlock(&semaphore->mutex);
+    }
+
+    Mutex* Mutex_Create() {
+        AndroidMutex* mutex = (AndroidMutex*) malloc(sizeof(AndroidMutex));
+        pthread_mutex_init(mutex, nullptr);
+        return (Mutex*) mutex;
+    }
+
+    void Mutex_Free(Mutex* mutex) {
+        pthread_mutex_destroy((AndroidMutex*) mutex);
+        free((AndroidMutex*) mutex);
+    }
+
+    void Mutex_Lock(Mutex* mutex) {
+        pthread_mutex_lock((AndroidMutex*) mutex);
+    }
+
+    void Mutex_Unlock(Mutex* mutex) {
+        pthread_mutex_unlock((AndroidMutex*) mutex);
+    }
+
+    bool Mutex_TryLock(Mutex* mutex) {
+        return pthread_mutex_trylock((AndroidMutex*) mutex) == 0;
     }
 
     void* GL_GetProcAddress(const char* proc)

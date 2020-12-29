@@ -47,7 +47,7 @@ namespace MelonDSAndroid
         Config::JIT_Enable = 1;
 
         GPU::RenderSettings renderSettings = {
-                false,
+                true,
                 1,
                 false
         };
@@ -169,12 +169,4 @@ namespace MelonDSAndroid
 
 void Stop(bool internal)
 {
-}
-
-bool LocalFileExists(const char* name)
-{
-    FILE* f = Platform::OpenFile(name, "rb");
-    if (!f) return false;
-    fclose(f);
-    return true;
 }

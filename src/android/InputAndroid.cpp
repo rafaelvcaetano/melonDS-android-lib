@@ -33,7 +33,7 @@ namespace MelonDSAndroid
             NDS::SetLidClosed(false);
         else {
             keyMask |= (1 << key);
-            NDS::SetKeyMask(key);
+            NDS::SetKeyMask(keyMask);
         }
     }
 }
