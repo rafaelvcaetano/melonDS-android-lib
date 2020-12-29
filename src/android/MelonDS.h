@@ -2,13 +2,20 @@
 #define MELONDS_MELONDS_H
 
 #include "../types.h"
+#include "../GPU.h"
 #include <android/asset_manager.h>
 
 namespace MelonDSAndroid {
+    typedef struct {
+        char* configDir;
+        bool useJit;
+        GPU::RenderSettings renderSettings;
+    } EmulatorConfiguration;
+
     extern char* configDir;
     extern AAssetManager* assetManager;
 
-    extern void setup(char* configDirPath, AAssetManager* androidAssetManager);
+    extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager);
 
     /**
      * Loadas the NDS ROM and, optionally, the GBA ROM.

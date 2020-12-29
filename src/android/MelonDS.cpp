@@ -18,9 +18,9 @@ namespace MelonDSAndroid
     char* configDir;
     AAssetManager* assetManager;
 
-    void setup(char* configDirPath, AAssetManager* androidAssetManager)
+    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager)
     {
-        configDir = configDirPath;
+        configDir = emulatorConfiguration.configDir;
         assetManager = androidAssetManager;
 
         frameBuffer = new u32[256 * 384 * 4];
@@ -44,18 +44,12 @@ namespace MelonDSAndroid
         strcpy(Config::BIOS7Path, "bios7.bin");
         strcpy(Config::BIOS9Path, "bios9.bin");
         strcpy(Config::FirmwarePath, "firmware.bin");
-        Config::JIT_Enable = 1;
-
-        GPU::RenderSettings renderSettings = {
-                true,
-                1,
-                false
-        };
+        Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
 
         NDS::SetConsoleType(0);
         NDS::Init();
         GPU::InitRenderer(0);
-        GPU::SetRenderSettings(0, renderSettings);
+        GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
     }
 
     int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
