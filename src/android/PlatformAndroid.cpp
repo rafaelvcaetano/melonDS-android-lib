@@ -21,7 +21,7 @@
 #include <string.h>
 #include <semaphore.h>
 #include <pthread.h>
-#include "../pcap/pcap.h"
+#include "pcap/pcap.h"
 #include "../Platform.h"
 #include "MelonDS.h"
 #include "PlatformConfig.h"
@@ -99,6 +99,8 @@ namespace Platform
             FILE* file = fopen(path, "rb");
             if (file)
                 return freopen(path, mode, file);
+            else
+                return nullptr;
         }
         else
             return fopen(path, mode);

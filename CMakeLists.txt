@@ -38,7 +38,7 @@ detect_architecture("__arm__" ARM)
 detect_architecture("__aarch64__" ARM64)
 
 if (ARCHITECTURE STREQUAL x86_64 OR ARCHITECTURE STREQUAL ARM64)
-	option(ENABLE_JIT "Enable x64 JIT recompiler" ON)
+	option(ENABLE_JIT "Enable x64 JIT recompiler" OFF)
 endif()
 
 if (ENABLE_JIT)
@@ -53,7 +53,7 @@ else()
 	#option(ENABLE_LTO "Enable link-time optimization" OFF)
 endif()
 
-option(ENABLE_OGLRENDERER "Enable OpenGL renderer" ON)
+option(ENABLE_OGLRENDERER "Enable OpenGL renderer" OFF)
 
 if (ENABLE_OGLRENDERER)
     add_definitions(-DOGLRENDERER_ENABLED)
@@ -103,7 +103,3 @@ else()
 		add_subdirectory(src/libui_sdl)
 	endif()
 endif()
-
-#configure_file(
-#	${CMAKE_SOURCE_DIR}/romlist.bin
-#	${CMAKE_BINARY_DIR}/romlist.bin COPYONLY)

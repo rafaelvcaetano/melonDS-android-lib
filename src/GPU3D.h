@@ -21,6 +21,7 @@
 
 #include <array>
 #include "Savestate.h"
+#include "GPU.h"
 
 namespace GPU3D
 {

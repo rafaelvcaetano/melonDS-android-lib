@@ -10,6 +10,12 @@
 #include <signal.h>
 #endif
 
+#if defined(__ANDROID__)
+#include <dlfcn.h>
+#include <linux/ashmem.h>
+#include <sys/ioctl.h>
+#endif
+
 #include "ARMJIT_Memory.h"
 
 #include "ARMJIT_Internal.h"
@@ -54,6 +60,10 @@ struct FaultDescription
 
 bool FaultHandler(FaultDescription* faultDesc, s32& offset);
 }
+
+#if defined(__ANDROID__)
+#define ASHMEM_DEVICE "/dev/ashmem"
+#endif
 
 #if defined(__SWITCH__)
 // with LTO the symbols seem to be not properly overriden
@@ -629,8 +639,27 @@ void Init()
 
     MemoryBase = (u8*)mmap(NULL, MemoryTotalSize, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
 
+#if defined(__ANDROID__)
+    static void* libandroid = dlopen("libandroid.so", RTLD_LAZY | RTLD_LOCAL);
+    using type_ASharedMemory_create = int(*)(const char* name, size_t size);
+    static void* symbol = dlsym(libandroid, "ASharedMemory_create");
+    static auto shared_memory_create = reinterpret_cast<type_ASharedMemory_create>(symbol);
+
+    if (shared_memory_create)
+    {
+        MemoryFile = shared_memory_create("melondsfastmem", MemoryTotalSize);
+    }
+    else
+    {
+        int fd = open(ASHMEM_DEVICE, O_RDWR);
+        ioctl(fd, ASHMEM_SET_NAME, "melondsfastmem");
+        ioctl(fd, ASHMEM_SET_SIZE, MemoryTotalSize);
+        MemoryFile = fd;
+    }
+#else
     MemoryFile = memfd_create("melondsfastmem", 0);
     ftruncate(MemoryFile, MemoryTotalSize);
+#endif
 
     NewSa.sa_flags = SA_SIGINFO;
     sigemptyset(&NewSa.sa_mask);

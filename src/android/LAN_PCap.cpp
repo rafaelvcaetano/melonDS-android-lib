@@ -21,7 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../pcap/pcap.h"
+#include "pcap/pcap.h"
 #include "../Wifi.h"
 #include "LAN_PCap.h"
 #include "PlatformConfig.h"

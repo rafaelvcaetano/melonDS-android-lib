@@ -47,7 +47,7 @@ add_library(core STATIC
 	xxhash/xxhash.c
 )
 
-if (ENABLE_OGLRENDERER)
+#[[if (ENABLE_OGLRENDERER)
 	target_sources(core PRIVATE
 		GPU_OpenGL.cpp
 		GPU_OpenGL_shaders.h
@@ -55,7 +55,7 @@ if (ENABLE_OGLRENDERER)
 		GPU3D_OpenGL_shaders.h
 		OpenGLSupport.cpp
 	)
-endif()
+endif()]]
 
 if (ENABLE_JIT)
 	enable_language(ASM)

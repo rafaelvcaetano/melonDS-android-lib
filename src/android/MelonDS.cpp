@@ -5,6 +5,7 @@
 #include "../GPU3D.h"
 #include "../SPU.h"
 #include "../Platform.h"
+#include "../Config.h"
 #include "OboeCallback.h"
 #include <android/asset_manager.h>
 #include <cstring>
@@ -40,8 +41,21 @@ namespace MelonDSAndroid
             fprintf(stderr, "Failed to init audio stream");
         }
 
+        strcpy(Config::BIOS7Path, "bios7.bin");
+        strcpy(Config::BIOS9Path, "bios9.bin");
+        strcpy(Config::FirmwarePath, "firmware.bin");
+        Config::JIT_Enable = 1;
+
+        GPU::RenderSettings renderSettings = {
+                false,
+                1,
+                false
+        };
+
+        NDS::SetConsoleType(0);
         NDS::Init();
-        GPU3D::InitRenderer(false);
+        GPU::InitRenderer(0);
+        GPU::SetRenderSettings(0, renderSettings);
     }
 
     int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
