@@ -1,21 +1,30 @@
 cmake_minimum_required(VERSION 2.8.11)
 
+include(CheckSymbolExists)
+include(CheckLibraryExists)
+
 #[[cmake_policy(VERSION 2.8.11)
 if (POLICY CMP0076)
     cmake_policy(SET CMP0076 NEW)
 endif()]]
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.9" CACHE STRING "Minimum OS X deployment version")
+
+project(melonDS CXX)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-set(PROJECT_WX melonDS)
-project(${PROJECT_WX})
-
-if (NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
+check_library_exists(m pow "" LIBM)
+if(LIBM)
+    link_libraries(m)
 endif()
 
-include(CheckSymbolExists)
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
 function(detect_architecture symbol arch)
     if (NOT DEFINED ARCHITECTURE)
         set(CMAKE_REQUIRED_QUIET 1)
@@ -38,7 +47,7 @@ detect_architecture("__arm__" ARM)
 detect_architecture("__aarch64__" ARM64)
 
 if (ARCHITECTURE STREQUAL x86_64 OR ARCHITECTURE STREQUAL ARM64)
-	option(ENABLE_JIT "Enable x64 JIT recompiler" OFF)
+	option(ENABLE_JIT "Enable x64 JIT recompiler" ON)
 endif()
 
 if (ENABLE_JIT)
@@ -64,35 +73,38 @@ if (CMAKE_BUILD_TYPE STREQUAL Debug)
 	#add_compile_options(-Og)
 endif()
 
-#[[if(ENABLE_LTO)
-	add_compile_options(-O3 -flto)
-	set(CMAKE_CXX_STANDARD_LIBRARIES "-flto {CMAKE_CXX_STANDARD_LIBRARIES}")
-	#add_link_options(-flto)
+if (CMAKE_BUILD_TYPE STREQUAL Release)
+	add_compile_options(-O3)
+	add_link_options(-s)
+endif()
 
-	if (${CMAKE_CXX_COMPILER_ID} STREQUAL Clang)
-		find_program(LLD ld.lld)
-		if (LLD)
-			set(CMAKE_CXX_STANDARD_LIBRARIES "-fuse-ld=lld {CMAKE_CXX_STANDARD_LIBRARIES}")
-			#add_link_options(-fuse-ld=lld)
-		else()
-			set(CMAKE_CXX_STANDARD_LIBRARIES "-fuse-linker-plugin {CMAKE_CXX_STANDARD_LIBRARIES}")
-			#add_link_options(-fuse-linker-plugin)
-		endif()
-		#set(CMAKE_AR "llvm-ar")
+if (WIN32)
+	option(BUILD_STATIC "Statically link dependencies" OFF)
+endif()
+
+#[[if (ENABLE_LTO)
+	if (WIN32)
+		add_compile_options(-flto)
+		add_link_options(-flto)
 	else()
-		set(CMAKE_AR "gcc-ar")
+		add_compile_options(-flto -fPIC)
+		add_link_options(-flto -fuse-linker-plugin -pie)
 	endif()
-	#set(CMAKE_C_ARCHIVE_CREATE "<CMAKE_AR> qcs <TARGET> <LINK_FLAGS> <OBJECTS>")
-	#set(CMAKE_C_ARCHIVE_FINISH   true)
-	#set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> qcs <TARGET> <LINK_FLAGS> <OBJECTS>")
-	#set(CMAKE_CXX_ARCHIVE_FINISH   true)
-endif()]]
+endif()
 
-#add_compile_options(-fno-pic)
-#set(CMAKE_CXX_STANDARD_LIBRARIES "-no-pie {CMAKE_CXX_STANDARD_LIBRARIES}")
-#add_link_options(-no-pie)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+	set(CMAKE_AR "gcc-ar")
+	set(CMAKE_RANLIB "gcc-ranlib")
+elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+	find_program(LLD NAMES ld.lld ld64.lld lld-link)
+	if (NOT LLD STREQUAL "LLD-NOTFOUND")
+		add_link_options(-fuse-ld=lld)
+	endif()
+	set(CMAKE_AR "llvm-ar")
+	set(CMAKE_RANLIB "llvm-ranlib")
+endif()
 
-#option(BUILD_LIBUI "Build libui frontend" ON)
+option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)]]
 
 add_subdirectory(src)
 

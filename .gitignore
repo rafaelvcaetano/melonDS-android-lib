@@ -12,3 +12,5 @@ cmake-build-debug
 .idea
 
 *.exe
+
+.DS_Store
