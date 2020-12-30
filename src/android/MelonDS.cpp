@@ -52,6 +52,11 @@ namespace MelonDSAndroid
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
     }
 
+    void updateRendererConfiguration(GPU::RenderSettings renderSettings)
+    {
+        GPU::SetRenderSettings(0, renderSettings);
+    }
+
     int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
     {
         bool loaded = NDS::LoadROM(romPath, sramPath, loadDirect);
