@@ -44,7 +44,9 @@ namespace MelonDSAndroid
         strcpy(Config::BIOS7Path, "bios7.bin");
         strcpy(Config::BIOS9Path, "bios9.bin");
         strcpy(Config::FirmwarePath, "firmware.bin");
+#ifdef JIT_ENABLED
         Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
+#endif
 
         NDS::SetConsoleType(0);
         NDS::Init();
