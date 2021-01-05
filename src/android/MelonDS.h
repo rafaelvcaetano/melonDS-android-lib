@@ -7,8 +7,10 @@
 
 namespace MelonDSAndroid {
     typedef struct {
-        char* configDir;
+        char* dsConfigDir;
+        char* dsiConfigDir;
         bool useJit;
+        int consoleType;
         GPU::RenderSettings renderSettings;
     } EmulatorConfiguration;
 

@@ -1,12 +1,14 @@
 #include <oboe/Oboe.h>
 #include "MelonDS.h"
+#include "FileUtils.h"
+#include "OboeCallback.h"
 #include "../NDS.h"
 #include "../GPU.h"
 #include "../GPU3D.h"
+#include "../GBACart.h"
 #include "../SPU.h"
 #include "../Platform.h"
 #include "../Config.h"
-#include "OboeCallback.h"
 #include <android/asset_manager.h>
 #include <cstring>
 
@@ -20,7 +22,6 @@ namespace MelonDSAndroid
 
     void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager)
     {
-        configDir = emulatorConfiguration.configDir;
         assetManager = androidAssetManager;
 
         frameBuffer = new u32[256 * 384 * 4];
@@ -41,14 +42,31 @@ namespace MelonDSAndroid
             fprintf(stderr, "Failed to init audio stream");
         }
 
-        strcpy(Config::BIOS7Path, "bios7.bin");
-        strcpy(Config::BIOS9Path, "bios9.bin");
-        strcpy(Config::FirmwarePath, "firmware.bin");
+        // DS BIOS files are always required
+        char* dsBios7 = joinPaths(emulatorConfiguration.dsConfigDir, "bios7.bin");
+        char* dsBios9 = joinPaths(emulatorConfiguration.dsConfigDir, "bios9.bin");
+        strcpy(Config::BIOS7Path, dsBios7);
+        strcpy(Config::BIOS9Path, dsBios9);
+        delete[] dsBios7;
+        delete[] dsBios9;
+
+        if (emulatorConfiguration.consoleType == 0) {
+            configDir = emulatorConfiguration.dsConfigDir;
+            strcpy(Config::FirmwarePath, "firmware.bin");
+            NDS::SetConsoleType(0);
+        } else {
+            configDir = emulatorConfiguration.dsiConfigDir;
+            strcpy(Config::DSiBIOS7Path, "bios7.bin");
+            strcpy(Config::DSiBIOS9Path, "bios9.bin");
+            strcpy(Config::DSiFirmwarePath, "firmware.bin");
+            strcpy(Config::DSiNANDPath, "nand.bin");
+            NDS::SetConsoleType(1);
+        }
+
 #ifdef JIT_ENABLED
         Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
 #endif
 
-        NDS::SetConsoleType(0);
         NDS::Init();
         GPU::InitRenderer(0);
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
@@ -65,7 +83,8 @@ namespace MelonDSAndroid
         if (!loaded)
             return 2;
 
-        if (loadGbaRom)
+        // Slot 2 is not supported in DSi
+        if (loadGbaRom && NDS::ConsoleType == 0)
         {
             if (!NDS::LoadGBAROM(gbaRom, gbaSram))
                 return 1;
@@ -126,11 +145,7 @@ namespace MelonDSAndroid
     bool loadState(const char* path)
     {
         bool success = true;
-
-        unsigned int pathLength = strlen(configDir) + strlen("backup.mln") + 1;
-        char* backupPath = new char[pathLength];
-        strcpy(backupPath, configDir);
-        strcat(backupPath, "backup.mln");
+        char* backupPath = joinPaths(configDir, "backup.mln");
 
         Savestate* backup = new Savestate(backupPath, true);
         NDS::DoSavestate(backup);
@@ -158,10 +173,13 @@ namespace MelonDSAndroid
 
     void cleanup()
     {
+        GBACart::Eject();
         NDS::DeInit();
         audioStream->requestStop();
         audioStream->close();
+        free(audioStream);
         audioStream = NULL;
+        assetManager = NULL;
 
         free(frameBuffer);
         frameBuffer = NULL;

@@ -9,6 +9,7 @@ set(ANDROID_SOURCES
         OpenGLRenderer.cpp
         PlatformAndroid.cpp
         PlatformConfig.cpp
+        FileUtils.cpp
         ifaddrs.c
         android_fopen.c
 )

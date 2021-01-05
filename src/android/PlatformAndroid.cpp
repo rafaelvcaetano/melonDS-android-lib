@@ -28,6 +28,7 @@
 #include "android_fopen.h"
 #include "LAN_Socket.h"
 #include "LAN_PCap.h"
+#include "FileUtils.h"
 
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -110,14 +111,15 @@ namespace Platform
 
     FILE* OpenLocalFile(const char* path, const char* mode)
     {
-        const char* configDir = MelonDSAndroid::configDir;
+        if (path == nullptr)
+            return nullptr;
 
-        size_t configDirLength = strlen(configDir);
-        size_t configFileLength = configDirLength + strlen(path);
-        char* configFile = new char[configFileLength + 1];
-        strcpy(configFile, configDir);
-        strcpy(&configFile[configDirLength], path);
-        configFile[configFileLength] = '\0';
+        // If the path is absolute, open it as absolute
+        if (path[0] == '/')
+            return OpenFile(path, mode, mode[0] == 'r');
+
+        const char* configDir = MelonDSAndroid::configDir;
+        char* configFile = MelonDSAndroid::joinPaths(configDir, path);
 
         FILE* file = OpenFile(configFile, mode, false);
         delete[] configFile;
