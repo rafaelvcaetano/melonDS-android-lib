@@ -22,11 +22,14 @@ oboe::AudioStream *micInputStream;
 OboeCallback *outputCallback;
 MicInputOboeCallback *micInputCallback;
 
+
 namespace MelonDSAndroid
 {
     char* configDir;
     int micInputType;
     AAssetManager* assetManager;
+
+    void setupMicInputStream();
 
     void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager)
     {
@@ -62,13 +65,13 @@ namespace MelonDSAndroid
             micStreamBuilder.setFormat(oboe::AudioFormat::I16);
             micStreamBuilder.setDirection(oboe::Direction::Input);
             micStreamBuilder.setInputPreset(oboe::InputPreset::Generic);
-            micStreamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+            micStreamBuilder.setPerformanceMode(oboe::PerformanceMode::PowerSaving);
             micStreamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
             micStreamBuilder.setCallback(micInputCallback);
 
             oboe::Result micResult = micStreamBuilder.openStream(&micInputStream);
             if (micResult != oboe::Result::OK) {
-                micInputType = 2;
+                micInputType = 1;
                 fprintf(stderr, "Failed to init mic audio stream");
             } else {
                 Frontend::Mic_SetExternalBuffer(micInputCallback->buffer, MIC_BUFFER_SIZE);
@@ -105,9 +108,26 @@ namespace MelonDSAndroid
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
     }
 
-    void updateRendererConfiguration(GPU::RenderSettings renderSettings)
-    {
-        GPU::SetRenderSettings(0, renderSettings);
+    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
+        int oldMicSource = micInputType;
+
+        GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
+        micInputType = emulatorConfiguration.micSource;
+
+        if (oldMicSource == 2 && micInputType != 2) {
+            // No longer using device mic. Destroy stream
+            if (micInputStream != NULL) {
+                micInputStream->requestStop();
+                micInputStream->close();
+                delete micInputStream;
+                delete micInputCallback;
+                micInputStream = NULL;
+                micInputCallback = NULL;
+            }
+        } else if (oldMicSource != 2 && micInputType == 2) {
+            // Now using device mic. Setup stream
+            setupMicInputStream();
+        }
     }
 
     int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
@@ -246,6 +266,7 @@ namespace MelonDSAndroid
             delete micInputCallback;
             micInputStream = NULL;
             micInputCallback = NULL;
+            Frontend::Mic_SetExternalBuffer(NULL, 0);
         }
 
         assetManager = NULL;
@@ -253,4 +274,28 @@ namespace MelonDSAndroid
         free(frameBuffer);
         frameBuffer = NULL;
     }
+
+    void setupMicInputStream()
+    {
+        micInputCallback = new MicInputOboeCallback(MIC_BUFFER_SIZE);
+        oboe::AudioStreamBuilder micStreamBuilder;
+        micStreamBuilder.setChannelCount(1);
+        micStreamBuilder.setFramesPerCallback(1024);
+        micStreamBuilder.setSampleRate(44100);
+        micStreamBuilder.setFormat(oboe::AudioFormat::I16);
+        micStreamBuilder.setDirection(oboe::Direction::Input);
+        micStreamBuilder.setInputPreset(oboe::InputPreset::Generic);
+        micStreamBuilder.setPerformanceMode(oboe::PerformanceMode::PowerSaving);
+        micStreamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
+        micStreamBuilder.setCallback(micInputCallback);
+
+        oboe::Result micResult = micStreamBuilder.openStream(&micInputStream);
+        if (micResult != oboe::Result::OK) {
+            micInputType = 1;
+            fprintf(stderr, "Failed to init mic audio stream");
+        } else {
+            Frontend::Mic_SetExternalBuffer(micInputCallback->buffer, MIC_BUFFER_SIZE);
+        }
+    }
 }
+

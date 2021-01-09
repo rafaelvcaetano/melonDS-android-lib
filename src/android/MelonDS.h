@@ -19,10 +19,10 @@ namespace MelonDSAndroid {
     extern AAssetManager* assetManager;
 
     extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager);
-    extern void updateRendererConfiguration(GPU::RenderSettings renderSettings);
+    extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 
     /**
-     * Loadas the NDS ROM and, optionally, the GBA ROM.
+     * Loads the NDS ROM and, optionally, the GBA ROM.
      *
      * @param romPath The path to the NDS rom
      * @param sramPath The path to the rom's SRAM file
