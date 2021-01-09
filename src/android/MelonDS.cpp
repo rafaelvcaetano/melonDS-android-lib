@@ -39,6 +39,7 @@ namespace MelonDSAndroid
         oboe::AudioStreamBuilder streamBuilder;
         streamBuilder.setChannelCount(2);
         streamBuilder.setFramesPerCallback(1024);
+        streamBuilder.setSampleRate(48000);
         streamBuilder.setFormat(oboe::AudioFormat::I16);
         streamBuilder.setDirection(oboe::Direction::Output);
         streamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
@@ -46,9 +47,10 @@ namespace MelonDSAndroid
         streamBuilder.setCallback(outputCallback);
 
         oboe::Result result = streamBuilder.openStream(&audioStream);
-        if (result != oboe::Result::OK)
-        {
+        if (result != oboe::Result::OK) {
             fprintf(stderr, "Failed to init audio stream");
+        } else {
+            Frontend::Init_Audio(audioStream->getSampleRate());
         }
 
         if (micInputType == 2) {
