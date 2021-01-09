@@ -11,6 +11,7 @@ namespace MelonDSAndroid {
         char* dsiConfigDir;
         bool useJit;
         int consoleType;
+        int micSource;
         GPU::RenderSettings renderSettings;
     } EmulatorConfiguration;
 
@@ -38,6 +39,7 @@ namespace MelonDSAndroid {
     extern void pause();
     extern void resume();
     extern void copyFrameBuffer(void* dstBuffer);
+    extern void updateMic();
     extern bool saveState(const char* path);
     extern bool loadState(const char* path);
     extern void cleanup();

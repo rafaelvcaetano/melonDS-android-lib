@@ -46,8 +46,6 @@
 
 extern char* EmuDirectory;
 
-void Stop(bool internal);
-
 namespace Platform
 {
     typedef struct

@@ -2,6 +2,7 @@
 #include "MelonDS.h"
 #include "FileUtils.h"
 #include "OboeCallback.h"
+#include "MicInputOboeCallback.h"
 #include "../NDS.h"
 #include "../GPU.h"
 #include "../GPU3D.h"
@@ -9,15 +10,22 @@
 #include "../SPU.h"
 #include "../Platform.h"
 #include "../Config.h"
+#include "FrontendUtil.h"
 #include <android/asset_manager.h>
 #include <cstring>
 
+#define MIC_BUFFER_SIZE 2048
+
 u32* frameBuffer;
 oboe::AudioStream *audioStream;
+oboe::AudioStream *micInputStream;
+OboeCallback *outputCallback;
+MicInputOboeCallback *micInputCallback;
 
 namespace MelonDSAndroid
 {
     char* configDir;
+    int micInputType;
     AAssetManager* assetManager;
 
     void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager)
@@ -25,8 +33,9 @@ namespace MelonDSAndroid
         assetManager = androidAssetManager;
 
         frameBuffer = new u32[256 * 384 * 4];
+        micInputType = emulatorConfiguration.micSource;
 
-        // TODO: Gotta find the correct sound setup
+        outputCallback = new OboeCallback();
         oboe::AudioStreamBuilder streamBuilder;
         streamBuilder.setChannelCount(2);
         streamBuilder.setFramesPerCallback(1024);
@@ -34,12 +43,34 @@ namespace MelonDSAndroid
         streamBuilder.setDirection(oboe::Direction::Output);
         streamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         streamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
-        streamBuilder.setCallback(new OboeCallback());
+        streamBuilder.setCallback(outputCallback);
 
         oboe::Result result = streamBuilder.openStream(&audioStream);
         if (result != oboe::Result::OK)
         {
             fprintf(stderr, "Failed to init audio stream");
+        }
+
+        if (micInputType == 2) {
+            micInputCallback = new MicInputOboeCallback(MIC_BUFFER_SIZE);
+            oboe::AudioStreamBuilder micStreamBuilder;
+            micStreamBuilder.setChannelCount(1);
+            micStreamBuilder.setFramesPerCallback(1024);
+            micStreamBuilder.setSampleRate(44100);
+            micStreamBuilder.setFormat(oboe::AudioFormat::I16);
+            micStreamBuilder.setDirection(oboe::Direction::Input);
+            micStreamBuilder.setInputPreset(oboe::InputPreset::Generic);
+            micStreamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+            micStreamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
+            micStreamBuilder.setCallback(micInputCallback);
+
+            oboe::Result micResult = micStreamBuilder.openStream(&micInputStream);
+            if (micResult != oboe::Result::OK) {
+                micInputType = 2;
+                fprintf(stderr, "Failed to init mic audio stream");
+            } else {
+                Frontend::Mic_SetExternalBuffer(micInputCallback->buffer, MIC_BUFFER_SIZE);
+            }
         }
 
         // DS BIOS files are always required
@@ -96,6 +127,9 @@ namespace MelonDSAndroid
     void start()
     {
         audioStream->requestStart();
+        if (micInputStream != NULL)
+            micInputStream->requestStart();
+
         memset(frameBuffer, 0, 256 * 384 * 4);
     }
 
@@ -115,15 +149,35 @@ namespace MelonDSAndroid
 
     void pause() {
         audioStream->requestPause();
+        if (micInputStream != NULL)
+            micInputStream->requestPause();
     }
 
     void resume() {
         audioStream->requestStart();
+        if (micInputStream != NULL)
+            micInputStream->requestStart();
     }
 
     void copyFrameBuffer(void* dstBuffer)
     {
         memcpy(dstBuffer, frameBuffer, 256 * 384 * 4);
+    }
+
+    void updateMic()
+    {
+        switch (micInputType)
+        {
+            case 0: // no mic
+                Frontend::Mic_FeedSilence();
+                break;
+            case 1: // white noise
+                Frontend::Mic_FeedNoise();
+                break;
+            case 2: // host mic
+                Frontend::Mic_FeedExternalBuffer();
+                break;
+        }
     }
 
     bool saveState(const char* path)
@@ -174,18 +228,27 @@ namespace MelonDSAndroid
     void cleanup()
     {
         GBACart::Eject();
+        GPU::DeInitRenderer();
         NDS::DeInit();
         audioStream->requestStop();
         audioStream->close();
-        free(audioStream);
+        delete audioStream;
+        delete outputCallback;
         audioStream = NULL;
+        outputCallback = NULL;
+
+        if (micInputStream != NULL) {
+            micInputStream->requestStop();
+            micInputStream->close();
+            delete micInputStream;
+            delete micInputCallback;
+            micInputStream = NULL;
+            micInputCallback = NULL;
+        }
+
         assetManager = NULL;
 
         free(frameBuffer);
         frameBuffer = NULL;
     }
-}
-
-void Stop(bool internal)
-{
 }
