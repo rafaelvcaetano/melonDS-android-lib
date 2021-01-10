@@ -71,7 +71,11 @@ if (CMAKE_BUILD_TYPE STREQUAL Debug)
 endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL Release)
-	set(CMAKE_CXX_FLAGS_RELEASE "-O2")
+	# Enabling compiler optimizations seem to cause a lot of crashes during runtime
+	# but not when enabled debug optimizations, which also produces very acceptable
+	# performance. This should do for now
+	add_compile_options(-Og)
+	#set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 	set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s")
 	#add_link_options(-s)
 endif()
