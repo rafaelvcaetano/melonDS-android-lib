@@ -388,6 +388,11 @@ namespace Platform
             return LAN_Socket::RecvPacket(data);
     }
 
+    void Sleep(u64 usecs)
+    {
+        usleep(usecs);
+    }
+
     void StopEmu()
     {
     }
