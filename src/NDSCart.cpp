@@ -22,13 +22,12 @@
 #include "DSi.h"
 #include "NDSCart.h"
 #include "ARM.h"
-#include "CRC32.h"
 #include "DSi_AES.h"
 #include "Platform.h"
 #include "Config.h"
 #include "ROMList.h"
 #include "melonDLDI.h"
-
+#include "NDSCart_SRAMManager.h"
 
 namespace NDSCart_SRAM
 {
@@ -145,6 +144,8 @@ void LoadSave(const char* path, u32 type)
             memset(SRAM, 0xFF, SRAMLength);
         }
     }
+
+    NDSCart_SRAMManager::Setup(path, SRAM, SRAMLength);
 
     switch (SRAMLength)
     {
@@ -451,17 +452,10 @@ void Write(u8 val, u32 hold)
 
 void FlushSRAMFile()
 {
-    if (!SRAMFileDirty)
-        return;
+    if (!SRAMFileDirty) return;
 
     SRAMFileDirty = false;
-
-    FILE* f = Platform::OpenFile(SRAMPath, "wb");
-    if (f)
-    {
-        fwrite(SRAM, SRAMLength, 1, f);
-        fclose(f);
-    }
+    NDSCart_SRAMManager::RequestFlush();
 }
 
 }
@@ -485,7 +479,6 @@ u8 TransferCmd[8];
 bool CartInserted;
 u8* CartROM;
 u32 CartROMSize;
-u32 CartCRC;
 u32 CartID;
 bool CartIsHomebrew;
 bool CartIsDSi;
@@ -931,9 +924,6 @@ bool LoadROM(const char* path, const char* sram, bool direct)
 
     fclose(f);
     //CartROM = f;
-
-    CartCRC = CRC32(CartROM, CartROMSize);
-    printf("ROM CRC32: %08X\n", CartCRC);
 
     ROMListEntry romparams;
     if (!ReadROMParams(gamecode, &romparams))

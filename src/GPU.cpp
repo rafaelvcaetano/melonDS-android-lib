@@ -638,6 +638,7 @@ void MapVRAM_CD(u32 bank, u8 cnt)
         case 2: // ARM7 VRAM
             ofs &= 0x1;
             VRAMMap_ARM7[ofs] |= bankmask;
+            memset(VRAMDirty[bank].Data, 0xFF, sizeof(VRAMDirty[bank].Data));
             VRAMSTAT |= (1 << (bank-2));
             break;
 
@@ -1265,7 +1266,6 @@ void SyncDirtyFlags()
     SyncDirtyFlags(VRAMMap_AOBJ, VRAMWritten_AOBJ);
     SyncDirtyFlags(VRAMMap_BBG, VRAMWritten_BBG);
     SyncDirtyFlags(VRAMMap_BOBJ, VRAMWritten_BOBJ);
-    SyncDirtyFlags(VRAMMap_ARM7, VRAMWritten_ARM7);
 }
 
 template <u32 MappingGranularity, u32 Size>

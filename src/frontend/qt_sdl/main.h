@@ -191,6 +191,9 @@ signals:
 
 private slots:
     void onOpenFile();
+    void onOpenFileArchive();
+    void onClickRecentFile();
+    void onClearRecentFiles();
     void onBootFirmware();
     void onSaveState();
     void onLoadState();
@@ -236,6 +239,11 @@ private slots:
     void onFullscreenToggled();
 
 private:
+    QList<QString> recentFileList;
+    QMenu *recentMenu;
+    void updateRecentFilesMenu();
+    void loadROM(QString filename);
+
     void createScreenPanel();
 
     QString loadErrorStr(int error);
@@ -244,6 +252,7 @@ public:
     QWidget* panel;
 
     QAction* actOpenROM;
+    QAction* actOpenROMArchive;
     QAction* actBootFirmware;
     QAction* actSaveState[9];
     QAction* actLoadState[9];

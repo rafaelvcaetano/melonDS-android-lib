@@ -21,14 +21,26 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <vector>
+#include <string>
+#include <algorithm>
+
 #include <QApplication>
 #include <QMessageBox>
 #include <QMenuBar>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QKeyEvent>
 #include <QMimeData>
+#include <QVector>
+#ifndef _WIN32
+#include <QSocketNotifier>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <signal.h>
+#endif
 
 #include <SDL2/SDL.h>
 
@@ -63,6 +75,7 @@
 
 #include "main_shaders.h"
 
+#include "ArchiveUtil.h"
 
 // TODO: uniform variable spelling
 
@@ -867,22 +880,26 @@ void ScreenPanelGL::initializeGL()
     screenShader->setUniformValue("ScreenTex", (GLint)0);
     screenShader->release();
 
+    // to prevent bleeding between both parts of the screen
+    // with bilinear filtering enabled
+    const int paddedHeight = 192*2+2;
+    const float padPixels = 1.f / paddedHeight;
 
-    float vertices[] =
+    const float vertices[] =
     {
-        0,   0,    0, 0,
-        0,   192,  0, 0.5,
-        256, 192,  1, 0.5,
-        0,   0,    0, 0,
-        256, 192,  1, 0.5,
-        256, 0,    1, 0,
+        0.f,   0.f,    0.f, 0.f,
+        0.f,   192.f,  0.f, 0.5f - padPixels,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        0.f,   0.f,    0.f, 0.f,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        256.f, 0.f,    1.f, 0.f,
 
-        0,   0,    0, 0.5,
-        0,   192,  0, 1,
-        256, 192,  1, 1,
-        0,   0,    0, 0.5,
-        256, 192,  1, 1,
-        256, 0,    1, 0.5
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        0.f,   192.f,  0.f, 1.f,
+        256.f, 192.f,  1.f, 1.f,
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        256.f, 192.f,  1.f, 1.f,
+        256.f, 0.f,    1.f, 0.5f + padPixels
     };
 
     glGenBuffers(1, &screenVertexBuffer);
@@ -903,7 +920,11 @@ void ScreenPanelGL::initializeGL()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 192*2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, paddedHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    // fill the padding
+    u8 zeroData[256*4*4];
+    memset(zeroData, 0, sizeof(zeroData));
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256, 2, GL_RGBA, GL_UNSIGNED_BYTE, zeroData);
 
     OSD::Init(this);
 }
@@ -941,7 +962,7 @@ void ScreenPanelGL::paintGL()
         {
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
                             GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256, 192, GL_RGBA,
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192+2, 256, 192, GL_RGBA,
                             GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
         }
     }
@@ -999,9 +1020,37 @@ void ScreenPanelGL::onScreenLayoutChanged()
     setupScreenLayout();
 }
 
+#ifndef _WIN32
+static int signalFd[2];
+QSocketNotifier *signalSn;
+
+static void signalHandler(int)
+{
+    char a = 1;
+    write(signalFd[0], &a, sizeof(a));
+}
+#endif
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 {
+#ifndef _WIN32
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, signalFd))
+    {
+       qFatal("Couldn't create socketpair");
+    }
+
+    signalSn = new QSocketNotifier(signalFd[1], QSocketNotifier::Read, this);
+    connect(signalSn, SIGNAL(activated(int)), this, SLOT(onQuit()));
+
+    struct sigaction sa;
+
+    sa.sa_handler = signalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_flags |= SA_RESTART;
+    sigaction(SIGINT, &sa, 0);
+#endif
+
     setWindowTitle("melonDS " MELONDS_VERSION);
     setAttribute(Qt::WA_DeleteOnClose);
     setAcceptDrops(true);
@@ -1012,6 +1061,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
         actOpenROM = menu->addAction("Open ROM...");
         connect(actOpenROM, &QAction::triggered, this, &MainWindow::onOpenFile);
+        
+        actOpenROMArchive = menu->addAction("Open ROM inside Archive...");
+        connect(actOpenROMArchive, &QAction::triggered, this, &MainWindow::onOpenFileArchive);
+
+        recentMenu = menu->addMenu("Open Recent");
+        for(int i = 0; i < 10; ++i)
+        {
+            if(strlen(Config::RecentROMList[i]) > 0)
+                recentFileList.push_back(Config::RecentROMList[i]);
+        }
+        updateRecentFilesMenu();
 
         //actBootFirmware = menu->addAction("Launch DS menu");
         actBootFirmware = menu->addAction("Boot firmware");
@@ -1441,21 +1501,12 @@ QString MainWindow::loadErrorStr(int error)
     }
 }
 
-
-void MainWindow::onOpenFile()
+void MainWindow::loadROM(QString filename)
 {
-    emuThread->emuPause();
-
-    QString filename = QFileDialog::getOpenFileName(this,
-                                                    "Open ROM",
-                                                    Config::LastROMFolder,
-                                                    "DS ROMs (*.nds *.dsi *.srl);;GBA ROMs (*.gba);;Any file (*.*)");
-    if (filename.isEmpty())
-    {
-        emuThread->emuUnpause();
-        return;
-    }
-
+    recentFileList.removeAll(filename);
+    recentFileList.prepend(filename);
+    updateRecentFilesMenu();
+  
     // TODO: validate the input file!!
     // * check that it is a proper ROM
     // * ensure the binary offsets are sane
@@ -1499,6 +1550,117 @@ void MainWindow::onOpenFile()
     {
         emuThread->emuRun();
     }
+}
+
+void MainWindow::onOpenFile()
+{
+    emuThread->emuPause();
+
+    QString filename = QFileDialog::getOpenFileName(this,
+                                                    "Open ROM",
+                                                    Config::LastROMFolder,
+                                                    "DS ROMs (*.nds *.dsi *.srl);;GBA ROMs (*.gba *.zip);;Any file (*.*)");
+    if (filename.isEmpty())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    loadROM(filename);
+}
+
+void MainWindow::onOpenFileArchive()
+{
+    emuThread->emuPause();
+
+    QString filename = QFileDialog::getOpenFileName(this,
+                                                    "Open ROM Archive",
+                                                    Config::LastROMFolder,
+                                                    "Archived ROMs (*.zip *.7z *.rar *.tar *.tar.gz *.tar.xz *.tar.bz2);;Any file (*.*)");
+    if (filename.isEmpty())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    printf("Finding list of ROMs...\n");
+    QVector<QString> archiveROMList = Archive::ListArchive(filename.toUtf8().constData());
+    if (archiveROMList.size() > 2)
+    {
+        archiveROMList.removeFirst();
+        QString toLoad = QInputDialog::getItem(this, "melonDS",
+                                  "The archive was found to have multiple files. Select which ROM you want to load.", archiveROMList.toList(), 0, false);
+        printf("Extracting '%s'\n", toLoad.toUtf8().constData());
+        QVector<QString> extractResult = Archive::ExtractFileFromArchive(filename.toUtf8().constData(), toLoad.toUtf8().constData());
+        if (extractResult[0] != QString("Err"))
+        {
+            filename = extractResult[0];
+        }
+        else 
+        {
+            QMessageBox::critical(this, "melonDS", QString("There was an error while trying to extract the ROM from the archive: ") + extractResult[1]);
+        }
+    } 
+    else if (archiveROMList.size() == 2)
+    {   
+        printf("Extracting the only ROM in archive\n");
+        QVector<QString> extractResult = Archive::ExtractFileFromArchive(filename.toUtf8().constData(), nullptr);
+        if (extractResult[0] != QString("Err"))
+        {
+            filename = extractResult[0];
+        }
+        else 
+        {
+            QMessageBox::critical(this, "melonDS", QString("There was an error while trying to extract the ROM from the archive: ") + extractResult[1]);
+        }
+    }
+    else if ((archiveROMList.size() == 1) && (archiveROMList[0] == QString("OK")))
+    {
+        QMessageBox::warning(this, "melonDS", "The archive is intact, but there are no files inside.");
+    }
+    else
+    {
+        QMessageBox::critical(this, "melonDS", "The archive could not be read. It may be corrupt or you don't have the permissions.");
+    }
+
+    loadROM(filename);
+}
+
+void MainWindow::onClearRecentFiles()
+{
+    recentFileList.clear();
+    memset(Config::RecentROMList, 0, 10 * 1024);
+    updateRecentFilesMenu();
+}
+
+void MainWindow::updateRecentFilesMenu()
+{
+    recentMenu->clear();
+
+    for(int i = 0; i < recentFileList.size(); ++i)
+    {
+        QAction *actRecentFile_i = recentMenu->addAction(QString("%1.  %2").arg(i+1).arg(recentFileList.at(i)));
+        actRecentFile_i->setData(recentFileList.at(i));
+        connect(actRecentFile_i, &QAction::triggered, this, &MainWindow::onClickRecentFile);
+
+        if(i < 10)
+            strncpy(Config::RecentROMList[i], recentFileList.at(i).toStdString().c_str(), 1024);
+    }
+
+    QAction *actClearRecentList = recentMenu->addAction("Clear");
+    connect(actClearRecentList, &QAction::triggered, this, &MainWindow::onClearRecentFiles);
+
+    if(recentFileList.empty())
+        actClearRecentList->setEnabled(false);
+
+    Config::Save();
+}
+
+void MainWindow::onClickRecentFile()
+{
+    emuThread->emuPause();
+    QAction *act = (QAction *)sender();
+    loadROM(act->data().toString());
 }
 
 void MainWindow::onBootFirmware()
@@ -1664,6 +1826,9 @@ void MainWindow::onImportSavefile()
 
 void MainWindow::onQuit()
 {
+#ifndef _WIN32
+    signalSn->setEnabled(false);
+#endif
     QApplication::quit();
 }
 
@@ -1930,12 +2095,13 @@ void MainWindow::onFullscreenToggled()
     if (!mainWindow->isFullScreen())
     {
         mainWindow->showFullScreen();
-        mainWindow->menuBar()->hide();
+        mainWindow->menuBar()->setFixedHeight(0); // Don't use hide() as menubar actions stop working
     }
     else
     {
         mainWindow->showNormal();
-        mainWindow->menuBar()->show();
+        int menuBarHeight = mainWindow->menuBar()->sizeHint().height();
+        mainWindow->menuBar()->setFixedHeight(menuBarHeight);
     }
 }
 

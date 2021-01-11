@@ -16,47 +16,18 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
-#ifndef ARCODEFILE_H
-#define ARCODEFILE_H
-
-#include <list>
+#ifndef NDSCART_SRAMMANAGER_H
+#define NDSCART_SRAMMANAGER_H
 
 #include "types.h"
 
-struct ARCode
+namespace NDSCart_SRAMManager
 {
-    char Name[128];
-    bool Enabled;
-    u32 CodeLen;
-    u32 Code[2*64];
-};
+    bool Init();
+    void DeInit();
 
-typedef std::list<ARCode> ARCodeList;
+    void Setup(const char* path, u8* buffer, u32 length);
+    void RequestFlush();
+}
 
-struct ARCodeCat
-{
-    char Name[128];
-    ARCodeList Codes;
-};
-
-typedef std::list<ARCodeCat> ARCodeCatList;
-
-
-class ARCodeFile
-{
-public:
-    ARCodeFile(const char* filename);
-    ~ARCodeFile();
-
-    bool Error;
-
-    bool Load();
-    bool Save();
-
-    ARCodeCatList Categories;
-
-private:
-    char Filename[1024];
-};
-
-#endif // ARCODEFILE_H
+#endif // NDSCART_SRAMMANAGER_H

@@ -26,7 +26,7 @@
 namespace GPU3D
 {
 
-typedef struct
+struct Vertex
 {
     s32 Position[4];
     s32 Color[3];
@@ -44,9 +44,9 @@ typedef struct
     // TODO maybe: hi-res color? (that survives clipping)
     s32 HiresPosition[2];
 
-} Vertex;
+};
 
-typedef struct
+struct Polygon
 {
     Vertex* Vertices[10];
     u32 NumVertices;
@@ -75,7 +75,7 @@ typedef struct
 
     u32 SortKey;
 
-} Polygon;
+};
 
 extern u32 RenderDispCnt;
 extern u8 RenderAlphaRef;
