@@ -145,8 +145,6 @@ void LoadSave(const char* path, u32 type)
         }
     }
 
-    NDSCart_SRAMManager::Setup(path, SRAM, SRAMLength);
-
     switch (SRAMLength)
     {
     case 512: WriteFunc = Write_EEPROMTiny; break;
@@ -455,7 +453,12 @@ void FlushSRAMFile()
     if (!SRAMFileDirty) return;
 
     SRAMFileDirty = false;
-    NDSCart_SRAMManager::RequestFlush();
+    FILE* f = Platform::OpenFile(SRAMPath, "wb");
+    if (f)
+    {
+        fwrite(SRAM, SRAMLength, 1, f);
+        fclose(f);
+    }
 }
 
 }
