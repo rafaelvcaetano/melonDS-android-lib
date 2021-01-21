@@ -10,6 +10,7 @@
 #include "../SPU.h"
 #include "../Platform.h"
 #include "../Config.h"
+#include "PlatformConfig.h"
 #include "FrontendUtil.h"
 #include <android/asset_manager.h>
 #include <cstring>
@@ -102,6 +103,9 @@ namespace MelonDSAndroid
 #ifdef JIT_ENABLED
         Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
 #endif
+
+        Config::RandomizeMAC = 1;
+        Config::SocketBindAnyAddr = 1;
 
         NDS::Init();
         GPU::InitRenderer(0);
