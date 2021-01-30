@@ -10,6 +10,7 @@
 #include "../SPU.h"
 #include "../Platform.h"
 #include "../Config.h"
+#include "SharedConfig.h"
 #include "PlatformConfig.h"
 #include "FrontendUtil.h"
 #include <android/asset_manager.h>
@@ -74,6 +75,7 @@ namespace MelonDSAndroid
         if (emulatorConfiguration.consoleType == 0) {
             configDir = emulatorConfiguration.dsConfigDir;
             strcpy(Config::FirmwarePath, "firmware.bin");
+            Config::ConsoleType = 0;
             NDS::SetConsoleType(0);
         } else {
             configDir = emulatorConfiguration.dsiConfigDir;
@@ -81,6 +83,7 @@ namespace MelonDSAndroid
             strcpy(Config::DSiBIOS9Path, "bios9.bin");
             strcpy(Config::DSiFirmwarePath, "firmware.bin");
             strcpy(Config::DSiNANDPath, "nand.bin");
+            Config::ConsoleType = 1;
             NDS::SetConsoleType(1);
         }
 
@@ -132,6 +135,11 @@ namespace MelonDSAndroid
         }
 
         return 0;
+    }
+
+    int bootFirmware()
+    {
+        return Frontend::LoadBIOS();
     }
 
     void start()

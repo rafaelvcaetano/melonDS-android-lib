@@ -34,6 +34,7 @@ namespace MelonDSAndroid {
      * failed to load, 2 if the NDS ROM failed to load
      */
     extern int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram);
+    extern int bootFirmware();
     extern void start();
     extern u32 loop();
     extern void pause();
