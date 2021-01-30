@@ -72,7 +72,6 @@ endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL Release)
 	set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-	set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s")
 	#add_link_options(-s)
 endif()
 
