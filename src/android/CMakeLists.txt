@@ -14,6 +14,7 @@ set(ANDROID_SOURCES
         ifaddrs.c
         android_fopen.c
         SharedConfig.cpp
+        AndroidARCodeFile.cpp
 
         ../frontend/Util_ROM.cpp
         ../frontend/Util_Video.cpp

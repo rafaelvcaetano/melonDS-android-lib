@@ -1,6 +1,7 @@
 #ifndef MELONDS_MELONDS_H
 #define MELONDS_MELONDS_H
 
+#include <list>
 #include "../types.h"
 #include "../GPU.h"
 #include <android/asset_manager.h>
@@ -15,10 +16,16 @@ namespace MelonDSAndroid {
         GPU::RenderSettings renderSettings;
     } EmulatorConfiguration;
 
+    typedef struct {
+        u32 codeLength;
+        u32 code[2*64];
+    } Cheat;
+
     extern char* configDir;
     extern AAssetManager* assetManager;
 
     extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager);
+    extern void setCodeList(std::list<Cheat> cheats);
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 
     /**

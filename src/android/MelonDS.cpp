@@ -3,6 +3,7 @@
 #include "FileUtils.h"
 #include "OboeCallback.h"
 #include "MicInputOboeCallback.h"
+#include "AndroidARCodeFile.h"
 #include "../NDS.h"
 #include "../GPU.h"
 #include "../GPU3D.h"
@@ -10,6 +11,7 @@
 #include "../SPU.h"
 #include "../Platform.h"
 #include "../Config.h"
+#include "../AREngine.h"
 #include "SharedConfig.h"
 #include "PlatformConfig.h"
 #include "FrontendUtil.h"
@@ -23,7 +25,7 @@ oboe::AudioStream *audioStream;
 oboe::AudioStream *micInputStream;
 OboeCallback *outputCallback;
 MicInputOboeCallback *micInputCallback;
-
+AndroidARCodeFile *arCodeFile;
 
 namespace MelonDSAndroid
 {
@@ -97,6 +99,31 @@ namespace MelonDSAndroid
         NDS::Init();
         GPU::InitRenderer(0);
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
+    }
+
+    void setCodeList(std::list<Cheat> cheats)
+    {
+        if (arCodeFile == NULL) {
+            arCodeFile = new AndroidARCodeFile();
+            AREngine::SetCodeFile(arCodeFile);
+        }
+
+        ARCodeList codeList;
+
+        for (std::list<Cheat>::iterator it = cheats.begin(); it != cheats.end(); it++)
+        {
+            Cheat& cheat = *it;
+
+            ARCode code = {
+                    .Enabled = true,
+                    .CodeLen = cheat.codeLength
+            };
+            memcpy(code.Code, cheat.code, sizeof(code.Code));
+
+            codeList.push_back(code);
+        }
+
+        arCodeFile->updateCodeList(codeList);
     }
 
     void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
@@ -271,6 +298,11 @@ namespace MelonDSAndroid
             micInputStream = NULL;
             micInputCallback = NULL;
             Frontend::Mic_SetExternalBuffer(NULL, 0);
+        }
+
+        if (arCodeFile != NULL) {
+            delete arCodeFile;
+            arCodeFile = NULL;
         }
 
         assetManager = NULL;
