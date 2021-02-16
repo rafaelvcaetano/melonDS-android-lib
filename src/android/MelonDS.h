@@ -10,6 +10,7 @@ namespace MelonDSAndroid {
     typedef struct {
         char* dsConfigDir;
         char* dsiConfigDir;
+        float fastForwardSpeedMultiplier;
         bool useJit;
         int consoleType;
         int micSource;
