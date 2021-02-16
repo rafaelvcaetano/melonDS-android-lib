@@ -33,6 +33,7 @@ namespace MelonDSAndroid
     int micInputType;
     AAssetManager* assetManager;
 
+    void setupAudioOutputStream();
     void setupMicInputStream();
 
     void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager)
@@ -42,24 +43,8 @@ namespace MelonDSAndroid
         frameBuffer = new u32[256 * 384 * 4];
         micInputType = emulatorConfiguration.micSource;
 
-        outputCallback = new OboeCallback();
-        oboe::AudioStreamBuilder streamBuilder;
-        streamBuilder.setChannelCount(2);
-        streamBuilder.setFramesPerCallback(1024);
-        streamBuilder.setSampleRate(48000);
-        streamBuilder.setFormat(oboe::AudioFormat::I16);
-        streamBuilder.setDirection(oboe::Direction::Output);
-        streamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
-        streamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
-        streamBuilder.setCallback(outputCallback);
-
-        oboe::Result result = streamBuilder.openStream(&audioStream);
-        if (result != oboe::Result::OK) {
-            fprintf(stderr, "Failed to init audio stream");
-            delete outputCallback;
-            outputCallback = NULL;
-        } else {
-            Frontend::Init_Audio(audioStream->getSampleRate());
+        if (emulatorConfiguration.soundEnabled) {
+            setupAudioOutputStream();
         }
 
         if (micInputType == 2) {
@@ -131,6 +116,19 @@ namespace MelonDSAndroid
 
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
         micInputType = emulatorConfiguration.micSource;
+
+        if (emulatorConfiguration.soundEnabled) {
+            if (audioStream == NULL) {
+                setupAudioOutputStream();
+            }
+        } else if (audioStream != NULL) {
+            audioStream->requestStop();
+            audioStream->close();
+            delete audioStream;
+            delete outputCallback;
+            audioStream = NULL;
+            outputCallback = NULL;
+        }
 
         if (oldMicSource == 2 && micInputType != 2) {
             // No longer using device mic. Destroy stream
@@ -309,6 +307,29 @@ namespace MelonDSAndroid
 
         free(frameBuffer);
         frameBuffer = NULL;
+    }
+
+    void setupAudioOutputStream()
+    {
+        outputCallback = new OboeCallback();
+        oboe::AudioStreamBuilder streamBuilder;
+        streamBuilder.setChannelCount(2);
+        streamBuilder.setFramesPerCallback(1024);
+        streamBuilder.setSampleRate(48000);
+        streamBuilder.setFormat(oboe::AudioFormat::I16);
+        streamBuilder.setDirection(oboe::Direction::Output);
+        streamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+        streamBuilder.setSharingMode(oboe::SharingMode::Shared);
+        streamBuilder.setCallback(outputCallback);
+
+        oboe::Result result = streamBuilder.openStream(&audioStream);
+        if (result != oboe::Result::OK) {
+            fprintf(stderr, "Failed to init audio stream");
+            delete outputCallback;
+            outputCallback = NULL;
+        } else {
+            Frontend::Init_Audio(audioStream->getSampleRate());
+        }
     }
 
     void setupMicInputStream()

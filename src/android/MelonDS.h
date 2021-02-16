@@ -13,6 +13,7 @@ namespace MelonDSAndroid {
         float fastForwardSpeedMultiplier;
         bool useJit;
         int consoleType;
+        bool soundEnabled;
         int micSource;
         GPU::RenderSettings renderSettings;
     } EmulatorConfiguration;
