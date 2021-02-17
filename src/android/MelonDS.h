@@ -23,6 +23,11 @@ namespace MelonDSAndroid {
         u32 code[2*64];
     } Cheat;
 
+    typedef enum {
+        ROM,
+        FIRMWARE
+    } RunMode;
+
     extern char* configDir;
     extern AAssetManager* assetManager;
 
@@ -48,6 +53,7 @@ namespace MelonDSAndroid {
     extern u32 loop();
     extern void pause();
     extern void resume();
+    extern bool reset();
     extern void copyFrameBuffer(void* dstBuffer);
     extern void updateMic();
     extern bool saveState(const char* path);

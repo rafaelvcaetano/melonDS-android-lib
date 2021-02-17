@@ -33,8 +33,18 @@ namespace MelonDSAndroid
     int micInputType;
     AAssetManager* assetManager;
 
+    // Variables used to keep the current state so that emulation can be reset
+    char* currentRomPath = NULL;
+    char* currentSramPath = NULL;
+    char* currentGbaRomPath = NULL;
+    char* currentGbaSramPath = NULL;
+    bool currentLoadGbaRom;
+    bool currentLoadDirect;
+    RunMode currentRunMode;
+
     void setupAudioOutputStream();
     void setupMicInputStream();
+    void copyString(char** dest, const char* source);
 
     void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager)
     {
@@ -148,6 +158,14 @@ namespace MelonDSAndroid
 
     int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
     {
+        copyString(&currentRomPath, romPath);
+        copyString(&currentSramPath, sramPath);
+        copyString(&currentGbaRomPath, gbaRom);
+        copyString(&currentGbaSramPath, gbaSram);
+        currentLoadDirect = loadDirect;
+        currentLoadGbaRom = loadGbaRom;
+        currentRunMode = ROM;
+
         bool loaded = NDS::LoadROM(romPath, sramPath, loadDirect);
         if (!loaded)
             return 2;
@@ -164,6 +182,7 @@ namespace MelonDSAndroid
 
     int bootFirmware()
     {
+        currentRunMode = FIRMWARE;
         return Frontend::LoadBIOS();
     }
 
@@ -206,6 +225,17 @@ namespace MelonDSAndroid
 
         if (micInputStream != NULL)
             micInputStream->requestStart();
+    }
+
+    bool reset()
+    {
+        if (currentRunMode == ROM) {
+            int result = loadRom(currentRomPath, currentSramPath, currentLoadDirect, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
+            return result != 2;
+        } else {
+            int result = bootFirmware();
+            return result == 0;
+        }
     }
 
     void copyFrameBuffer(void* dstBuffer)
@@ -279,6 +309,16 @@ namespace MelonDSAndroid
         GBACart::Eject();
         GPU::DeInitRenderer();
         NDS::DeInit();
+
+        free(currentRomPath);
+        free(currentSramPath);
+        free(currentGbaRomPath);
+        free(currentGbaSramPath);
+        currentRomPath = NULL;
+        currentSramPath = NULL;
+        currentGbaRomPath = NULL;
+        currentGbaSramPath = NULL;
+
         if (audioStream != NULL) {
             audioStream->requestStop();
             audioStream->close();
@@ -355,6 +395,18 @@ namespace MelonDSAndroid
         } else {
             Frontend::Mic_SetExternalBuffer(micInputCallback->buffer, MIC_BUFFER_SIZE);
         }
+    }
+
+    void copyString(char** dest, const char* source)
+    {
+        if (source == NULL) {
+            *dest = NULL;
+            return;
+        }
+
+        int length = strlen(source);
+        *dest = (char*) malloc(length + 1);
+        strcpy(*dest, source);
     }
 }
 
