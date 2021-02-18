@@ -231,6 +231,10 @@ namespace MelonDSAndroid
     {
         if (currentRunMode == ROM) {
             int result = loadRom(currentRomPath, currentSramPath, currentLoadDirect, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
+            if (result != 2 && arCodeFile != NULL) {
+                AREngine::SetCodeFile(arCodeFile);
+            }
+
             return result != 2;
         } else {
             int result = bootFirmware();
