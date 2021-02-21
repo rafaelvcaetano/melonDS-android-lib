@@ -88,11 +88,45 @@ void DeInit()
     if (Firmware) delete[] Firmware;
 }
 
-void Reset()
+void LoadFirmwareInternal()
 {
-    if (Firmware) delete[] Firmware;
-    Firmware = NULL;
+    FirmwareLength = 0x20000;
+    Firmware = new u8[FirmwareLength];
+    memset(Firmware, 0xFF, FirmwareLength);
+    FirmwareMask = FirmwareLength - 1;
 
+    u32 userdata = 0x7FE00 & FirmwareMask;
+    memset(Firmware + userdata, 0, 0x74);
+
+    // Firmware header
+    *(u16*)&Firmware[0x1E] = 0xFFFF;
+    *(u16*)&Firmware[0x20] = (FirmwareLength - 0x200) >> 3; // User settings offset
+    *(u16*)&Firmware[0x22] = 0x0B51;
+    *(u16*)&Firmware[0x24] = 0x0DB3;
+    *(u16*)&Firmware[0x26] = 0x4F5D; // ???
+    *(u16*)&Firmware[0x28] = 0xFFFF;
+
+    // Setup Wi-Fi calibration data
+    *(u16*)&Firmware[0x2C] = 0x0138;
+    Firmware[0x2E] = 0x0;
+    Firmware[0x2F] = 0x0;
+    memset(&Firmware[0x30], 0x0, 6);
+    *(u16*)&Firmware[0x3C] = 0x3FFE;
+    *(u16*)&Firmware[0x3E] = 0xFFFF;
+    Firmware[0x40] = 0x2;
+    Firmware[0x41] = 0x18;
+    Firmware[0x42] = 0x0C;
+    Firmware[0x43] = 0x1;
+    Firmware[0xCD] = 0x0;
+    Firmware[0x163] = 0xFF;
+    memset(&Firmware[0x164], 0xFF, 0x9C);
+    memset(&Firmware[0x1FD00], 0, 0x100);
+
+    Firmware[userdata] = 5;
+}
+
+void LoadFirmwareExternal()
+{
     if (NDS::ConsoleType == 1)
         strncpy(FirmwarePath, Config::DSiFirmwarePath, 1023);
     else
@@ -150,6 +184,17 @@ void Reset()
         fwrite(Firmware, 1, FirmwareLength, f);
         fclose(f);
     }
+}
+
+void Reset()
+{
+    if (Firmware) delete[] Firmware;
+    Firmware = NULL;
+
+    if (NDS::ConsoleType == 0 && Config::UseInternalFirmware)
+        LoadFirmwareInternal();
+    else
+        LoadFirmwareExternal();
 
     FirmwareMask = FirmwareLength - 1;
 
@@ -165,6 +210,9 @@ void Reset()
     // TODO evetually: do this in DSi mode
     if (NDS::ConsoleType == 0)
     {
+        if (Config::UseInternalFirmware)
+            Platform::LoadFirmwareUserData(&Firmware[userdata]);
+
         // fix touchscreen coords
         *(u16*)&Firmware[userdata+0x58] = 0;
         *(u16*)&Firmware[userdata+0x5A] = 0;
@@ -343,7 +391,7 @@ void Write(u8 val, u32 hold)
         break;
     }
 
-    if (!hold && (CurCmd == 0x02 || CurCmd == 0x0A))
+    if (!hold && (CurCmd == 0x02 || CurCmd == 0x0A) && !Config::UseInternalFirmware)
     {
         FILE* f = Platform::OpenLocalFile(FirmwarePath, "r+b");
         if (f)

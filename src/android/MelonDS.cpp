@@ -32,6 +32,7 @@ namespace MelonDSAndroid
     char* configDir;
     int micInputType;
     AAssetManager* assetManager;
+    FirmwareConfiguration firmwareConfiguration;
 
     // Variables used to keep the current state so that emulation can be reset
     char* currentRomPath = NULL;
@@ -46,9 +47,9 @@ namespace MelonDSAndroid
     void setupMicInputStream();
     void copyString(char** dest, const char* source);
 
-    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager)
-    {
+    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager) {
         assetManager = androidAssetManager;
+        firmwareConfiguration = emulatorConfiguration.firmwareConfiguration;
 
         frameBuffer = new u32[256 * 384 * 4];
         micInputType = emulatorConfiguration.micSource;
@@ -61,33 +62,39 @@ namespace MelonDSAndroid
             setupMicInputStream();
         }
 
-        // DS BIOS files are always required
-        char* dsBios7 = joinPaths(emulatorConfiguration.dsConfigDir, "bios7.bin");
-        char* dsBios9 = joinPaths(emulatorConfiguration.dsConfigDir, "bios9.bin");
-        strcpy(Config::BIOS7Path, dsBios7);
-        strcpy(Config::BIOS9Path, dsBios9);
-        delete[] dsBios7;
-        delete[] dsBios9;
-
-        if (emulatorConfiguration.consoleType == 0) {
-            configDir = emulatorConfiguration.dsConfigDir;
-            strcpy(Config::FirmwarePath, "firmware.bin");
-            Config::ConsoleType = 0;
-            NDS::SetConsoleType(0);
+        if (emulatorConfiguration.consoleType == 0 && emulatorConfiguration.userInternalFirmwareAndBios) {
+            strcpy(Config::BIOS7Path, "?bios/drastic_bios_arm7.bin");
+            strcpy(Config::BIOS9Path, "?bios/drastic_bios_arm9.bin");
         } else {
-            configDir = emulatorConfiguration.dsiConfigDir;
-            strcpy(Config::DSiBIOS7Path, "bios7.bin");
-            strcpy(Config::DSiBIOS9Path, "bios9.bin");
-            strcpy(Config::DSiFirmwarePath, "firmware.bin");
-            strcpy(Config::DSiNANDPath, "nand.bin");
-            Config::ConsoleType = 1;
-            NDS::SetConsoleType(1);
+            // DS BIOS files are always required
+            char* dsBios7 = joinPaths(emulatorConfiguration.dsConfigDir, "bios7.bin");
+            char* dsBios9 = joinPaths(emulatorConfiguration.dsConfigDir, "bios9.bin");
+            strcpy(Config::BIOS7Path, dsBios7);
+            strcpy(Config::BIOS9Path, dsBios9);
+            delete[] dsBios7;
+            delete[] dsBios9;
+
+            if (emulatorConfiguration.consoleType == 0) {
+                configDir = emulatorConfiguration.dsConfigDir;
+                strcpy(Config::FirmwarePath, "firmware.bin");
+                Config::ConsoleType = 0;
+                NDS::SetConsoleType(0);
+            } else {
+                configDir = emulatorConfiguration.dsiConfigDir;
+                strcpy(Config::DSiBIOS7Path, "bios7.bin");
+                strcpy(Config::DSiBIOS9Path, "bios9.bin");
+                strcpy(Config::DSiFirmwarePath, "firmware.bin");
+                strcpy(Config::DSiNANDPath, "nand.bin");
+                Config::ConsoleType = 1;
+                NDS::SetConsoleType(1);
+            }
         }
 
 #ifdef JIT_ENABLED
         Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
 #endif
 
+        Config::UseInternalFirmware = emulatorConfiguration.userInternalFirmwareAndBios;
         Config::RandomizeMAC = 1;
         Config::SocketBindAnyAddr = 1;
 

@@ -8,6 +8,16 @@
 
 namespace MelonDSAndroid {
     typedef struct {
+        char username[11];
+        int language;
+        int birthdayMonth;
+        int birthdayDay;
+        int favouriteColour;
+        char message[27];
+    } FirmwareConfiguration;
+
+    typedef struct {
+        bool userInternalFirmwareAndBios;
         char* dsConfigDir;
         char* dsiConfigDir;
         float fastForwardSpeedMultiplier;
@@ -15,6 +25,7 @@ namespace MelonDSAndroid {
         int consoleType;
         bool soundEnabled;
         int micSource;
+        FirmwareConfiguration firmwareConfiguration;
         GPU::RenderSettings renderSettings;
     } EmulatorConfiguration;
 
@@ -30,6 +41,7 @@ namespace MelonDSAndroid {
 
     extern char* configDir;
     extern AAssetManager* assetManager;
+    extern FirmwareConfiguration firmwareConfiguration;
 
     extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager);
     extern void setCodeList(std::list<Cheat> cheats);

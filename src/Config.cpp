@@ -28,6 +28,8 @@ namespace Config
 
 const char* kConfigFile = "melonDS.ini";
 
+bool UseInternalFirmware;
+
 char BIOS9Path[1024];
 char BIOS7Path[1024];
 char FirmwarePath[1024];

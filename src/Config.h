@@ -41,6 +41,8 @@ bool HasConfigFile(const char* fileName);
 void Load();
 void Save();
 
+extern bool UseInternalFirmware;
+
 extern char BIOS9Path[1024];
 extern char BIOS7Path[1024];
 extern char FirmwarePath[1024];
