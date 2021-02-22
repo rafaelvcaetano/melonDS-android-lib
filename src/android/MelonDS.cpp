@@ -30,6 +30,7 @@ AndroidARCodeFile *arCodeFile;
 namespace MelonDSAndroid
 {
     char* configDir;
+    char* internalFilesDir;
     int micInputType;
     AAssetManager* assetManager;
     FirmwareConfiguration firmwareConfiguration;
@@ -48,6 +49,7 @@ namespace MelonDSAndroid
     void copyString(char** dest, const char* source);
 
     void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager) {
+        copyString(&internalFilesDir, emulatorConfiguration.internalFilesDir);
         assetManager = androidAssetManager;
         firmwareConfiguration = emulatorConfiguration.firmwareConfiguration;
 
@@ -75,12 +77,12 @@ namespace MelonDSAndroid
             delete[] dsBios9;
 
             if (emulatorConfiguration.consoleType == 0) {
-                configDir = emulatorConfiguration.dsConfigDir;
+                copyString(&configDir, emulatorConfiguration.dsConfigDir);
                 strcpy(Config::FirmwarePath, "firmware.bin");
                 Config::ConsoleType = 0;
                 NDS::SetConsoleType(0);
             } else {
-                configDir = emulatorConfiguration.dsiConfigDir;
+                copyString(&configDir, emulatorConfiguration.dsiConfigDir);
                 strcpy(Config::DSiBIOS7Path, "bios7.bin");
                 strcpy(Config::DSiBIOS9Path, "bios9.bin");
                 strcpy(Config::DSiFirmwarePath, "firmware.bin");
@@ -289,7 +291,7 @@ namespace MelonDSAndroid
     bool loadState(const char* path)
     {
         bool success = true;
-        char* backupPath = joinPaths(configDir, "backup.mln");
+        char* backupPath = joinPaths(internalFilesDir, "backup.mln");
 
         Savestate* backup = new Savestate(backupPath, true);
         NDS::DoSavestate(backup);
@@ -320,6 +322,16 @@ namespace MelonDSAndroid
         GBACart::Eject();
         GPU::DeInitRenderer();
         NDS::DeInit();
+
+        if (configDir) {
+            free(configDir);
+            configDir = NULL;
+        }
+
+        if (internalFilesDir) {
+            free(internalFilesDir);
+            internalFilesDir = NULL;
+        }
 
         free(currentRomPath);
         free(currentSramPath);

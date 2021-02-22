@@ -20,6 +20,7 @@ namespace MelonDSAndroid {
         bool userInternalFirmwareAndBios;
         char* dsConfigDir;
         char* dsiConfigDir;
+        char* internalFilesDir;
         float fastForwardSpeedMultiplier;
         bool useJit;
         int consoleType;
