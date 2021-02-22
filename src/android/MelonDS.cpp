@@ -64,17 +64,20 @@ namespace MelonDSAndroid
             setupMicInputStream();
         }
 
-        if (emulatorConfiguration.consoleType == 0 && emulatorConfiguration.userInternalFirmwareAndBios) {
+        // Internal BIOS and Firmware can only be used for DS
+        if (emulatorConfiguration.userInternalFirmwareAndBios) {
             strcpy(Config::BIOS7Path, "?bios/drastic_bios_arm7.bin");
             strcpy(Config::BIOS9Path, "?bios/drastic_bios_arm9.bin");
+            Config::ConsoleType = 0;
+            NDS::SetConsoleType(0);
         } else {
             // DS BIOS files are always required
             char* dsBios7 = joinPaths(emulatorConfiguration.dsConfigDir, "bios7.bin");
             char* dsBios9 = joinPaths(emulatorConfiguration.dsConfigDir, "bios9.bin");
             strcpy(Config::BIOS7Path, dsBios7);
             strcpy(Config::BIOS9Path, dsBios9);
-            delete[] dsBios7;
-            delete[] dsBios9;
+            free(dsBios7);
+            free(dsBios9);
 
             if (emulatorConfiguration.consoleType == 0) {
                 copyString(&configDir, emulatorConfiguration.dsConfigDir);
