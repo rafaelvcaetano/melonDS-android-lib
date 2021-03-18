@@ -96,16 +96,24 @@ namespace Platform
 
     FILE* OpenFile(const char* path, const char* mode, bool mustexist)
     {
-        if (mustexist)
+        // If it's a standard absolute file path, open it a simple file. If not, delegate to the file handler
+        if (path[0] == '/')
         {
-            FILE* file = fopen(path, "rb");
-            if (file)
-                return freopen(path, mode, file);
+            if (mustexist)
+            {
+                FILE* file = fopen(path, mode);
+                if (file)
+                    return freopen(path, mode, file);
+                else
+                    return nullptr;
+            }
             else
-                return nullptr;
+                return fopen(path, mode);
         }
         else
-            return fopen(path, mode);
+        {
+            return MelonDSAndroid::fileHandler->open(path, mode);
+        }
     }
 
     FILE* OpenLocalFile(const char* path, const char* mode)
@@ -113,20 +121,12 @@ namespace Platform
         if (path == nullptr)
             return nullptr;
 
-        // If the path is absolute, open it as absolute
-        if (path[0] == '/')
-            return OpenFile(path, mode, mode[0] == 'r');
-
         // If the path starts with an ?, open it from the assets folder
         if (path[0] == '?')
             return OpenDataFile(&path[1]);
 
-        const char* configDir = MelonDSAndroid::configDir;
-        char* configFile = MelonDSAndroid::joinPaths(configDir, path);
-
-        FILE* file = OpenFile(configFile, mode, false);
-        delete[] configFile;
-        return file;
+        // Always open file as absolute
+        return OpenFile(path, mode, mode[0] == 'r');
     }
 
     FILE* OpenDataFile(const char* path)

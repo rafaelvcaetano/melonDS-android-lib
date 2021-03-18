@@ -2,6 +2,7 @@
 #define MELONDS_MELONDS_H
 
 #include <list>
+#include "AndroidFileHandler.h"
 #include "../types.h"
 #include "../GPU.h"
 #include <android/asset_manager.h>
@@ -18,8 +19,13 @@ namespace MelonDSAndroid {
 
     typedef struct {
         bool userInternalFirmwareAndBios;
-        char* dsConfigDir;
-        char* dsiConfigDir;
+        char* dsBios7Path;
+        char* dsBios9Path;
+        char* dsFirmwarePath;
+        char* dsiBios7Path;
+        char* dsiBios9Path;
+        char* dsiFirmwarePath;
+        char* dsiNandPath;
         char* internalFilesDir;
         float fastForwardSpeedMultiplier;
         bool useJit;
@@ -40,11 +46,11 @@ namespace MelonDSAndroid {
         FIRMWARE
     } RunMode;
 
-    extern char* configDir;
     extern AAssetManager* assetManager;
+    extern AndroidFileHandler* fileHandler;
     extern FirmwareConfiguration firmwareConfiguration;
 
-    extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager);
+    extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 

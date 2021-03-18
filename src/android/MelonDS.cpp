@@ -29,10 +29,10 @@ AndroidARCodeFile *arCodeFile;
 
 namespace MelonDSAndroid
 {
-    char* configDir;
     char* internalFilesDir;
     int micInputType;
     AAssetManager* assetManager;
+    AndroidFileHandler* fileHandler;
     FirmwareConfiguration firmwareConfiguration;
 
     // Variables used to keep the current state so that emulation can be reset
@@ -48,9 +48,10 @@ namespace MelonDSAndroid
     void setupMicInputStream();
     void copyString(char** dest, const char* source);
 
-    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager) {
+    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler) {
         copyString(&internalFilesDir, emulatorConfiguration.internalFilesDir);
         assetManager = androidAssetManager;
+        fileHandler = androidFileHandler;
         firmwareConfiguration = emulatorConfiguration.firmwareConfiguration;
 
         frameBuffer = new u32[256 * 384 * 4];
@@ -72,24 +73,18 @@ namespace MelonDSAndroid
             NDS::SetConsoleType(0);
         } else {
             // DS BIOS files are always required
-            char* dsBios7 = joinPaths(emulatorConfiguration.dsConfigDir, "bios7.bin");
-            char* dsBios9 = joinPaths(emulatorConfiguration.dsConfigDir, "bios9.bin");
-            strcpy(Config::BIOS7Path, dsBios7);
-            strcpy(Config::BIOS9Path, dsBios9);
-            free(dsBios7);
-            free(dsBios9);
+            strcpy(Config::BIOS7Path, emulatorConfiguration.dsBios7Path);
+            strcpy(Config::BIOS9Path, emulatorConfiguration.dsBios9Path);
 
             if (emulatorConfiguration.consoleType == 0) {
-                copyString(&configDir, emulatorConfiguration.dsConfigDir);
-                strcpy(Config::FirmwarePath, "firmware.bin");
+                strcpy(Config::FirmwarePath, emulatorConfiguration.dsFirmwarePath);
                 Config::ConsoleType = 0;
                 NDS::SetConsoleType(0);
             } else {
-                copyString(&configDir, emulatorConfiguration.dsiConfigDir);
-                strcpy(Config::DSiBIOS7Path, "bios7.bin");
-                strcpy(Config::DSiBIOS9Path, "bios9.bin");
-                strcpy(Config::DSiFirmwarePath, "firmware.bin");
-                strcpy(Config::DSiNANDPath, "nand.bin");
+                strcpy(Config::DSiBIOS7Path, emulatorConfiguration.dsiBios7Path);
+                strcpy(Config::DSiBIOS9Path, emulatorConfiguration.dsiBios9Path);
+                strcpy(Config::DSiFirmwarePath, emulatorConfiguration.dsiFirmwarePath);
+                strcpy(Config::DSiNANDPath, emulatorConfiguration.dsiNandPath);
                 Config::ConsoleType = 1;
                 NDS::SetConsoleType(1);
             }
@@ -326,11 +321,6 @@ namespace MelonDSAndroid
         GPU::DeInitRenderer();
         NDS::DeInit();
 
-        if (configDir) {
-            free(configDir);
-            configDir = NULL;
-        }
-
         if (internalFilesDir) {
             free(internalFilesDir);
             internalFilesDir = NULL;
@@ -369,6 +359,7 @@ namespace MelonDSAndroid
             arCodeFile = NULL;
         }
 
+        fileHandler = NULL;
         assetManager = NULL;
 
         free(frameBuffer);
