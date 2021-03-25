@@ -111,6 +111,7 @@ void LoadFirmwareInternal()
     Firmware[0x2E] = 0x0;
     Firmware[0x2F] = 0x0;
     memset(&Firmware[0x30], 0x0, 6);
+    memcpy(&Firmware[0x36], Config::InternalMacAddress, 6);
     *(u16*)&Firmware[0x3C] = 0x3FFE;
     *(u16*)&Firmware[0x3E] = 0xFFFF;
     Firmware[0x40] = 0x2;
@@ -121,6 +122,10 @@ void LoadFirmwareInternal()
     Firmware[0x163] = 0xFF;
     memset(&Firmware[0x164], 0xFF, 0x9C);
     memset(&Firmware[0x1FD00], 0, 0x100);
+    if (!Config::RandomizeMAC)
+    {
+        *(u16*) &Firmware[0x2A] = CRC16(&Firmware[0x2C], *(u16*) &Firmware[0x2C], 0x0000);
+    }
 
     Firmware[userdata] = 5;
 }

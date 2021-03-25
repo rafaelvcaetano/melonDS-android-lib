@@ -69,6 +69,7 @@ namespace MelonDSAndroid
         if (emulatorConfiguration.userInternalFirmwareAndBios) {
             strcpy(Config::BIOS7Path, "?bios/drastic_bios_arm7.bin");
             strcpy(Config::BIOS9Path, "?bios/drastic_bios_arm9.bin");
+            memcpy(Config::InternalMacAddress, emulatorConfiguration.firmwareConfiguration.macAddress, sizeof(emulatorConfiguration.firmwareConfiguration.macAddress));
             Config::ConsoleType = 0;
             NDS::SetConsoleType(0);
         } else {
@@ -95,7 +96,7 @@ namespace MelonDSAndroid
 #endif
 
         Config::UseInternalFirmware = emulatorConfiguration.userInternalFirmwareAndBios;
-        Config::RandomizeMAC = 1;
+        Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress ? 1 : 0;
         Config::SocketBindAnyAddr = 1;
 
         NDS::Init();

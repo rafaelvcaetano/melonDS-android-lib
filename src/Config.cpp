@@ -44,6 +44,7 @@ int DSiSDEnable;
 char DSiSDPath[1024];
 
 int RandomizeMAC;
+u8 InternalMacAddress[6];
 
 #ifdef JIT_ENABLED
 int JIT_Enable = false;

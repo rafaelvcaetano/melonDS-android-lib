@@ -15,6 +15,8 @@ namespace MelonDSAndroid {
         int birthdayDay;
         int favouriteColour;
         char message[27];
+        bool randomizeMacAddress;
+        u8 macAddress[6];
     } FirmwareConfiguration;
 
     typedef struct {
