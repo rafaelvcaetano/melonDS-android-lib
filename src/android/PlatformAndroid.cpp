@@ -59,7 +59,7 @@ namespace Platform
     typedef struct
     {
         pthread_t ID;
-        void (*Func)();
+        std::function<void()> Func;
 
     } AndroidThread;
 
@@ -163,7 +163,7 @@ namespace Platform
         firmwareUserDataEntryPoint[0x64] = firmwareConfiguration.language;
     }
 
-    Thread* Thread_Create(void (*func)())
+    Thread* Thread_Create(std::function<void()> func)
     {
         AndroidThread* data = new AndroidThread;
         data->Func = func;

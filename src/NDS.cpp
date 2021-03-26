@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -77,6 +77,8 @@ ARMv5* ARM9;
 ARMv4* ARM7;
 
 u32 NumFrames;
+u32 NumLagFrames;
+bool LagFrameFlag;
 u64 LastSysClockCycles;
 u64 FrameStartTimestamp;
 
@@ -191,6 +193,7 @@ bool Init()
     DMAs[6] = new DMA(1, 2);
     DMAs[7] = new DMA(1, 3);
 
+    if (!NDSCart_SRAMManager::Init()) return false;
     if (!NDSCart::Init()) return false;
     if (!GBACart::Init()) return false;
     if (!GPU::Init()) return false;
@@ -218,6 +221,7 @@ void DeInit()
     for (int i = 0; i < 8; i++)
         delete DMAs[i];
 
+    NDSCart_SRAMManager::DeInit();
     NDSCart::DeInit();
     GBACart::DeInit();
     GPU::DeInit();
@@ -763,6 +767,11 @@ bool DoSavestate(Savestate* file)
     file->Var64(&LastSysClockCycles);
     file->Var64(&FrameStartTimestamp);
     file->Var32(&NumFrames);
+    if (file->IsAtleastVersion(7, 1))
+    {
+        file->Var32(&NumLagFrames);
+        file->Bool32(&LagFrameFlag);
+    }
 
     // TODO: save KeyInput????
     file->Var16(&KeyCnt);
@@ -821,6 +830,20 @@ void SetConsoleType(int type)
     ConsoleType = type;
 }
 
+bool LoadROM(const u8* romdata, u32 filelength, const char *sram, bool direct)
+{
+    if (NDSCart::LoadROM(romdata, filelength, sram, direct))
+    {
+        Running = true;
+        return true;
+    }
+    else
+    {
+        printf("Failed to load ROM from archive\n");
+        return false;
+    }
+}
+
 bool LoadROM(const char* path, const char* sram, bool direct)
 {
     if (NDSCart::LoadROM(path, sram, direct))
@@ -844,6 +867,19 @@ bool LoadGBAROM(const char* path, const char* sram)
     else
     {
         printf("Failed to load ROM %s\n", path);
+        return false;
+    }
+}
+
+bool LoadGBAROM(const u8* romdata, u32 filelength, const char *filename, const char *sram)
+{
+    if (GBACart::LoadROM(romdata, filelength, sram))
+    {
+        return true;
+    }
+    else
+    {
+        printf("Failed to load ROM %s from archive\n", filename);
         return false;
     }
 }
@@ -908,99 +944,108 @@ u32 RunFrame()
 {
     FrameStartTimestamp = SysTimestamp;
 
-    if (!Running) return 263; // dorp
-    if (CPUStop & 0x40000000) return 263;
-
-    GPU::StartFrame();
-
-    while (Running && GPU::TotalScanlines==0)
+    LagFrameFlag = true;
+    bool runFrame = Running && !(CPUStop & 0x40000000);
+    if (runFrame)
     {
-        // TODO: give it some margin, so it can directly do 17 cycles instead of 16 then 1
-        u64 target = NextTarget();
-        ARM9Target = target << ARM9ClockShift;
-        CurCPU = 0;
+        GPU::StartFrame();
 
-        if (CPUStop & 0x80000000)
+        while (Running && GPU::TotalScanlines==0)
         {
-            // GXFIFO stall
-            s32 cycles = GPU3D::CyclesToRunFor();
+            // TODO: give it some margin, so it can directly do 17 cycles instead of 16 then 1
+            u64 target = NextTarget();
+            ARM9Target = target << ARM9ClockShift;
+            CurCPU = 0;
 
-            ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
-        }
-        else if (CPUStop & 0x0FFF)
-        {
-            DMAs[0]->Run<ConsoleType>();
-            if (!(CPUStop & 0x80000000)) DMAs[1]->Run<ConsoleType>();
-            if (!(CPUStop & 0x80000000)) DMAs[2]->Run<ConsoleType>();
-            if (!(CPUStop & 0x80000000)) DMAs[3]->Run<ConsoleType>();
-            if (ConsoleType == 1) DSi::RunNDMAs(0);
-        }
-        else
-        {
-#ifdef JIT_ENABLED
-            if (EnableJIT)
-                ARM9->ExecuteJIT();
-            else
-#endif
-                ARM9->Execute();
-        }
-
-        RunTimers(0);
-        GPU3D::Run();
-
-        target = ARM9Timestamp >> ARM9ClockShift;
-        CurCPU = 1;
-
-        while (ARM7Timestamp < target)
-        {
-            ARM7Target = target; // might be changed by a reschedule
-
-            if (CPUStop & 0x0FFF0000)
+            if (CPUStop & 0x80000000)
             {
-                DMAs[4]->Run<ConsoleType>();
-                DMAs[5]->Run<ConsoleType>();
-                DMAs[6]->Run<ConsoleType>();
-                DMAs[7]->Run<ConsoleType>();
-                if (ConsoleType == 1) DSi::RunNDMAs(1);
+                // GXFIFO stall
+                s32 cycles = GPU3D::CyclesToRunFor();
+
+                ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
+            }
+            else if (CPUStop & 0x0FFF)
+            {
+                DMAs[0]->Run<ConsoleType>();
+                if (!(CPUStop & 0x80000000)) DMAs[1]->Run<ConsoleType>();
+                if (!(CPUStop & 0x80000000)) DMAs[2]->Run<ConsoleType>();
+                if (!(CPUStop & 0x80000000)) DMAs[3]->Run<ConsoleType>();
+                if (ConsoleType == 1) DSi::RunNDMAs(0);
             }
             else
             {
 #ifdef JIT_ENABLED
                 if (EnableJIT)
-                    ARM7->ExecuteJIT();
+                    ARM9->ExecuteJIT();
                 else
 #endif
-                    ARM7->Execute();
+                    ARM9->Execute();
             }
 
-            RunTimers(1);
-        }
+            RunTimers(0);
+            GPU3D::Run();
 
-        RunSystem(target);
+            target = ARM9Timestamp >> ARM9ClockShift;
+            CurCPU = 1;
 
-        if (CPUStop & 0x40000000)
-        {
-            // checkme: when is sleep mode effective?
-            //CancelEvent(Event_LCD);
-            //GPU::TotalScanlines = 263;
-            break;
+            while (ARM7Timestamp < target)
+            {
+                ARM7Target = target; // might be changed by a reschedule
+
+                if (CPUStop & 0x0FFF0000)
+                {
+                    DMAs[4]->Run<ConsoleType>();
+                    DMAs[5]->Run<ConsoleType>();
+                    DMAs[6]->Run<ConsoleType>();
+                    DMAs[7]->Run<ConsoleType>();
+                    if (ConsoleType == 1) DSi::RunNDMAs(1);
+                }
+                else
+                {
+#ifdef JIT_ENABLED
+                    if (EnableJIT)
+                        ARM7->ExecuteJIT();
+                    else
+#endif
+                        ARM7->Execute();
+                }
+
+                RunTimers(1);
+            }
+
+            RunSystem(target);
+
+            if (CPUStop & 0x40000000)
+            {
+                // checkme: when is sleep mode effective?
+                CancelEvent(Event_LCD);
+                GPU::TotalScanlines = 263;
+                break;
+            }
         }
-    }
 
 #ifdef DEBUG_CHECK_DESYNC
-    printf("[%08X%08X] ARM9=%ld, ARM7=%ld, GPU=%ld\n",
-           (u32)(SysTimestamp>>32), (u32)SysTimestamp,
-           (ARM9Timestamp>>1)-SysTimestamp,
-           ARM7Timestamp-SysTimestamp,
-           GPU3D::Timestamp-SysTimestamp);
+        printf("[%08X%08X] ARM9=%ld, ARM7=%ld, GPU=%ld\n",
+            (u32)(SysTimestamp>>32), (u32)SysTimestamp,
+            (ARM9Timestamp>>1)-SysTimestamp,
+            ARM7Timestamp-SysTimestamp,
+            GPU3D::Timestamp-SysTimestamp);
 #endif
-    SPU::TransferOutput();
+        SPU::TransferOutput();
 
-    NDSCart::FlushSRAMFile();
+        NDSCart::FlushSRAMFile();
+    }
 
+    // In the context of TASes, frame count is traditionally the primary measure of emulated time,
+    // so it needs to be tracked even if NDS is powered off.
     NumFrames++;
+    if (LagFrameFlag)
+        NumLagFrames++;
 
-    return GPU::TotalScanlines;
+    if (runFrame)
+        return GPU::TotalScanlines;
+    else
+        return 263;
 }
 
 u32 RunFrame()
@@ -1118,6 +1163,7 @@ void SetLidClosed(bool closed)
         KeyInput &= ~(1<<23);
         SetIRQ(1, IRQ_LidOpen);
         CPUStop &= ~0x40000000;
+        GPU3D::RestartFrame();
     }
 }
 
@@ -1518,7 +1564,7 @@ void RunTimer(u32 tid, s32 cycles)
 
 void RunTimers(u32 cpu)
 {
-    register u32 timermask = TimerCheckMask[cpu];
+    u32 timermask = TimerCheckMask[cpu];
     s32 cycles;
 
     if (cpu == 0)
@@ -1712,6 +1758,7 @@ void DivDone(u32 param)
             else if (num == -0x8000000000000000 && den == -1)
             {
                 *(s64*)&DivQuotient[0] = 0x8000000000000000;
+                *(s64*)&DivRemainder[0] = 0;
             }
             else
             {
@@ -1733,6 +1780,7 @@ void DivDone(u32 param)
             else if (num == -0x8000000000000000 && den == -1)
             {
                 *(s64*)&DivQuotient[0] = 0x8000000000000000;
+                *(s64*)&DivRemainder[0] = 0;
             }
             else
             {
@@ -2785,8 +2833,8 @@ u8 ARM9IORead8(u32 addr)
 {
     switch (addr)
     {
-    case 0x04000130: return KeyInput & 0xFF;
-    case 0x04000131: return (KeyInput >> 8) & 0xFF;
+    case 0x04000130: LagFrameFlag = false; return KeyInput & 0xFF;
+    case 0x04000131: LagFrameFlag = false; return (KeyInput >> 8) & 0xFF;
     case 0x04000132: return KeyCnt & 0xFF;
     case 0x04000133: return KeyCnt >> 8;
 
@@ -2834,11 +2882,11 @@ u8 ARM9IORead8(u32 addr)
 
     if (addr >= 0x04000000 && addr < 0x04000060)
     {
-        return GPU::GPU2D_A->Read8(addr);
+        return GPU::GPU2D_A.Read8(addr);
     }
     if (addr >= 0x04001000 && addr < 0x04001060)
     {
-        return GPU::GPU2D_B->Read8(addr);
+        return GPU::GPU2D_B.Read8(addr);
     }
     if (addr >= 0x04000320 && addr < 0x040006A4)
     {
@@ -2858,7 +2906,7 @@ u16 ARM9IORead16(u32 addr)
 
     case 0x04000060: return GPU3D::Read16(addr);
     case 0x04000064:
-    case 0x04000066: return GPU::GPU2D_A->Read16(addr);
+    case 0x04000066: return GPU::GPU2D_A.Read16(addr);
 
     case 0x040000B8: return DMAs[0]->Cnt & 0xFFFF;
     case 0x040000BA: return DMAs[0]->Cnt >> 16;
@@ -2887,7 +2935,7 @@ u16 ARM9IORead16(u32 addr)
     case 0x0400010C: return TimerGetCounter(3);
     case 0x0400010E: return Timers[3].Cnt;
 
-    case 0x04000130: return KeyInput & 0xFFFF;
+    case 0x04000130: LagFrameFlag = false; return KeyInput & 0xFFFF;
     case 0x04000132: return KeyCnt;
 
     case 0x04000180: return IPCSync9;
@@ -2956,11 +3004,11 @@ u16 ARM9IORead16(u32 addr)
 
     if ((addr >= 0x04000000 && addr < 0x04000060) || (addr == 0x0400006C))
     {
-        return GPU::GPU2D_A->Read16(addr);
+        return GPU::GPU2D_A.Read16(addr);
     }
     if ((addr >= 0x04001000 && addr < 0x04001060) || (addr == 0x0400106C))
     {
-        return GPU::GPU2D_B->Read16(addr);
+        return GPU::GPU2D_B.Read16(addr);
     }
     if (addr >= 0x04000320 && addr < 0x040006A4)
     {
@@ -2978,7 +3026,7 @@ u32 ARM9IORead32(u32 addr)
     case 0x04000004: return GPU::DispStat[0] | (GPU::VCount << 16);
 
     case 0x04000060: return GPU3D::Read32(addr);
-    case 0x04000064: return GPU::GPU2D_A->Read32(addr);
+    case 0x04000064: return GPU::GPU2D_A.Read32(addr);
 
     case 0x040000B0: return DMAs[0]->SrcAddr;
     case 0x040000B4: return DMAs[0]->DstAddr;
@@ -3005,7 +3053,7 @@ u32 ARM9IORead32(u32 addr)
     case 0x04000108: return TimerGetCounter(2) | (Timers[2].Cnt << 16);
     case 0x0400010C: return TimerGetCounter(3) | (Timers[3].Cnt << 16);
 
-    case 0x04000130: return (KeyInput & 0xFFFF) | (KeyCnt << 16);
+    case 0x04000130: LagFrameFlag = false; return (KeyInput & 0xFFFF) | (KeyCnt << 16);
 
     case 0x04000180: return IPCSync9;
     case 0x04000184: return ARM9IORead16(addr);
@@ -3076,11 +3124,11 @@ u32 ARM9IORead32(u32 addr)
 
     if ((addr >= 0x04000000 && addr < 0x04000060) || (addr == 0x0400006C))
     {
-        return GPU::GPU2D_A->Read32(addr);
+        return GPU::GPU2D_A.Read32(addr);
     }
     if ((addr >= 0x04001000 && addr < 0x04001060) || (addr == 0x0400106C))
     {
-        return GPU::GPU2D_B->Read32(addr);
+        return GPU::GPU2D_B.Read32(addr);
     }
     if (addr >= 0x04000320 && addr < 0x040006A4)
     {
@@ -3096,9 +3144,9 @@ void ARM9IOWrite8(u32 addr, u8 val)
     switch (addr)
     {
     case 0x0400006C:
-    case 0x0400006D: GPU::GPU2D_A->Write8(addr, val); return;
+    case 0x0400006D: GPU::GPU2D_A.Write8(addr, val); return;
     case 0x0400106C:
-    case 0x0400106D: GPU::GPU2D_B->Write8(addr, val); return;
+    case 0x0400106D: GPU::GPU2D_B.Write8(addr, val); return;
 
     case 0x04000132:
         KeyCnt = (KeyCnt & 0xFF00) | val;
@@ -3157,12 +3205,12 @@ void ARM9IOWrite8(u32 addr, u8 val)
 
     if (addr >= 0x04000000 && addr < 0x04000060)
     {
-        GPU::GPU2D_A->Write8(addr, val);
+        GPU::GPU2D_A.Write8(addr, val);
         return;
     }
     if (addr >= 0x04001000 && addr < 0x04001060)
     {
-        GPU::GPU2D_B->Write8(addr, val);
+        GPU::GPU2D_B.Write8(addr, val);
         return;
     }
     if (addr >= 0x04000320 && addr < 0x040006A4)
@@ -3184,10 +3232,10 @@ void ARM9IOWrite16(u32 addr, u16 val)
     case 0x04000060: GPU3D::Write16(addr, val); return;
 
     case 0x04000068:
-    case 0x0400006A: GPU::GPU2D_A->Write16(addr, val); return;
+    case 0x0400006A: GPU::GPU2D_A.Write16(addr, val); return;
 
-    case 0x0400006C: GPU::GPU2D_A->Write16(addr, val); return;
-    case 0x0400106C: GPU::GPU2D_B->Write16(addr, val); return;
+    case 0x0400006C: GPU::GPU2D_A.Write16(addr, val); return;
+    case 0x0400106C: GPU::GPU2D_B.Write16(addr, val); return;
 
     case 0x040000B8: DMAs[0]->WriteCnt((DMAs[0]->Cnt & 0xFFFF0000) | val); return;
     case 0x040000BA: DMAs[0]->WriteCnt((DMAs[0]->Cnt & 0x0000FFFF) | (val << 16)); return;
@@ -3323,12 +3371,12 @@ void ARM9IOWrite16(u32 addr, u16 val)
 
     if (addr >= 0x04000000 && addr < 0x04000060)
     {
-        GPU::GPU2D_A->Write16(addr, val);
+        GPU::GPU2D_A.Write16(addr, val);
         return;
     }
     if (addr >= 0x04001000 && addr < 0x04001060)
     {
-        GPU::GPU2D_B->Write16(addr, val);
+        GPU::GPU2D_B.Write16(addr, val);
         return;
     }
     if (addr >= 0x04000320 && addr < 0x040006A4)
@@ -3351,10 +3399,10 @@ void ARM9IOWrite32(u32 addr, u32 val)
 
     case 0x04000060: GPU3D::Write32(addr, val); return;
     case 0x04000064:
-    case 0x04000068: GPU::GPU2D_A->Write32(addr, val); return;
+    case 0x04000068: GPU::GPU2D_A.Write32(addr, val); return;
 
-    case 0x0400006C: GPU::GPU2D_A->Write16(addr, val&0xFFFF); return;
-    case 0x0400106C: GPU::GPU2D_B->Write16(addr, val&0xFFFF); return;
+    case 0x0400006C: GPU::GPU2D_A.Write16(addr, val&0xFFFF); return;
+    case 0x0400106C: GPU::GPU2D_B.Write16(addr, val&0xFFFF); return;
 
     case 0x040000B0: DMAs[0]->SrcAddr = val; return;
     case 0x040000B4: DMAs[0]->DstAddr = val; return;
@@ -3486,12 +3534,12 @@ void ARM9IOWrite32(u32 addr, u32 val)
 
     if (addr >= 0x04000000 && addr < 0x04000060)
     {
-        GPU::GPU2D_A->Write32(addr, val);
+        GPU::GPU2D_A.Write32(addr, val);
         return;
     }
     if (addr >= 0x04001000 && addr < 0x04001060)
     {
-        GPU::GPU2D_B->Write32(addr, val);
+        GPU::GPU2D_B.Write32(addr, val);
         return;
     }
     if (addr >= 0x04000320 && addr < 0x040006A4)

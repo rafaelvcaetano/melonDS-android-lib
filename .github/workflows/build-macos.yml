@@ -20,13 +20,14 @@ jobs:
     - uses: actions/checkout@v1
     - name: Install dependencies
       working-directory: ${{runner.workspace}}
-      run: |
-        brew install cmake sdl2 qt5 libslirp libarchive
+      run: brew install sdl2 qt@5 libslirp libarchive libepoxy
     - name: Create build environment
       run: mkdir ${{runner.workspace}}/build
     - name: Configure
       working-directory: ${{runner.workspace}}/build
-      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DQt5_DIR=$(brew --prefix qt5)/lib/cmake/Qt5
+      run: |
+          export PKG_CONFIG_PATH="$(brew --prefix libarchive)/lib/pkgconfig"
+          cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DQt5_DIR=$(brew --prefix qt5)/lib/cmake/Qt5
     - name: Make
       working-directory: ${{runner.workspace}}/build
       run: |

@@ -9,6 +9,7 @@ SET(SOURCES_QT_SDL
     VideoSettingsDialog.cpp
     AudioSettingsDialog.cpp
     WifiSettingsDialog.cpp
+    InterfaceSettingsDialog.cpp
     Input.cpp
     LAN_PCap.cpp
     LAN_Socket.cpp
@@ -53,15 +54,8 @@ find_package(PkgConfig REQUIRED)
 find_package(Iconv REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2)
 pkg_check_modules(SLIRP REQUIRED slirp)
-
-if (APPLE)
-    # Find libarchive on macOS, because macOS only provides the library, not the headers
-    execute_process(COMMAND brew --prefix libarchive
-                    OUTPUT_VARIABLE LIBARCHIVE_DIR
-                    OUTPUT_STRIP_TRAILING_WHITESPACE)
-    list(APPEND CMAKE_PREFIX_PATH "${LIBARCHIVE_DIR}")
-endif()
 pkg_check_modules(LIBARCHIVE REQUIRED libarchive)
+add_compile_definitions(ARCHIVE_SUPPORT_ENABLED)
 
 if (WIN32 AND (CMAKE_BUILD_TYPE STREQUAL Release))
     add_executable(melonDS WIN32 ${SOURCES_QT_SDL})
@@ -71,9 +65,12 @@ endif()
 
 target_link_libraries(melonDS ${CMAKE_THREAD_LIBS_INIT})
 
-target_include_directories(melonDS PRIVATE ${SDL2_INCLUDE_DIRS})
-target_include_directories(melonDS PRIVATE ${SLIRP_INCLUDE_DIRS})
-target_include_directories(melonDS PRIVATE ${LIBARCHIVE_INCLUDE_DIRS})
+target_include_directories(melonDS PRIVATE ${SDL2_INCLUDE_DIRS} ${SLIRP_INCLUDE_DIRS} ${LIBARCHIVE_INCLUDE_DIRS})
+target_link_directories(melonDS PRIVATE ${SDL2_LIBRARY_DIRS} ${SLIRP_LIBRARY_DIRS})
+if (NOT APPLE)
+    target_link_directories(melonDS PRIVATE ${LIBARCHIVE_LIBRARY_DIRS})
+endif()
+
 target_include_directories(melonDS PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(melonDS PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(melonDS PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
@@ -86,14 +83,18 @@ else()
 endif()
 
 if (NOT Iconv_IS_BUILT_IN)
-	target_link_libraries(melonDS iconv)
+	target_link_libraries(melonDS ${Iconv_LIBRARIES})
 endif()
 
 if (UNIX)
     option(PORTABLE "Make a portable build that looks for its configuration in the current directory" OFF)
-    target_link_libraries(melonDS dl Qt5::Core Qt5::Gui Qt5::Widgets)
+    target_link_libraries(melonDS Qt5::Core Qt5::Gui Qt5::Widgets)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(melonDS dl)
+    endif()
 elseif (WIN32)
     option(PORTABLE "Make a portable build that looks for its configuration in the current directory" ON)
+    configure_file("${CMAKE_SOURCE_DIR}/melon.rc.in" "${CMAKE_SOURCE_DIR}/melon.rc")
     target_sources(melonDS PUBLIC "${CMAKE_SOURCE_DIR}/melon.rc")
 
     target_link_libraries(melonDS comctl32 d2d1 dwrite uxtheme ws2_32 iphlpapi gdi32)
@@ -111,14 +112,26 @@ endif()
 if (APPLE)
     set_target_properties(melonDS PROPERTIES
                          MACOSX_BUNDLE true
-                         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/melonDS.plist
+                         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/melon.plist.in
                          OUTPUT_NAME melonDS
                          )
 
     # Copy icon into the bundle
-    target_sources(melonDS PRIVATE "${CMAKE_SOURCE_DIR}/melonDS.icns")
-    set_source_files_properties("${CMAKE_SOURCE_DIR}/melonDS.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(melonDS PRIVATE "${CMAKE_SOURCE_DIR}/melon.icns")
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/melon.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 
+    option(MACOS_BUNDLE_LIBS "Bundle libraries with the app on macOS" OFF)
+
+    if (MACOS_BUNDLE_LIBS)
+        # Copy Qt plugins into the bundle
+        get_target_property(qtcocoa_location Qt5::QCocoaIntegrationPlugin LOCATION)
+        target_sources(melonDS PRIVATE "${qtcocoa_location}")
+        set_source_files_properties("${qtcocoa_location}" PROPERTIES MACOSX_PACKAGE_LOCATION MacOS/platforms)
+
+        get_target_property(qtmacstyle_location Qt5::QMacStylePlugin LOCATION)
+        target_sources(melonDS PRIVATE "${qtmacstyle_location}")
+        set_source_files_properties("${qtmacstyle_location}" PROPERTIES MACOSX_PACKAGE_LOCATION MacOS/styles)
+    endif()
 endif()
 
 install(FILES ../../../net.kuribo64.melonDS.desktop DESTINATION ${CMAKE_INSTALL_PREFIX}/share/applications)

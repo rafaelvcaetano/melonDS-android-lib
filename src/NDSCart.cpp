@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2017 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -111,6 +111,10 @@ void DoSavestate(Savestate* file)
 
     file->Var8(&StatusReg);
     file->Var32(&Addr);
+
+    // SRAMManager might now have an old buffer (or one from the future or alternate timeline!)
+    if (!file->Saving)
+        NDSCart_SRAMManager::RequestFlush();
 }
 
 void LoadSave(const char* path, u32 type)
@@ -144,6 +148,9 @@ void LoadSave(const char* path, u32 type)
             memset(SRAM, 0xFF, SRAMLength);
         }
     }
+
+    SRAMFileDirty = false;
+    NDSCart_SRAMManager::Setup(path, SRAM, SRAMLength);
 
     switch (SRAMLength)
     {
@@ -453,12 +460,7 @@ void FlushSRAMFile()
     if (!SRAMFileDirty) return;
 
     SRAMFileDirty = false;
-    FILE* f = Platform::OpenFile(SRAMPath, "wb");
-    if (f)
-    {
-        fwrite(SRAM, SRAMLength, 1, f);
-        fclose(f);
-    }
+    NDSCart_SRAMManager::RequestFlush();
 }
 
 }
@@ -888,45 +890,14 @@ void DecryptSecureArea(u8* out)
     }
 }
 
-
-bool LoadROM(const char* path, const char* sram, bool direct)
+bool LoadROMCommon(u32 filelength, const char *sram, bool direct)
 {
-    // TODO: streaming mode? for really big ROMs or systems with limited RAM
-    // for now we're lazy
-    // also TODO: validate what we're loading!!
-
-    FILE* f = Platform::OpenFile(path, "rb");
-    if (!f)
-    {
-        return false;
-    }
-
-    NDS::Reset();
-
-    fseek(f, 0, SEEK_END);
-    u32 len = (u32)ftell(f);
-
-    CartROMSize = 0x200;
-    while (CartROMSize < len)
-        CartROMSize <<= 1;
-
     u32 gamecode;
-    fseek(f, 0x0C, SEEK_SET);
-    fread(&gamecode, 4, 1, f);
+    memcpy(&gamecode, CartROM + 0x0C, 4);
     printf("Game code: %c%c%c%c\n", gamecode&0xFF, (gamecode>>8)&0xFF, (gamecode>>16)&0xFF, gamecode>>24);
 
-    u8 unitcode;
-    fseek(f, 0x12, SEEK_SET);
-    fread(&unitcode, 1, 1, f);
+    u8 unitcode = CartROM[0x12];
     CartIsDSi = (unitcode & 0x02) != 0;
-
-    CartROM = new u8[CartROMSize];
-    memset(CartROM, 0, CartROMSize);
-    fseek(f, 0, SEEK_SET);
-    fread(CartROM, 1, len, f);
-
-    fclose(f);
-    //CartROM = f;
 
     ROMListEntry romparams;
     if (!ReadROMParams(gamecode, &romparams))
@@ -944,7 +915,7 @@ bool LoadROM(const char* path, const char* sram, bool direct)
     else
         printf("ROM entry: %08X %08X\n", romparams.ROMSize, romparams.SaveMemType);
 
-    if (romparams.ROMSize != len) printf("!! bad ROM size %d (expected %d) rounded to %d\n", len, romparams.ROMSize, CartROMSize);
+    if (romparams.ROMSize != filelength) printf("!! bad ROM size %d (expected %d) rounded to %d\n", filelength, romparams.ROMSize, CartROMSize);
 
     // generate a ROM ID
     // note: most games don't check the actual value
@@ -1027,6 +998,53 @@ bool LoadROM(const char* path, const char* sram, bool direct)
         CartSD = NULL;
 
     return true;
+}
+
+bool LoadROM(const char* path, const char* sram, bool direct)
+{
+    // TODO: streaming mode? for really big ROMs or systems with limited RAM
+    // for now we're lazy
+    // also TODO: validate what we're loading!!
+
+    FILE* f = Platform::OpenFile(path, "rb");
+    if (!f)
+    {
+        return false;
+    }
+
+    NDS::Reset();
+
+    fseek(f, 0, SEEK_END);
+    u32 len = (u32)ftell(f);
+
+    CartROMSize = 0x200;
+    while (CartROMSize < len)
+        CartROMSize <<= 1;
+
+    CartROM = new u8[CartROMSize];
+    memset(CartROM, 0, CartROMSize);
+    fseek(f, 0, SEEK_SET);
+    fread(CartROM, 1, len, f);
+
+    fclose(f);
+
+    return LoadROMCommon(len, sram, direct);
+}
+
+bool LoadROM(const u8* romdata, u32 filelength, const char *sram, bool direct)
+{
+    NDS::Reset();
+
+    u32 len = filelength;
+    CartROMSize = 0x200;
+    while (CartROMSize < len)
+        CartROMSize <<= 1;
+
+    CartROM = new u8[CartROMSize];
+    memset(CartROM, 0, CartROMSize);
+    memcpy(CartROM, romdata, filelength);
+
+    return LoadROMCommon(filelength, sram, direct);
 }
 
 void RelocateSave(const char* path, bool write)

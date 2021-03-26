@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -30,6 +30,7 @@ enum
     HK_FastForward,
     HK_FastForwardToggle,
     HK_FullscreenToggle,
+    HK_SwapScreens,
     HK_SolarSensorDecrease,
     HK_SolarSensorIncrease,
     HK_MAX
@@ -53,7 +54,10 @@ extern int WindowMaximized;
 extern int ScreenRotation;
 extern int ScreenGap;
 extern int ScreenLayout;
+extern int ScreenSwap;
 extern int ScreenSizing;
+extern int ScreenAspectTop;
+extern int ScreenAspectBot;
 extern int IntegerScaling;
 extern int ScreenFilter;
 
@@ -89,6 +93,10 @@ extern char LastROMFolder[1024];
 extern char RecentROMList[10][1024];
 
 extern int EnableCheats;
+
+extern int MouseHide;
+extern int MouseHideSeconds;
+extern int PauseLostFocus;
 
 }
 

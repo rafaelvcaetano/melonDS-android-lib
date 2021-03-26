@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -18,8 +18,6 @@
 
 #ifndef VERSION_H
 #define VERSION_H
-
-#define MELONDS_VERSION    "0.9.1"
 
 #define MELONDS_URL        "http://melonds.kuribo64.net/"
 

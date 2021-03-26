@@ -5,7 +5,7 @@
     <key>CFBundleExecutable</key>
     <string>melonDS</string>
     <key>CFBundleIconFile</key>
-    <string>melonDS.icns</string>
+    <string>melon.icns</string>
     <key>CFBundleIdentifier</key>
     <string>net.kuribo64.melonDS</string>
     <key>CFBundleDevelopmentRegion</key>
@@ -13,12 +13,14 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>
-    <string>0.9.1</string>
+    <string>${MELONDS_VERSION}</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.9.1</string> 
+    <string>${MELONDS_VERSION}</string> 
     <key>NSHumanReadableCopyright</key>
     <string>Licensed under GPLv3</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>We need microphone access so you can use the emulated DS microphone</string>
 </dict>
 </plist>

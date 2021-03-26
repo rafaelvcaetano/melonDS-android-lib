@@ -1,3 +1,21 @@
+/*
+    Copyright 2016-2021 Arisotura, RSDuck
+
+    This file is part of melonDS.
+
+    melonDS is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with melonDS. If not, see http://www.gnu.org/licenses/.
+*/
+
 #include "ARMJIT_Compiler.h"
 
 #include "../Config.h"
@@ -35,7 +53,7 @@ u8* Compiler::RewriteMemAccess(u8* pc)
         return pc + (ptrdiff_t)patch.Offset;
     }
 
-    printf("this is a JIT bug %llx\n", pc);
+    printf("this is a JIT bug %sx\n", pc);
     abort();
 }
 
@@ -129,6 +147,12 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
     OpArg rnMapped = MapReg(rn);
     if (Thumb && rn == 15)
         rnMapped = Imm32(R15 & ~0x2);
+
+    if (flags & memop_Store && flags & (memop_Post|memop_Writeback) && rd == rn)
+    {
+        MOV(32, R(RSCRATCH4), rdMapped);
+        rdMapped = R(RSCRATCH4);
+    }
 
     X64Reg finalAddr = RSCRATCH3;
     if (flags & memop_Post)
@@ -282,13 +306,15 @@ void Compiler::Comp_MemAccess(int rd, int rn, const Op2& op2, int size, int flag
         {
             if (Num == 0)
             {
+                // on Windows param 3 is R8 which is also scratch 4 which can be used for rd
+                if (flags & memop_Store)
+                    MOV(32, R(ABI_PARAM3), rdMapped);
+
                 MOV(64, R(ABI_PARAM2), R(RCPU));
                 if (ABI_PARAM1 != RSCRATCH3)
                     MOV(32, R(ABI_PARAM1), R(RSCRATCH3));
                 if (flags & memop_Store)
                 {
-                    MOV(32, R(ABI_PARAM3), rdMapped);
-
                     switch (size | NDS::ConsoleType)
                     {
                     case 32: CALL((void*)&SlowWrite9<u32, 0>); break;

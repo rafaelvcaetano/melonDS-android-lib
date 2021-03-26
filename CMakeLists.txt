@@ -8,13 +8,28 @@ if (POLICY CMP0076)
     cmake_policy(SET CMP0076 NEW)
 endif()]]
 
-set(CMAKE_OSX_DEPLOYMENT_TARGET "10.9" CACHE STRING "Minimum OS X deployment version")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14" CACHE STRING "Minimum OS X deployment version")
 
 project(melonDS CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
+#[[set(MELONDS_VERSION "0.9.1")
+add_compile_definitions(MELONDS_VERSION="${MELONDS_VERSION}")
+string(REPLACE "." ";" VERSION_LIST ${MELONDS_VERSION})
+# For the melon.rc file used on Windows
+list(GET VERSION_LIST 0 MELONDS_VERSION_MAJOR)
+list(GET VERSION_LIST 1 MELONDS_VERSION_MINOR)
+# Check if melonDS version is three digits or two digits
+list(LENGTH VERSION_LIST MELONDS_VER_LEN)
+if (${MELONDS_VER_LEN} GREATER 2)
+    list(GET VERSION_LIST 2 MELONDS_VERSION_PATCH)
+else()
+    set(MELONDS_VERSION_PATCH 0)
+endif()]]
+
 
 check_library_exists(m pow "" LIBM)
 if(LIBM)
@@ -79,6 +94,10 @@ if (WIN32)
 	option(BUILD_STATIC "Statically link dependencies" OFF)
 endif()
 
+if (BUILD_STATIC AND WIN32)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+endif()
+
 if (ENABLE_LTO)
 	if (WIN32)
 		add_compile_options(-flto)
@@ -89,20 +108,19 @@ if (ENABLE_LTO)
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -flto -fuse-linker-plugin -pie")
 		#add_link_options(-flto -fuse-linker-plugin -pie)
 	endif()
+	#[[if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+		set(CMAKE_AR "gcc-ar")
+		set(CMAKE_RANLIB "gcc-ranlib")
+	elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+		find_program(LLD NAMES ld.lld ld64.lld lld-link)
+		if (NOT LLD STREQUAL "LLD-NOTFOUND")
+			set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=lld")
+			#add_link_options(-fuse-ld=lld)
+		endif()
+		set(CMAKE_AR "llvm-ar")
+		set(CMAKE_RANLIB "llvm-ranlib")
+	endif()]]
 endif()
-
-#[[if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-	set(CMAKE_AR "gcc-ar")
-	set(CMAKE_RANLIB "gcc-ranlib")
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-	find_program(LLD NAMES ld.lld ld64.lld lld-link)
-	if (NOT LLD STREQUAL "LLD-NOTFOUND")
-		set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=lld")
-		#add_link_options(-fuse-ld=lld)
-	endif()
-	set(CMAKE_AR "llvm-ar")
-	set(CMAKE_RANLIB "llvm-ranlib")
-endif()]]
 
 #option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
 

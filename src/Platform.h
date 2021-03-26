@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -20,6 +20,8 @@
 #define PLATFORM_H
 
 #include "types.h"
+
+#include <functional>
 
 namespace Platform
 {
@@ -70,7 +72,7 @@ inline bool LocalFileExists(const char* name)
 void LoadFirmwareUserData(u8* firmwareUserDataEntryPoint);
 
 struct Thread;
-Thread* Thread_Create(void (*func)());
+Thread* Thread_Create(std::function<void()> func);
 void Thread_Free(Thread* thread);
 void Thread_Wait(Thread* thread);
 
@@ -88,7 +90,6 @@ void Mutex_Lock(Mutex* mutex);
 void Mutex_Unlock(Mutex* mutex);
 bool Mutex_TryLock(Mutex* mutex);
 
-void* GL_GetProcAddress(const char* proc);
 
 // local multiplayer comm interface
 // packet type: DS-style TX header (12 bytes) + original 802.11 frame

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -23,7 +23,7 @@
 #include "types.h"
 
 #define SAVESTATE_MAJOR 7
-#define SAVESTATE_MINOR 0
+#define SAVESTATE_MINOR 1
 
 class Savestate
 {

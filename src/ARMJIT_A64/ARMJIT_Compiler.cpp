@@ -1,3 +1,21 @@
+/*
+    Copyright 2016-2021 Arisotura, RSDuck
+
+    This file is part of melonDS.
+
+    melonDS is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with melonDS. If not, see http://www.gnu.org/licenses/.
+*/
+
 #include "ARMJIT_Compiler.h"
 
 #include "../ARMJIT_Internal.h"
@@ -14,6 +32,10 @@ extern char __start__;
 #endif
 
 #include <stdlib.h>
+
+#ifdef __APPLE__
+    #include <pthread.h>
+#endif
 
 using namespace Arm64Gen;
 
@@ -174,10 +196,13 @@ void Compiler::PopRegs(bool saveHiRegs)
 {
     if (saveHiRegs)
     {
-        BitSet16 hiRegsLoaded(RegCache.LoadedRegs & 0x7F00);
+        if (!Thumb && CurInstr.Cond() != 0xE)
+        {
+            BitSet16 hiRegsLoaded(RegCache.LoadedRegs & 0x7F00);
 
-        for (int reg : hiRegsLoaded)
-            LoadReg(reg, RegCache.Mapping[reg]);
+            for (int reg : hiRegsLoaded)
+                LoadReg(reg, RegCache.Mapping[reg]);
+        }
     }
 }
 
@@ -223,7 +248,12 @@ Compiler::Compiler()
     u64 pageSize = sysconf(_SC_PAGE_SIZE);
     u8* pageAligned = (u8*)(((u64)JitMem & ~(pageSize - 1)) + pageSize);
     u64 alignedSize = (((u64)JitMem + sizeof(JitMem)) & ~(pageSize - 1)) - (u64)pageAligned;
-    mprotect(pageAligned, alignedSize, PROT_EXEC | PROT_READ | PROT_WRITE);
+    #ifdef __APPLE__
+        pageAligned = (u8*)mmap(NULL, 1024*1024*16, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT,-1, 0);
+        pthread_jit_write_protect_np(false);
+    #else
+        mprotect(pageAligned, alignedSize, PROT_EXEC | PROT_READ | PROT_WRITE);
+    #endif
 
     SetCodeBase(pageAligned, pageAligned);
     JitMemMainSize = alignedSize;
@@ -326,9 +356,11 @@ Compiler::Compiler()
         {
             for (int size = 0; size < 3; size++)
             {
-                for (int reg = 0; reg < 8; reg++)
+                for (int reg = 0; reg < 32; reg++)
                 {
-                    ARM64Reg rdMapped = (ARM64Reg)(W19 + reg);
+                    if (!(reg == W4 || (reg >= W19 && reg <= W26)))
+                        continue;
+                    ARM64Reg rdMapped = (ARM64Reg)reg;
                     PatchedStoreFuncs[consoleType][num][size][reg] = GetRXPtr();
                     if (num == 0)
                     {
@@ -711,7 +743,9 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
                 QuickCallFunction(X1, InterpretTHUMB[CurInstr.Info.Kind]);
             }
             else
+            {
                 (this->*comp)();
+            }
         }
         else
         {
@@ -727,10 +761,12 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
                 }
             }
             else if (cond == 0xF)
+            {
                 Comp_AddCycles_C();
+            }
             else
             {
-                IrregularCycles = false;
+                IrregularCycles = comp == NULL;
 
                 FixupBranch skipExecute;
                 if (cond < 0xE)
@@ -763,7 +799,9 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
                         SetJumpTarget(skipNop);
                     }
                     else
+                    {
                         SetJumpTarget(skipExecute);
+                    }
                 }
 
             }

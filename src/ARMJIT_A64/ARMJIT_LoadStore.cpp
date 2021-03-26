@@ -1,3 +1,21 @@
+/*
+    Copyright 2016-2021 Arisotura, RSDuck
+
+    This file is part of melonDS.
+
+    melonDS is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with melonDS. If not, see http://www.gnu.org/licenses/.
+*/
+
 #include "ARMJIT_Compiler.h"
 
 #include "../Config.h"
@@ -116,6 +134,12 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
         rnMapped = W3;
     }
 
+    if (flags & memop_Store && flags & (memop_Post|memop_Writeback) && rd == rn)
+    {
+        MOV(W4, rdMapped);
+        rdMapped = W4;
+    }
+
     ARM64Reg finalAddr = W0;
     if (flags & memop_Post)
     {
@@ -170,10 +194,10 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
         ptrdiff_t memopStart = GetCodeOffset();
         LoadStorePatch patch;
 
+        assert((rdMapped >= W19 && rdMapped <= W26) || rdMapped == W4);
         patch.PatchFunc = flags & memop_Store
-            ? PatchedStoreFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][rdMapped - W19]
-            : PatchedLoadFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][!!(flags & memop_SignExtend)][rdMapped - W19];
-        assert(rdMapped - W19 >= 0 && rdMapped - W19 < 8);
+            ? PatchedStoreFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][rdMapped]
+            : PatchedLoadFuncs[NDS::ConsoleType][Num][__builtin_ctz(size) - 3][!!(flags & memop_SignExtend)][rdMapped];
 
         MOVP2R(X7, Num == 0 ? ARMJIT_Memory::FastMem9Start : ARMJIT_Memory::FastMem7Start);
 

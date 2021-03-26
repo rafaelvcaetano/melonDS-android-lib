@@ -1,3 +1,21 @@
+/*
+    Copyright 2016-2021 Arisotura, RSDuck
+
+    This file is part of melonDS.
+
+    melonDS is free software: you can redistribute it and/or modify it under
+    the terms of the GNU General Public License as published by the Free
+    Software Foundation, either version 3 of the License, or (at your option)
+    any later version.
+
+    melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with melonDS. If not, see http://www.gnu.org/licenses/.
+*/
+
 #include "ARMJIT.h"
 
 #include <string.h>
@@ -25,10 +43,14 @@
 #include "Wifi.h"
 #include "NDSCart.h"
 
+#if defined(__APPLE__) && defined(__aarch64__)
+    #include <pthread.h>
+#endif
+
 #include "ARMJIT_x64/ARMJIT_Offsets.h"
-static_assert(offsetof(ARM, CPSR) == ARM_CPSR_offset);
-static_assert(offsetof(ARM, Cycles) == ARM_Cycles_offset);
-static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset);
+static_assert(offsetof(ARM, CPSR) == ARM_CPSR_offset, "");
+static_assert(offsetof(ARM, Cycles) == ARM_Cycles_offset, "");
+static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset, "");
 
 namespace ARMJIT
 {
@@ -298,6 +320,9 @@ void Init()
 
 void DeInit()
 {
+    #if defined(__APPLE__) && defined(__aarch64__)
+        pthread_jit_write_protect_np(false);
+    #endif
     ResetBlockCache();
     ARMJIT_Memory::DeInit();
 
@@ -306,6 +331,9 @@ void DeInit()
 
 void Reset()
 {
+    #if defined(__APPLE__) && defined(__aarch64__)
+        pthread_jit_write_protect_np(false);
+    #endif
     ResetBlockCache();
 
     ARMJIT_Memory::Reset();
@@ -884,8 +912,13 @@ void CompileBlock(ARM* cpu)
         block->StartAddrLocal = localAddr;
 
         FloodFillSetFlags(instrs, i - 1, 0xF);
-
+        #if defined(__APPLE__) && defined(__aarch64__)
+            pthread_jit_write_protect_np(false);
+        #endif
         block->EntryPoint = JITCompiler->CompileBlock(cpu, thumb, instrs, i);
+        #if defined(__APPLE__) && defined(__aarch64__)
+            pthread_jit_write_protect_np(true);
+        #endif
 
         JIT_DEBUGPRINT("block start %p\n", block->EntryPoint);
     }
