@@ -72,6 +72,8 @@ void Init_ROM();
 // deinitialize the ROM handling utility
 void DeInit_ROM();
 
+int SetupDSiNAND();
+
 // load the BIOS/firmware and boot from it
 int LoadBIOS();
 

@@ -12,6 +12,7 @@
 #include "../Platform.h"
 #include "../Config.h"
 #include "../AREngine.h"
+#include "../DSi.h"
 #include "SharedConfig.h"
 #include "PlatformConfig.h"
 #include "FrontendUtil.h"
@@ -173,6 +174,15 @@ namespace MelonDSAndroid
         currentLoadDirect = loadDirect;
         currentLoadGbaRom = loadGbaRom;
         currentRunMode = ROM;
+
+        if (NDS::ConsoleType == 1)
+        {
+            DSi::CloseDSiNAND();
+            if (Frontend::SetupDSiNAND() != Frontend::Load_OK)
+            {
+                return 3;
+            }
+        }
 
         bool loaded = NDS::LoadROM(romPath, sramPath, loadDirect);
         if (!loaded)
