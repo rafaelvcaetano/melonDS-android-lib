@@ -96,6 +96,11 @@ namespace Platform
 
     FILE* OpenFile(const char* path, const char* mode, bool mustexist)
     {
+        if (path == nullptr)
+        {
+            return nullptr;
+        }
+
         // If it's a standard absolute file path, open it a simple file. If not, delegate to the file handler
         if (path[0] == '/')
         {
