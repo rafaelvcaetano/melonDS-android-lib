@@ -124,19 +124,25 @@ void LoadSave(const char* path, u32 type)
     strncpy(SRAMPath, path, 1023);
     SRAMPath[1023] = '\0';
 
+    bool sramLoaded = false;
     FILE* f = Platform::OpenFile(path, "rb");
     if (f)
     {
         fseek(f, 0, SEEK_END);
-        SRAMLength = (u32)ftell(f);
-        SRAM = new u8[SRAMLength];
+        u32 length = (u32)ftell(f);
+        if (length > 0) {
+            SRAMLength = length;
+            SRAM = new u8[SRAMLength];
 
-        fseek(f, 0, SEEK_SET);
-        fread(SRAM, SRAMLength, 1, f);
+            fseek(f, 0, SEEK_SET);
+            fread(SRAM, SRAMLength, 1, f);
 
+            sramLoaded = true;
+        }
         fclose(f);
     }
-    else
+
+    if (!sramLoaded)
     {
         if (type > 9) type = 0;
         int sramlen[] = {0, 512, 8192, 65536, 128*1024, 256*1024, 512*1024, 1024*1024, 8192*1024, 32768*1024};
