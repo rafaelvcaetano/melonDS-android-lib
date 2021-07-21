@@ -21,7 +21,6 @@
 
 #define MIC_BUFFER_SIZE 2048
 
-u32* frameBuffer;
 oboe::AudioStream *audioStream;
 oboe::AudioStream *micInputStream;
 OboeCallback *outputCallback;
@@ -30,6 +29,7 @@ AndroidARCodeFile *arCodeFile;
 
 namespace MelonDSAndroid
 {
+    u32* textureBuffer;
     char* internalFilesDir;
     int micInputType;
     AAssetManager* assetManager;
@@ -49,13 +49,13 @@ namespace MelonDSAndroid
     void setupMicInputStream();
     void copyString(char** dest, const char* source);
 
-    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler) {
+    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler, u32* textureBufferPointer) {
         copyString(&internalFilesDir, emulatorConfiguration.internalFilesDir);
         assetManager = androidAssetManager;
         fileHandler = androidFileHandler;
         firmwareConfiguration = emulatorConfiguration.firmwareConfiguration;
+        textureBuffer = textureBufferPointer;
 
-        frameBuffer = new u32[256 * 384 * 4];
         micInputType = emulatorConfiguration.micSource;
 
         if (emulatorConfiguration.soundEnabled) {
@@ -211,8 +211,6 @@ namespace MelonDSAndroid
 
         if (micInputStream != NULL)
             micInputStream->requestStart();
-
-        memset(frameBuffer, 0, 256 * 384 * 4);
     }
 
     u32 loop()
@@ -222,8 +220,8 @@ namespace MelonDSAndroid
         int frontbuf = GPU::FrontBuffer;
         if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
         {
-            memcpy(frameBuffer, GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
-            memcpy(&frameBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
+            memcpy(textureBuffer, GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
+            memcpy(&textureBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
         }
 
         return nLines;
@@ -258,11 +256,6 @@ namespace MelonDSAndroid
             int result = bootFirmware();
             return result == 0;
         }
-    }
-
-    void copyFrameBuffer(void* dstBuffer)
-    {
-        memcpy(dstBuffer, frameBuffer, 256 * 384 * 4);
     }
 
     void updateMic()
@@ -373,8 +366,7 @@ namespace MelonDSAndroid
         fileHandler = NULL;
         assetManager = NULL;
 
-        free(frameBuffer);
-        frameBuffer = NULL;
+        textureBuffer = NULL;
     }
 
     void setupAudioOutputStream()

@@ -52,7 +52,7 @@ namespace MelonDSAndroid {
     extern AndroidFileHandler* fileHandler;
     extern FirmwareConfiguration firmwareConfiguration;
 
-    extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler);
+    extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler, u32* textureBufferPointer);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 
@@ -75,7 +75,6 @@ namespace MelonDSAndroid {
     extern void pause();
     extern void resume();
     extern bool reset();
-    extern void copyFrameBuffer(void* dstBuffer);
     extern void updateMic();
     extern bool saveState(const char* path);
     extern bool loadState(const char* path);
