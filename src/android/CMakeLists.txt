@@ -4,6 +4,7 @@ set(ANDROID_SOURCES
         InputAndroid.cpp
         LAN_PCap.cpp
         LAN_Socket.cpp
+        MelonAudioStreamErrorCallback.cpp
         MelonDS.cpp
         OboeCallback.cpp
         MicInputOboeCallback.cpp

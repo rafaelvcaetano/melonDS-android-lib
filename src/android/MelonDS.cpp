@@ -2,6 +2,7 @@
 #include "MelonDS.h"
 #include "FileUtils.h"
 #include "OboeCallback.h"
+#include "MelonAudioStreamErrorCallback.h"
 #include "MicInputOboeCallback.h"
 #include "AndroidARCodeFile.h"
 #include "../NDS.h"
@@ -22,6 +23,7 @@
 #define MIC_BUFFER_SIZE 2048
 
 oboe::AudioStream *audioStream;
+oboe::AudioStreamErrorCallback *audioStreamErrorCallback;
 oboe::AudioStream *micInputStream;
 OboeCallback *outputCallback;
 MicInputOboeCallback *micInputCallback;
@@ -46,7 +48,9 @@ namespace MelonDSAndroid
     RunMode currentRunMode;
 
     void setupAudioOutputStream();
+    void cleanupAudioOutputStream();
     void setupMicInputStream();
+    void resetAudioOutputStream();
     void copyString(char** dest, const char* source);
 
     void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler, u32* textureBufferPointer) {
@@ -339,14 +343,7 @@ namespace MelonDSAndroid
         currentGbaRomPath = NULL;
         currentGbaSramPath = NULL;
 
-        if (audioStream != NULL) {
-            audioStream->requestStop();
-            audioStream->close();
-            delete audioStream;
-            delete outputCallback;
-            audioStream = NULL;
-            outputCallback = NULL;
-        }
+        cleanupAudioOutputStream();
 
         if (micInputStream != NULL) {
             micInputStream->requestStop();
@@ -372,6 +369,7 @@ namespace MelonDSAndroid
     void setupAudioOutputStream()
     {
         outputCallback = new OboeCallback();
+        audioStreamErrorCallback = new MelonAudioStreamErrorCallback(resetAudioOutputStream);
         oboe::AudioStreamBuilder streamBuilder;
         streamBuilder.setChannelCount(2);
         streamBuilder.setFramesPerCallback(1024);
@@ -381,14 +379,33 @@ namespace MelonDSAndroid
         streamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         streamBuilder.setSharingMode(oboe::SharingMode::Shared);
         streamBuilder.setCallback(outputCallback);
+        streamBuilder.setErrorCallback(audioStreamErrorCallback);
 
         oboe::Result result = streamBuilder.openStream(&audioStream);
         if (result != oboe::Result::OK) {
             fprintf(stderr, "Failed to init audio stream");
             delete outputCallback;
+            delete audioStreamErrorCallback;
             outputCallback = NULL;
+            audioStreamErrorCallback = NULL;
         } else {
             Frontend::Init_Audio(audioStream->getSampleRate());
+        }
+    }
+
+    void cleanupAudioOutputStream()
+    {
+        if (audioStream != NULL) {
+            if (audioStream->getState() < oboe::StreamState::Closing) {
+                audioStream->requestStop();
+                audioStream->close();
+            }
+            delete audioStream;
+            delete outputCallback;
+            delete audioStreamErrorCallback;
+            audioStream = NULL;
+            outputCallback = NULL;
+            audioStreamErrorCallback = NULL;
         }
     }
 
@@ -414,6 +431,15 @@ namespace MelonDSAndroid
             micInputCallback = NULL;
         } else {
             Frontend::Mic_SetExternalBuffer(micInputCallback->buffer, MIC_BUFFER_SIZE);
+        }
+    }
+
+    void resetAudioOutputStream()
+    {
+        cleanupAudioOutputStream();
+        setupAudioOutputStream();
+        if (audioStream != NULL) {
+            audioStream->requestStart();
         }
     }
 
