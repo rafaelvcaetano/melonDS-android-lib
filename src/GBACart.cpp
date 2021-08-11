@@ -136,21 +136,30 @@ void LoadSave(const char* path)
 {
     if (SRAM) delete[] SRAM;
 
-    strncpy(SRAMPath, path, 1023);
-    SRAMPath[1023] = '\0';
     SRAMLength = 0;
 
-    FILE* f = Platform::OpenFile(SRAMPath, "r+b");
-    if (f)
+    if (path != nullptr)
     {
-        fseek(f, 0, SEEK_END);
-        SRAMLength = (u32)ftell(f);
-        SRAM = new u8[SRAMLength];
+        strncpy(SRAMPath, path, 1023);
+        SRAMPath[1023] = '\0';
 
-        fseek(f, 0, SEEK_SET);
-        fread(SRAM, SRAMLength, 1, f);
+        FILE* f = Platform::OpenFile(SRAMPath, "r+b");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            SRAMLength = (u32) ftell(f);
+            SRAM = new u8[SRAMLength];
 
-        SRAMFile = f;
+            fseek(f, 0, SEEK_SET);
+            fread(SRAM, SRAMLength, 1, f);
+
+            SRAMFile = f;
+        }
+    }
+    else
+    {
+        SRAMPath[0] = '\0';
+        SRAM = new u8[0];
+        SRAMFile = nullptr;
     }
 
     switch (SRAMLength)
