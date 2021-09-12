@@ -33,6 +33,7 @@ namespace MelonDSAndroid
 {
     u32* textureBuffer;
     char* internalFilesDir;
+    int audioLatency;
     int micInputType;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
@@ -60,6 +61,7 @@ namespace MelonDSAndroid
         firmwareConfiguration = emulatorConfiguration.firmwareConfiguration;
         textureBuffer = textureBufferPointer;
 
+        audioLatency = emulatorConfiguration.audioLatency;
         micInputType = emulatorConfiguration.micSource;
 
         if (emulatorConfiguration.soundEnabled) {
@@ -136,21 +138,22 @@ namespace MelonDSAndroid
 
     void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
         int oldMicSource = micInputType;
+        int oldAudioLatency = audioLatency;
 
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
+        audioLatency = emulatorConfiguration.audioLatency;
         micInputType = emulatorConfiguration.micSource;
 
         if (emulatorConfiguration.soundEnabled) {
             if (audioStream == NULL) {
                 setupAudioOutputStream();
+            } else if (oldAudioLatency != audioLatency) {
+                // Recreate audio stream with new settings
+                cleanupAudioOutputStream();
+                setupAudioOutputStream();
             }
         } else if (audioStream != NULL) {
-            audioStream->requestStop();
-            audioStream->close();
-            delete audioStream;
-            delete outputCallback;
-            audioStream = NULL;
-            outputCallback = NULL;
+            cleanupAudioOutputStream();
         }
 
         if (oldMicSource == 2 && micInputType != 2) {
@@ -368,6 +371,21 @@ namespace MelonDSAndroid
 
     void setupAudioOutputStream()
     {
+        oboe::PerformanceMode performanceMode;
+        switch (audioLatency) {
+            case 0:
+                performanceMode = oboe::PerformanceMode::LowLatency;
+                break;
+            case 1:
+                performanceMode = oboe::PerformanceMode::None;
+                break;
+            case 2:
+                performanceMode = oboe::PerformanceMode::PowerSaving;
+                break;
+            default:
+                performanceMode = oboe::PerformanceMode::None;
+        }
+
         outputCallback = new OboeCallback();
         audioStreamErrorCallback = new MelonAudioStreamErrorCallback(resetAudioOutputStream);
         oboe::AudioStreamBuilder streamBuilder;
@@ -376,7 +394,7 @@ namespace MelonDSAndroid
         streamBuilder.setSampleRate(48000);
         streamBuilder.setFormat(oboe::AudioFormat::I16);
         streamBuilder.setDirection(oboe::Direction::Output);
-        streamBuilder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+        streamBuilder.setPerformanceMode(performanceMode);
         streamBuilder.setSharingMode(oboe::SharingMode::Shared);
         streamBuilder.setCallback(outputCallback);
         streamBuilder.setErrorCallback(audioStreamErrorCallback);
