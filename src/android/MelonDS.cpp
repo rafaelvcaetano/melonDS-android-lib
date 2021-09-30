@@ -33,6 +33,7 @@ namespace MelonDSAndroid
 {
     u32* textureBuffer;
     char* internalFilesDir;
+    int volume;
     int audioLatency;
     int micInputType;
     AAssetManager* assetManager;
@@ -62,6 +63,7 @@ namespace MelonDSAndroid
         textureBuffer = textureBufferPointer;
 
         audioLatency = emulatorConfiguration.audioLatency;
+        volume = emulatorConfiguration.volume;
         micInputType = emulatorConfiguration.micSource;
 
         if (emulatorConfiguration.soundEnabled) {
@@ -138,16 +140,18 @@ namespace MelonDSAndroid
 
     void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
         int oldMicSource = micInputType;
+        int oldVolume = volume;
         int oldAudioLatency = audioLatency;
 
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
         audioLatency = emulatorConfiguration.audioLatency;
+        volume = emulatorConfiguration.volume;
         micInputType = emulatorConfiguration.micSource;
 
-        if (emulatorConfiguration.soundEnabled) {
+        if (emulatorConfiguration.soundEnabled && volume > 0) {
             if (audioStream == NULL) {
                 setupAudioOutputStream();
-            } else if (oldAudioLatency != audioLatency) {
+            } else if (oldAudioLatency != audioLatency || oldVolume != volume) {
                 // Recreate audio stream with new settings
                 cleanupAudioOutputStream();
                 setupAudioOutputStream();
@@ -386,7 +390,7 @@ namespace MelonDSAndroid
                 performanceMode = oboe::PerformanceMode::None;
         }
 
-        outputCallback = new OboeCallback();
+        outputCallback = new OboeCallback(volume);
         audioStreamErrorCallback = new MelonAudioStreamErrorCallback(resetAudioOutputStream);
         oboe::AudioStreamBuilder streamBuilder;
         streamBuilder.setChannelCount(2);

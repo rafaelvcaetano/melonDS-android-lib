@@ -3,6 +3,9 @@
 #include "../SPU.h"
 #include "FrontendUtil.h"
 
+OboeCallback::OboeCallback(int volume) : _volume(volume) {
+}
+
 oboe::DataCallbackResult
 OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t numFrames) {
     int len = numFrames;
@@ -33,6 +36,6 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
         num_in = len_in - margin;
     }
 
-    Frontend::AudioOut_Resample(buf_in, num_in, (s16*) audioData, len, 256);
+    Frontend::AudioOut_Resample(buf_in, num_in, (s16*) audioData, len, _volume);
     return oboe::DataCallbackResult::Continue;
 }
