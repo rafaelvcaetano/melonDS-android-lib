@@ -38,7 +38,6 @@ namespace MelonDSAndroid
     int micInputType;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
-    FirmwareConfiguration firmwareConfiguration;
 
     // Variables used to keep the current state so that emulation can be reset
     char* currentRomPath = NULL;
@@ -59,7 +58,6 @@ namespace MelonDSAndroid
         copyString(&internalFilesDir, emulatorConfiguration.internalFilesDir);
         assetManager = androidAssetManager;
         fileHandler = androidFileHandler;
-        firmwareConfiguration = emulatorConfiguration.firmwareConfiguration;
         textureBuffer = textureBufferPointer;
 
         audioLatency = emulatorConfiguration.audioLatency;
@@ -76,15 +74,21 @@ namespace MelonDSAndroid
 
         // Internal BIOS and Firmware can only be used for DS
         if (emulatorConfiguration.userInternalFirmwareAndBios) {
-            strcpy(Config::BIOS7Path, "?bios/drastic_bios_arm7.bin");
-            strcpy(Config::BIOS9Path, "?bios/drastic_bios_arm9.bin");
+            memcpy(Config::FirmwareUsername, emulatorConfiguration.firmwareConfiguration.username, sizeof(emulatorConfiguration.firmwareConfiguration.username));
+            memcpy(Config::FirmwareMessage, emulatorConfiguration.firmwareConfiguration.message, sizeof(emulatorConfiguration.firmwareConfiguration.message));
+            Config::FirmwareLanguage = emulatorConfiguration.firmwareConfiguration.language;
+            Config::FirmwareBirthdayMonth = emulatorConfiguration.firmwareConfiguration.birthdayMonth;
+            Config::FirmwareBirthdayDay = emulatorConfiguration.firmwareConfiguration.birthdayDay;
+            Config::FirmwareFavouriteColour = emulatorConfiguration.firmwareConfiguration.favouriteColour;
             memcpy(Config::InternalMacAddress, emulatorConfiguration.firmwareConfiguration.macAddress, sizeof(emulatorConfiguration.firmwareConfiguration.macAddress));
             Config::ConsoleType = 0;
+            Config::ExternalBIOSEnable = 0;
             NDS::SetConsoleType(0);
         } else {
             // DS BIOS files are always required
             strcpy(Config::BIOS7Path, emulatorConfiguration.dsBios7Path);
             strcpy(Config::BIOS9Path, emulatorConfiguration.dsBios9Path);
+            Config::ExternalBIOSEnable = 1;
 
             if (emulatorConfiguration.consoleType == 0) {
                 strcpy(Config::FirmwarePath, emulatorConfiguration.dsFirmwarePath);
@@ -104,7 +108,7 @@ namespace MelonDSAndroid
         Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
 #endif
 
-        Config::UseInternalFirmware = emulatorConfiguration.userInternalFirmwareAndBios;
+        Config::FirmwareOverrideSettings = false;
         Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress ? 1 : 0;
         Config::SocketBindAnyAddr = 1;
 
