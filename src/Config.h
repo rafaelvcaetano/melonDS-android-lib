@@ -41,13 +41,20 @@ bool HasConfigFile(const char* fileName);
 void Load();
 void Save();
 
-extern bool UseInternalFirmware;
-
+extern int ExternalBIOSEnable;
 extern char BIOS9Path[1024];
 extern char BIOS7Path[1024];
 extern char FirmwarePath[1024];
 extern int DLDIEnable;
 extern char DLDISDPath[1024];
+
+extern char FirmwareUsername[64];
+extern int FirmwareLanguage;
+extern bool FirmwareOverrideSettings;
+extern int FirmwareBirthdayMonth;
+extern int FirmwareBirthdayDay;
+extern int FirmwareFavouriteColour;
+extern char FirmwareMessage[1024];
 
 extern char DSiBIOS9Path[1024];
 extern char DSiBIOS7Path[1024];
@@ -58,6 +65,7 @@ extern char DSiSDPath[1024];
 
 extern int RandomizeMAC;
 extern u8 InternalMacAddress[6];
+extern int AudioBitrate;
 
 #ifdef JIT_ENABLED
 extern int JIT_Enable;

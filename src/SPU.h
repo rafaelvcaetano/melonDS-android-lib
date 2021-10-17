@@ -31,7 +31,12 @@ void Stop();
 
 void DoSavestate(Savestate* file);
 
+// 0=none 1=linear 2=cosine 3=cubic
+void SetInterpolation(int type);
+
 void SetBias(u16 bias);
+void SetDegrade10Bit(bool enable);
+void SetApplyBias(bool enable);
 
 void Mix(u32 dummy);
 
@@ -73,6 +78,7 @@ public:
     bool KeyOn;
     u32 Timer;
     s32 Pos;
+    s16 PrevSample[3];
     s16 CurSample;
     u16 NoiseVal;
 
@@ -134,8 +140,17 @@ public:
         case 1: return Run<1>(); break;
         case 2: return Run<2>(); break;
         case 3:
-            if      (Num >= 14) return Run<4>();
-            else if (Num >= 8)  return Run<3>();
+            if (Num >= 14)
+            {
+                return Run<4>();
+                break;
+            }
+            else if (Num >= 8)
+            {
+                return Run<3>();
+                break;
+            }
+            [[fallthrough]];
         default:
             return 0;
         }
