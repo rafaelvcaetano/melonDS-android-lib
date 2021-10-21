@@ -34,6 +34,8 @@ namespace MelonDSAndroid {
         int consoleType;
         bool soundEnabled;
         int volume;
+        int audioInterpolation;
+        int audioBitrate;
         int audioLatency;
         int micSource;
         FirmwareConfiguration firmwareConfiguration;

@@ -108,6 +108,7 @@ namespace MelonDSAndroid
         Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
 #endif
 
+        Config::AudioBitrate = emulatorConfiguration.audioBitrate;
         Config::FirmwareOverrideSettings = false;
         Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress ? 1 : 0;
         Config::SocketBindAnyAddr = 1;
@@ -115,6 +116,7 @@ namespace MelonDSAndroid
         NDS::Init();
         GPU::InitRenderer(0);
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
+        SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
     }
 
     void setCodeList(std::list<Cheat> cheats)
@@ -147,7 +149,9 @@ namespace MelonDSAndroid
         int oldVolume = volume;
         int oldAudioLatency = audioLatency;
 
+        Config::AudioBitrate = emulatorConfiguration.audioBitrate;
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
+        SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
         audioLatency = emulatorConfiguration.audioLatency;
         volume = emulatorConfiguration.volume;
         micInputType = emulatorConfiguration.micSource;
