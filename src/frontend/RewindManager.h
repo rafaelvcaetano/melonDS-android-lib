@@ -16,20 +16,32 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
-#ifndef SHAREDCONFIG_H
-#define SHAREDCONFIG_H
+#ifndef REWINDMANAGER_H
+#define REWINDMANAGER_H
 
-namespace Config
+#include <list>
+
+#include "../types.h"
+
+namespace RewindManager
 {
 
-extern int ConsoleType;
-extern int DirectBoot;
-extern int SavestateRelocSRAM;
+struct RewindSaveState {
+    u8* buffer;
+    u32 bufferSize;
+    u8* screenshot;
+    u32 screenshotSize;
+    int frame;
+};
 
-extern int RewindEnabled;
-extern int RewindCaptureSpacingSeconds;
-extern int RewindLengthSeconds;
+extern void SetRewindBufferSizes(u32 savestateSizeBytes, u32 screenshotSizeBytes);
+extern bool ShouldCaptureState(int currentFrame);
+extern RewindSaveState GetNextRewindSaveState(int currentFrame);
+extern std::list<RewindSaveState> GetRewindWindow();
+extern void OnRewindFromState(RewindSaveState state);
+extern void TrimRewindWindowIfRequired();
+extern void Reset();
 
 }
 
-#endif
+#endif // REWINDMANAGER_H
