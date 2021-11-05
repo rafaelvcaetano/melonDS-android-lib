@@ -28,9 +28,6 @@
 class Savestate
 {
 public:
-    Savestate(const char* filename, bool save);
-    ~Savestate();
-
     bool Error;
 
     bool Saving;
@@ -39,16 +36,18 @@ public:
 
     u32 CurSection;
 
-    void Section(const char* magic);
+    virtual ~Savestate() {};
 
-    void Var8(u8* var);
-    void Var16(u16* var);
-    void Var32(u32* var);
-    void Var64(u64* var);
+    virtual void Section(const char* magic) = 0;
 
-    void Bool32(bool* var);
+    virtual void Var8(u8* var) = 0;
+    virtual void Var16(u16* var) = 0;
+    virtual void Var32(u32* var) = 0;
+    virtual void Var64(u64* var) = 0;
 
-    void VarArray(void* data, u32 len);
+    virtual void Bool32(bool* var) = 0;
+
+    virtual void VarArray(void* data, u32 len) = 0;
 
     bool IsAtleastVersion(u32 major, u32 minor)
     {
@@ -57,8 +56,8 @@ public:
         return false;
     }
 
-private:
-    FILE* file;
+protected:
+    const char* MAGIC = "MELN";
 };
 
 #endif // SAVESTATE_H

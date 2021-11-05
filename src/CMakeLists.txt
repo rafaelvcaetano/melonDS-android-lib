@@ -27,6 +27,7 @@ add_library(core STATIC
 	DSi_SD.cpp
 	DSi_SPI_TSC.cpp
 	FIFO.h
+	FileSavestate.cpp
 	GBACart.cpp
 	GPU.cpp
 	GPU2D.cpp
@@ -34,6 +35,7 @@ add_library(core STATIC
 	GPU3D.cpp
 	GPU3D_Soft.cpp
 	melonDLDI.h
+	MemorySavestate.cpp
 	NDS.cpp
 	NDSCart.cpp
 	NDSCart_SRAMManager.cpp
@@ -41,7 +43,6 @@ add_library(core STATIC
 	ROMList.h
 	FreeBIOS.h
 	RTC.cpp
-	Savestate.cpp
 	SPI.cpp
 	SPU.cpp
 	types.h

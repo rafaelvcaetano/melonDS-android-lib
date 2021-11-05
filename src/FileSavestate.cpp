@@ -16,12 +16,11 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
-#include <stdio.h>
-#include "Savestate.h"
+#include "FileSavestate.h"
 #include "Platform.h"
 
 /*
-    Savestate format
+    File savestate format
 
     header:
     00 - magic MELN
@@ -43,10 +42,8 @@
     * different minor means adjustments may have to be made
 */
 
-Savestate::Savestate(const char* filename, bool save)
+FileSavestate::FileSavestate(const char* filename, bool save)
 {
-    const char* magic = "MELN";
-
     Error = false;
 
     if (save)
@@ -63,7 +60,7 @@ Savestate::Savestate(const char* filename, bool save)
         VersionMajor = SAVESTATE_MAJOR;
         VersionMinor = SAVESTATE_MINOR;
 
-        fwrite(magic, 4, 1, file);
+        fwrite(MAGIC, 4, 1, file);
         fwrite(&VersionMajor, 2, 1, file);
         fwrite(&VersionMinor, 2, 1, file);
         fseek(file, 8, SEEK_CUR); // length to be fixed later
@@ -87,7 +84,7 @@ Savestate::Savestate(const char* filename, bool save)
         u32 buf = 0;
 
         fread(&buf, 4, 1, file);
-        if (buf != ((u32*)magic)[0])
+        if (buf != ((u32*)MAGIC)[0])
         {
             printf("savestate: invalid magic %08X\n", buf);
             Error = true;
@@ -128,7 +125,7 @@ Savestate::Savestate(const char* filename, bool save)
     CurSection = -1;
 }
 
-Savestate::~Savestate()
+FileSavestate::~FileSavestate()
 {
     if (Error) return;
 
@@ -154,7 +151,7 @@ Savestate::~Savestate()
     if (file) fclose(file);
 }
 
-void Savestate::Section(const char* magic)
+void FileSavestate::Section(const char* magic)
 {
     if (Error) return;
 
@@ -205,7 +202,7 @@ void Savestate::Section(const char* magic)
     }
 }
 
-void Savestate::Var8(u8* var)
+void FileSavestate::Var8(u8* var)
 {
     if (Error) return;
 
@@ -219,7 +216,7 @@ void Savestate::Var8(u8* var)
     }
 }
 
-void Savestate::Var16(u16* var)
+void FileSavestate::Var16(u16* var)
 {
     if (Error) return;
 
@@ -233,7 +230,7 @@ void Savestate::Var16(u16* var)
     }
 }
 
-void Savestate::Var32(u32* var)
+void FileSavestate::Var32(u32* var)
 {
     if (Error) return;
 
@@ -247,7 +244,7 @@ void Savestate::Var32(u32* var)
     }
 }
 
-void Savestate::Var64(u64* var)
+void FileSavestate::Var64(u64* var)
 {
     if (Error) return;
 
@@ -261,7 +258,7 @@ void Savestate::Var64(u64* var)
     }
 }
 
-void Savestate::Bool32(bool* var)
+void FileSavestate::Bool32(bool* var)
 {
     // for compability
     if (Saving)
@@ -277,7 +274,7 @@ void Savestate::Bool32(bool* var)
     }
 }
 
-void Savestate::VarArray(void* data, u32 len)
+void FileSavestate::VarArray(void* data, u32 len)
 {
     if (Error) return;
 

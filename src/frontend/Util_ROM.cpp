@@ -28,6 +28,7 @@
 #include "Config.h"
 #include "SharedConfig.h"
 #include "Platform.h"
+#include "FileSavestate.h"
 
 #include "NDS.h"
 #include "DSi.h"
@@ -721,13 +722,13 @@ bool LoadState(const char* filename)
     u32 oldGBACartCRC = GBACart::CartCRC;
 
     // backup
-    Savestate* backup = new Savestate("timewarp.mln", true);
+    FileSavestate* backup = new FileSavestate("timewarp.mln", true);
     NDS::DoSavestate(backup);
     delete backup;
 
     bool failed = false;
 
-    Savestate* state = new Savestate(filename, false);
+    FileSavestate* state = new FileSavestate(filename, false);
     if (state->Error)
     {
         delete state;
@@ -735,7 +736,7 @@ bool LoadState(const char* filename)
         //uiMsgBoxError(MainWindow, "Error", "Could not load savestate file.");
 
         // current state might be crapoed, so restore from sane backup
-        state = new Savestate("timewarp.mln", false);
+        state = new FileSavestate("timewarp.mln", false);
         failed = true;
     }
 
@@ -785,7 +786,7 @@ bool LoadState(const char* filename)
 
 bool SaveState(const char* filename)
 {
-    Savestate* state = new Savestate(filename, true);
+    FileSavestate* state = new FileSavestate(filename, true);
     if (state->Error)
     {
         delete state;
@@ -817,7 +818,7 @@ void UndoStateLoad()
     // pray that this works
     // what do we do if it doesn't???
     // but it should work.
-    Savestate* backup = new Savestate("timewarp.mln", false);
+    FileSavestate* backup = new FileSavestate("timewarp.mln", false);
     NDS::DoSavestate(backup);
     delete backup;
 
