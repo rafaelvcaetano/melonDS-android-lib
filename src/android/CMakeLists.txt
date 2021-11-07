@@ -21,6 +21,7 @@ set(ANDROID_SOURCES
         ../frontend/Util_Video.cpp
         ../frontend/Util_Audio.cpp
         ../frontend/FrontendUtil.h
+        ../frontend/RewindManager.cpp
         ../frontend/mic_blow.h
 )
 
