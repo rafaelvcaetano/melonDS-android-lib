@@ -251,12 +251,12 @@ void Reset()
     else
         fbsize = 256 * 192;
 
-    for (int i = 0; i < fbsize; i++)
+    for (size_t i = 0; i < fbsize; i++)
     {
         Framebuffer[0][0][i] = 0xFFFFFFFF;
         Framebuffer[1][0][i] = 0xFFFFFFFF;
     }
-    for (int i = 0; i < fbsize; i++)
+    for (size_t i = 0; i < fbsize; i++)
     {
         Framebuffer[0][1][i] = 0xFFFFFFFF;
         Framebuffer[1][1][i] = 0xFFFFFFFF;
@@ -1061,13 +1061,19 @@ void FinishFrame(u32 lines)
     AssignFramebuffers();
 
     TotalScanlines = lines;
+
+    if (GPU3D::AbortFrame)
+    {
+        GPU3D::RestartFrame();
+        GPU3D::AbortFrame = false;
+    }
 }
 
 void StartScanline(u32 line)
 {
     if (line == 0)
         VCount = 0;
-    else if (NextVCount != -1)
+    else if (NextVCount != 0xFFFFFFFF)
         VCount = NextVCount;
     else
         VCount++;
@@ -1180,6 +1186,7 @@ void SetVCount(u16 val)
     // 3D engine seems to give up on the current frame in that situation, repeating the last two scanlines
     // TODO: also check the various DMA types that can be involved
 
+    GPU3D::AbortFrame |= NextVCount != val;
     NextVCount = val;
 }
 

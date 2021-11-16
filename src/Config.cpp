@@ -28,13 +28,20 @@ namespace Config
 
 const char* kConfigFile = "melonDS.ini";
 
-bool UseInternalFirmware;
-
+int ExternalBIOSEnable;
 char BIOS9Path[1024];
 char BIOS7Path[1024];
 char FirmwarePath[1024];
 int DLDIEnable;
 char DLDISDPath[1024];
+
+char FirmwareUsername[64];
+int FirmwareLanguage;
+bool FirmwareOverrideSettings;
+int FirmwareBirthdayMonth;
+int FirmwareBirthdayDay;
+int FirmwareFavouriteColour;
+char FirmwareMessage[1024];
 
 char DSiBIOS9Path[1024];
 char DSiBIOS7Path[1024];
@@ -45,6 +52,7 @@ char DSiSDPath[1024];
 
 int RandomizeMAC;
 u8 InternalMacAddress[6];
+int AudioBitrate;
 
 #ifdef JIT_ENABLED
 int JIT_Enable = false;
@@ -56,11 +64,21 @@ int JIT_FastMemory = true;
 
 ConfigEntry ConfigFile[] =
 {
+    {"ExternalBIOSEnable", 0, &ExternalBIOSEnable, 0, NULL, 0},
     {"BIOS9Path", 1, BIOS9Path, 0, "", 1023},
     {"BIOS7Path", 1, BIOS7Path, 0, "", 1023},
     {"FirmwarePath", 1, FirmwarePath, 0, "", 1023},
+
     {"DLDIEnable", 0, &DLDIEnable, 0, NULL, 0},
     {"DLDISDPath", 1, DLDISDPath, 0, "", 1023},
+
+    {"FirmwareUsername", 1, FirmwareUsername, 0, "melonDS", 63},
+    {"FirmwareLanguage", 0, &FirmwareLanguage, 1, NULL, 0},
+    {"FirmwareOverrideSettings", 0, &FirmwareOverrideSettings, false, NULL, 0},
+    {"FirmwareBirthdayMonth", 0, &FirmwareBirthdayMonth, 0, NULL, 0},
+    {"FirmwareBirthdayDay", 0, &FirmwareBirthdayDay, 0, NULL, 0},
+    {"FirmwareFavouriteColour", 0, &FirmwareFavouriteColour, 0, NULL, 0},
+    {"FirmwareMessage", 1, FirmwareMessage, 0, "", 1023},
 
     {"DSiBIOS9Path", 1, DSiBIOS9Path, 0, "", 1023},
     {"DSiBIOS7Path", 1, DSiBIOS7Path, 0, "", 1023},
@@ -70,6 +88,7 @@ ConfigEntry ConfigFile[] =
     {"DSiSDPath", 1, DSiSDPath, 0, "", 1023},
 
     {"RandomizeMAC", 0, &RandomizeMAC, 0, NULL, 0},
+    {"AudioBitrate", 0, &AudioBitrate, 0, NULL, 0},
 
 #ifdef JIT_ENABLED
     {"JIT_Enable", 0, &JIT_Enable, 0, NULL, 0},
@@ -122,7 +141,9 @@ void Load()
     char entryval[1024];
     while (!feof(f))
     {
-        fgets(linebuf, 1024, f);
+        if (fgets(linebuf, 1024, f) == nullptr)
+            break;
+
         int ret = sscanf(linebuf, "%31[A-Za-z_0-9]=%[^\t\r\n]", entryname, entryval);
         entryname[31] = '\0';
         if (ret < 2) continue;
@@ -174,9 +195,9 @@ void Save()
         }
 
         if (entry->Type == 0)
-            fprintf(f, "%s=%d\n", entry->Name, *(int*)entry->Value);
+            fprintf(f, "%s=%d\r\n", entry->Name, *(int*)entry->Value);
         else
-            fprintf(f, "%s=%s\n", entry->Name, (char*)entry->Value);
+            fprintf(f, "%s=%s\r\n", entry->Name, (char*)entry->Value);
 
         entry++;
     }

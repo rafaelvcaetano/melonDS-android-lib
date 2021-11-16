@@ -26,6 +26,10 @@ extern int ConsoleType;
 extern int DirectBoot;
 extern int SavestateRelocSRAM;
 
+extern int RewindEnabled;
+extern int RewindCaptureSpacingSeconds;
+extern int RewindLengthSeconds;
+
 }
 
 #endif

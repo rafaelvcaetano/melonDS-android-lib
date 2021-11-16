@@ -69,8 +69,6 @@ inline bool LocalFileExists(const char* name)
     return true;
 }
 
-void LoadFirmwareUserData(u8* firmwareUserDataEntryPoint);
-
 struct Thread;
 Thread* Thread_Create(std::function<void()> func);
 void Thread_Free(Thread* thread);

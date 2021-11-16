@@ -14,9 +14,12 @@
 #include "../Config.h"
 #include "../AREngine.h"
 #include "../DSi.h"
+#include "../FileSavestate.h"
+#include "MemorySavestate.h"
 #include "SharedConfig.h"
 #include "PlatformConfig.h"
 #include "FrontendUtil.h"
+#include "RewindManager.h"
 #include <android/asset_manager.h>
 #include <cstring>
 
@@ -36,9 +39,9 @@ namespace MelonDSAndroid
     int volume;
     int audioLatency;
     int micInputType;
+    int frame = 0;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
-    FirmwareConfiguration firmwareConfiguration;
 
     // Variables used to keep the current state so that emulation can be reset
     char* currentRomPath = NULL;
@@ -59,7 +62,6 @@ namespace MelonDSAndroid
         copyString(&internalFilesDir, emulatorConfiguration.internalFilesDir);
         assetManager = androidAssetManager;
         fileHandler = androidFileHandler;
-        firmwareConfiguration = emulatorConfiguration.firmwareConfiguration;
         textureBuffer = textureBufferPointer;
 
         audioLatency = emulatorConfiguration.audioLatency;
@@ -76,15 +78,21 @@ namespace MelonDSAndroid
 
         // Internal BIOS and Firmware can only be used for DS
         if (emulatorConfiguration.userInternalFirmwareAndBios) {
-            strcpy(Config::BIOS7Path, "?bios/drastic_bios_arm7.bin");
-            strcpy(Config::BIOS9Path, "?bios/drastic_bios_arm9.bin");
+            memcpy(Config::FirmwareUsername, emulatorConfiguration.firmwareConfiguration.username, sizeof(emulatorConfiguration.firmwareConfiguration.username));
+            memcpy(Config::FirmwareMessage, emulatorConfiguration.firmwareConfiguration.message, sizeof(emulatorConfiguration.firmwareConfiguration.message));
+            Config::FirmwareLanguage = emulatorConfiguration.firmwareConfiguration.language;
+            Config::FirmwareBirthdayMonth = emulatorConfiguration.firmwareConfiguration.birthdayMonth;
+            Config::FirmwareBirthdayDay = emulatorConfiguration.firmwareConfiguration.birthdayDay;
+            Config::FirmwareFavouriteColour = emulatorConfiguration.firmwareConfiguration.favouriteColour;
             memcpy(Config::InternalMacAddress, emulatorConfiguration.firmwareConfiguration.macAddress, sizeof(emulatorConfiguration.firmwareConfiguration.macAddress));
             Config::ConsoleType = 0;
+            Config::ExternalBIOSEnable = 0;
             NDS::SetConsoleType(0);
         } else {
             // DS BIOS files are always required
             strcpy(Config::BIOS7Path, emulatorConfiguration.dsBios7Path);
             strcpy(Config::BIOS9Path, emulatorConfiguration.dsBios9Path);
+            Config::ExternalBIOSEnable = 1;
 
             if (emulatorConfiguration.consoleType == 0) {
                 strcpy(Config::FirmwarePath, emulatorConfiguration.dsFirmwarePath);
@@ -104,13 +112,21 @@ namespace MelonDSAndroid
         Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
 #endif
 
-        Config::UseInternalFirmware = emulatorConfiguration.userInternalFirmwareAndBios;
+        Config::AudioBitrate = emulatorConfiguration.audioBitrate;
+        Config::FirmwareOverrideSettings = false;
         Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress ? 1 : 0;
         Config::SocketBindAnyAddr = 1;
+
+        Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
+        Config::RewindCaptureSpacingSeconds = emulatorConfiguration.rewindCaptureSpacingSeconds;
+        Config::RewindLengthSeconds = emulatorConfiguration.rewindLengthSeconds;
+        // Use 10MB per savestate
+        RewindManager::SetRewindBufferSizes(1024 * 1024 * 10, 256 * 384 * 4);
 
         NDS::Init();
         GPU::InitRenderer(0);
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
+        SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
     }
 
     void setCodeList(std::list<Cheat> cheats)
@@ -143,7 +159,19 @@ namespace MelonDSAndroid
         int oldVolume = volume;
         int oldAudioLatency = audioLatency;
 
+        Config::AudioBitrate = emulatorConfiguration.audioBitrate;
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
+        SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
+        Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
+        Config::RewindCaptureSpacingSeconds = emulatorConfiguration.rewindCaptureSpacingSeconds;
+        Config::RewindLengthSeconds = emulatorConfiguration.rewindLengthSeconds;
+
+        if (emulatorConfiguration.rewindEnabled) {
+            RewindManager::TrimRewindWindowIfRequired();
+        } else {
+            RewindManager::Reset();
+        }
+
         audioLatency = emulatorConfiguration.audioLatency;
         volume = emulatorConfiguration.volume;
         micInputType = emulatorConfiguration.micSource;
@@ -222,6 +250,8 @@ namespace MelonDSAndroid
 
         if (micInputStream != NULL)
             micInputStream->requestStart();
+
+        frame = 0;
     }
 
     u32 loop()
@@ -233,6 +263,13 @@ namespace MelonDSAndroid
         {
             memcpy(textureBuffer, GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
             memcpy(&textureBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
+        }
+        frame++;
+
+        if (RewindManager::ShouldCaptureState(frame))
+        {
+            auto nextRewindState = RewindManager::GetNextRewindSaveState(frame);
+            saveRewindState(nextRewindState);
         }
 
         return nLines;
@@ -256,11 +293,14 @@ namespace MelonDSAndroid
 
     bool reset()
     {
+        frame = 0;
         if (currentRunMode == ROM) {
             int result = loadRom(currentRomPath, currentSramPath, currentLoadDirect, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
             if (result != 2 && arCodeFile != NULL) {
                 AREngine::SetCodeFile(arCodeFile);
             }
+
+            RewindManager::Reset();
 
             return result != 2;
         } else {
@@ -287,7 +327,7 @@ namespace MelonDSAndroid
 
     bool saveState(const char* path)
     {
-        Savestate* savestate = new Savestate(path, true);
+        FileSavestate* savestate = new FileSavestate(path, true);
         if (savestate->Error)
         {
             delete savestate;
@@ -306,16 +346,16 @@ namespace MelonDSAndroid
         bool success = true;
         char* backupPath = joinPaths(internalFilesDir, "backup.mln");
 
-        Savestate* backup = new Savestate(backupPath, true);
+        FileSavestate* backup = new FileSavestate(backupPath, true);
         NDS::DoSavestate(backup);
         delete backup;
 
-        Savestate* savestate = new Savestate(path, false);
+        FileSavestate* savestate = new FileSavestate(path, false);
         if (savestate->Error)
         {
             delete savestate;
 
-            savestate = new Savestate(backupPath, false);
+            savestate = new FileSavestate(backupPath, false);
             success = false;
         }
 
@@ -330,11 +370,70 @@ namespace MelonDSAndroid
         return success;
     }
 
+    bool saveRewindState(RewindManager::RewindSaveState rewindSaveState)
+    {
+        MemorySavestate* savestate = new MemorySavestate(rewindSaveState.buffer, true);
+        if (savestate->Error)
+        {
+            delete savestate;
+            return false;
+        }
+        else
+        {
+            NDS::DoSavestate(savestate);
+            memcpy(rewindSaveState.screenshot, textureBuffer, 256 * 384 * 4);
+
+            delete savestate;
+            return true;
+        }
+    }
+
+    bool loadRewindState(RewindManager::RewindSaveState rewindSaveState)
+    {
+        bool success = true;
+        char* backupPath = joinPaths(internalFilesDir, "backup.mln");
+
+        FileSavestate* backup = new FileSavestate(backupPath, true);
+        NDS::DoSavestate(backup);
+        delete backup;
+
+        Savestate* savestate = new MemorySavestate(rewindSaveState.buffer, false);
+        if (savestate->Error)
+        {
+            delete savestate;
+
+            savestate = new FileSavestate(backupPath, false);
+            success = false;
+        }
+
+        NDS::DoSavestate(savestate);
+        delete savestate;
+
+        // Delete backup file
+        remove(backupPath);
+        // Restore frame
+        frame = rewindSaveState.frame;
+        RewindManager::OnRewindFromState(rewindSaveState);
+
+        delete[] backupPath;
+
+        return success;
+    }
+
+    RewindWindow getRewindWindow()
+    {
+        return RewindWindow {
+            .currentFrame = frame,
+            .rewindStates = RewindManager::GetRewindWindow()
+        };
+    }
+
     void cleanup()
     {
         GBACart::Eject();
         GPU::DeInitRenderer();
         NDS::DeInit();
+        RewindManager::Reset();
 
         if (internalFilesDir) {
             free(internalFilesDir);

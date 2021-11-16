@@ -126,10 +126,6 @@ namespace Platform
         if (path == nullptr)
             return nullptr;
 
-        // If the path starts with an ?, open it from the assets folder
-        if (path[0] == '?')
-            return OpenDataFile(&path[1]);
-
         // Always open file as absolute
         return OpenFile(path, mode, mode[0] == 'r');
     }
@@ -137,35 +133,6 @@ namespace Platform
     FILE* OpenDataFile(const char* path)
     {
         return android_fopen(MelonDSAndroid::assetManager, path, "rb");
-    }
-
-    void LoadFirmwareUserData(u8* firmwareUserDataEntryPoint)
-    {
-        MelonDSAndroid::FirmwareConfiguration firmwareConfiguration = MelonDSAndroid::firmwareConfiguration;
-
-        // Favourite colour
-        firmwareUserDataEntryPoint[0x02] = (u8) firmwareConfiguration.favouriteColour;
-
-        // Birthday
-        firmwareUserDataEntryPoint[0x03] = (u8) firmwareConfiguration.birthdayMonth;
-        firmwareUserDataEntryPoint[0x04] = (u8) firmwareConfiguration.birthdayDay;
-
-        // Username
-        std::string username(firmwareConfiguration.username);
-        std::u16string u16Username(username.begin(), username.end());
-        size_t usernameLength = std::min(u16Username.length(), (size_t) 10);
-        memcpy(&firmwareUserDataEntryPoint[0x06], u16Username.data(), usernameLength * sizeof(char16_t));
-        firmwareUserDataEntryPoint[0x1A] = (u8) usernameLength;
-
-        // Message
-        std::string message(firmwareConfiguration.message);
-        std::u16string u16message(message.begin(), message.end());
-        size_t messageLength = std::min(u16message.length(), (size_t) 26);
-        memcpy(&firmwareUserDataEntryPoint[0x1C], u16message.data(), messageLength * sizeof(char16_t));
-        firmwareUserDataEntryPoint[0x50] = (u8) messageLength;
-
-        // Language
-        firmwareUserDataEntryPoint[0x64] = firmwareConfiguration.language;
     }
 
     Thread* Thread_Create(std::function<void()> func)

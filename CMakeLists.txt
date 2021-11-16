@@ -1,9 +1,9 @@
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.13)
 
 include(CheckSymbolExists)
 include(CheckLibraryExists)
 
-#[[cmake_policy(VERSION 2.8.11)
+#[[cmake_policy(VERSION 3.13)
 if (POLICY CMP0076)
     cmake_policy(SET CMP0076 NEW)
 endif()]]
@@ -16,7 +16,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-#[[set(MELONDS_VERSION "0.9.1")
+set(MELONDS_VERSION "0.9.3")
 add_compile_definitions(MELONDS_VERSION="${MELONDS_VERSION}")
 string(REPLACE "." ";" VERSION_LIST ${MELONDS_VERSION})
 # For the melon.rc file used on Windows
@@ -24,11 +24,11 @@ list(GET VERSION_LIST 0 MELONDS_VERSION_MAJOR)
 list(GET VERSION_LIST 1 MELONDS_VERSION_MINOR)
 # Check if melonDS version is three digits or two digits
 list(LENGTH VERSION_LIST MELONDS_VER_LEN)
-if (${MELONDS_VER_LEN} GREATER 2)
+if (${MELONDS_VER_LEN} GREATER 2) 
     list(GET VERSION_LIST 2 MELONDS_VERSION_PATCH)
 else()
     set(MELONDS_VERSION_PATCH 0)
-endif()]]
+endif()
 
 
 check_library_exists(m pow "" LIBM)
@@ -67,6 +67,13 @@ endif()
 
 if (ENABLE_JIT)
 	add_definitions(-DJIT_ENABLED)
+
+	option(ENABLE_JIT_PROFILING "Enable JIT profiling with VTune" OFF)
+
+	if (ENABLE_JIT_PROFILING)
+		include(cmake/FindVTune.cmake)
+		add_definitions(-DJIT_PROFILING_ENABLED)
+	endif()
 endif()
 
 if (CMAKE_BUILD_TYPE STREQUAL Release)
@@ -99,7 +106,7 @@ if (BUILD_STATIC AND WIN32)
 endif()
 
 if (ENABLE_LTO)
-	if (WIN32)
+	if (WIN32 OR APPLE)
 		add_compile_options(-flto)
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -flto")
 		#add_link_options(-flto)
@@ -108,7 +115,8 @@ if (ENABLE_LTO)
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -flto -fuse-linker-plugin -pie")
 		#add_link_options(-flto -fuse-linker-plugin -pie)
 	endif()
-	#[[if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+	#[[
+	if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 		set(CMAKE_AR "gcc-ar")
 		set(CMAKE_RANLIB "gcc-ranlib")
 	elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -117,19 +125,29 @@ if (ENABLE_LTO)
 			set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=lld")
 			#add_link_options(-fuse-ld=lld)
 		endif()
-		set(CMAKE_AR "llvm-ar")
-		set(CMAKE_RANLIB "llvm-ranlib")
-	endif()]]
+		if (NOT APPLE)
+			set(CMAKE_AR "llvm-ar")
+			set(CMAKE_RANLIB "llvm-ranlib")
+		endif()
+	endif()
+	]]
 endif()
 
-#option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
+find_program(CCACHE "ccache")
+if (CCACHE)
+	message(STATUS "Using CCache to speed up compilation")
+	set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE})
+	set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE})
+endif()
+
+option(BUILD_QT_SDL "Build Qt/SDL frontend" OFF)
 
 add_subdirectory(src)
 
 if (ANDROID)
 	add_subdirectory(src/android)
 else()
-	if (BUILD_LIBUI)
-		add_subdirectory(src/libui_sdl)
+	if (BUILD_QT_SDL)
+		add_subdirectory(src/frontend/qt_sdl)
 	endif()
 endif()

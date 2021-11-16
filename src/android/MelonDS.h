@@ -3,6 +3,7 @@
 
 #include <list>
 #include "AndroidFileHandler.h"
+#include "RewindManager.h"
 #include "../types.h"
 #include "../GPU.h"
 #include <android/asset_manager.h>
@@ -34,8 +35,13 @@ namespace MelonDSAndroid {
         int consoleType;
         bool soundEnabled;
         int volume;
+        int audioInterpolation;
+        int audioBitrate;
         int audioLatency;
         int micSource;
+        int rewindEnabled;
+        int rewindCaptureSpacingSeconds;
+        int rewindLengthSeconds;
         FirmwareConfiguration firmwareConfiguration;
         GPU::RenderSettings renderSettings;
     } EmulatorConfiguration;
@@ -46,6 +52,11 @@ namespace MelonDSAndroid {
         u32 code[2*64];
     } Cheat;
 
+    typedef struct {
+        int currentFrame;
+        std::list<RewindManager::RewindSaveState> rewindStates;
+    } RewindWindow;
+
     typedef enum {
         ROM,
         FIRMWARE
@@ -53,7 +64,6 @@ namespace MelonDSAndroid {
 
     extern AAssetManager* assetManager;
     extern AndroidFileHandler* fileHandler;
-    extern FirmwareConfiguration firmwareConfiguration;
 
     extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler, u32* textureBufferPointer);
     extern void setCodeList(std::list<Cheat> cheats);
@@ -81,6 +91,9 @@ namespace MelonDSAndroid {
     extern void updateMic();
     extern bool saveState(const char* path);
     extern bool loadState(const char* path);
+    extern bool saveRewindState(RewindManager::RewindSaveState rewindSaveState);
+    extern bool loadRewindState(RewindManager::RewindSaveState rewindSaveState);
+    extern RewindWindow getRewindWindow();
     extern void cleanup();
 }
 
