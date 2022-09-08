@@ -58,10 +58,9 @@ namespace MelonDSAndroid
     void resetAudioOutputStream();
     void copyString(char** dest, const char* source);
 
-    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler, u32* textureBufferPointer) {
+    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, u32* textureBufferPointer) {
         copyString(&internalFilesDir, emulatorConfiguration.internalFilesDir);
         assetManager = androidAssetManager;
-        fileHandler = androidFileHandler;
         textureBuffer = textureBufferPointer;
 
         audioLatency = emulatorConfiguration.audioLatency;
@@ -466,9 +465,7 @@ namespace MelonDSAndroid
             arCodeFile = NULL;
         }
 
-        fileHandler = NULL;
         assetManager = NULL;
-
         textureBuffer = NULL;
     }
 
