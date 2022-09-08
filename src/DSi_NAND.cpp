@@ -21,6 +21,7 @@
 #include "DSi.h"
 #include "DSi_AES.h"
 #include "DSi_NAND.h"
+#include "Platform.h"
 
 #include "sha1/sha1.hpp"
 #include "tiny-AES-c/aes.hpp"
@@ -586,7 +587,7 @@ bool ImportFile(const char* path, const char* in)
     FILE* fin;
     FRESULT res;
 
-    fin = fopen(in, "rb");
+    fin = Platform::OpenFile(in, "rb");
     if (!fin)
         return false;
 
@@ -952,7 +953,7 @@ bool ImportTitle(const char* appfile, u8* tmd, bool readonly)
 {
     u8 header[0x1000];
     {
-        FILE* f = fopen(appfile, "rb");
+        FILE* f = Platform::OpenFile(appfile, "rb");
         if (!f) return false;
         fread(header, 0x1000, 1, f);
         fclose(f);
