@@ -478,9 +478,9 @@ void ROMIcon(u8 (&data)[512], u16 (&palette)[16], u32* iconRef)
                 for (int l = 0; l < 8; l++)
                 {
                     u8 pal_index = index % 2 ?  data[index/2] >> 4 : data[index/2] & 0x0F;
-                    u8 r = ((palette[pal_index] >> 0)  & 0x1F) * 255 / 31;
+                    u8 b = ((palette[pal_index] >> 0)  & 0x1F) * 255 / 31;
                     u8 g = ((palette[pal_index] >> 5)  & 0x1F) * 255 / 31;
-                    u8 b = ((palette[pal_index] >> 10) & 0x1F) * 255 / 31;
+                    u8 r = ((palette[pal_index] >> 10) & 0x1F) * 255 / 31;
                     u8 a = pal_index ? 255: 0;
                     u32* row = &iconRef[256 * i + 32 * k + 8 * j];
                     row[l] = (a << 24) | (r << 16) | (g << 8) | b;
