@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -19,11 +19,28 @@
 #ifndef DSI_I2C_H
 #define DSI_I2C_H
 
+#include "types.h"
+
 namespace DSi_BPTWL
 {
 
 u8 GetBootFlag();
 
+bool GetBatteryCharging();
+void SetBatteryCharging(bool charging);
+
+enum
+{
+    batteryLevel_Critical = 0x0,
+    batteryLevel_AlmostEmpty = 0x1,
+    batteryLevel_Low = 0x3,
+    batteryLevel_Half = 0x7,
+    batteryLevel_ThreeQuarters = 0xB,
+    batteryLevel_Full = 0xF
+};
+
+u8 GetBatteryLevel();
+void SetBatteryLevel(u8 batteryLevel);
 }
 
 namespace DSi_I2C
@@ -34,7 +51,7 @@ extern u8 Cnt;
 bool Init();
 void DeInit();
 void Reset();
-//void DoSavestate(Savestate* file);
+void DoSavestate(Savestate* file);
 
 void WriteCnt(u8 val);
 

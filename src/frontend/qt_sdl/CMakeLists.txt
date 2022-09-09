@@ -4,16 +4,21 @@ SET(SOURCES_QT_SDL
     main.cpp
     main_shaders.h
     CheatsDialog.cpp
+	Config.cpp
     EmuSettingsDialog.cpp
+    PowerManagement/PowerManagementDialog.cpp
+    PowerManagement/resources/battery.qrc
     InputConfig/InputConfigDialog.cpp
     InputConfig/MapButton.h
     InputConfig/resources/ds.qrc
     VideoSettingsDialog.cpp
     AudioSettingsDialog.cpp
     FirmwareSettingsDialog.cpp
+    PathSettingsDialog.cpp
     WifiSettingsDialog.cpp
     InterfaceSettingsDialog.cpp
     ROMInfoDialog.cpp
+    RAMInfoDialog.cpp
     TitleManagerDialog.cpp
     Input.cpp
     LAN_PCap.cpp
@@ -22,13 +27,13 @@ SET(SOURCES_QT_SDL
     OSD_shaders.h
     font.h
     Platform.cpp
-    PlatformConfig.cpp
     QPathInput.h
+	ROMManager.cpp
+	SaveManager.cpp
     
     ArchiveUtil.h
     ArchiveUtil.cpp
 
-    ../Util_ROM.cpp
     ../Util_Video.cpp
     ../Util_Audio.cpp
     ../FrontendUtil.h
@@ -37,7 +42,12 @@ SET(SOURCES_QT_SDL
     ${CMAKE_SOURCE_DIR}/res/melon.qrc
 )
 
-option(USE_QT6 "Build using Qt 6 instead of 5" OFF)
+if (APPLE)
+    option(USE_QT6 "Build using Qt 6 instead of 5" ON)
+else()
+    option(USE_QT6 "Build using Qt 6 instead of 5" OFF)
+endif()
+
 
 if (WIN32)
     set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> -i <SOURCE> -o <OBJECT>")
@@ -143,13 +153,6 @@ if (APPLE)
         OUTPUT_NAME melonDS
         RESOURCE "${RESOURCE_FILES}")
 	
-
-    # Qt 6 requires macOS 10.15 if building on 10.15 or greater
-	if(CMAKE_SYSTEM_VERSION VERSION_GREATER_EQUAL 19.0.0)
-        if (USE_QT6)
-	    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum OS X deployment version" FORCE)
-        endif()
-    endif()
 
     option(MACOS_BUNDLE_LIBS "Bundle libraries with the app on macOS" OFF)
     option(MACOS_BUILD_DMG "Build DMG image of the macOS application bundle" OFF)

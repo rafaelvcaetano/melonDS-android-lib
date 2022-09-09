@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -22,6 +22,7 @@
 #include "DSi_I2C.h"
 #include "DSi_Camera.h"
 #include "ARM.h"
+#include "SPI.h"
 
 
 namespace DSi_BPTWL
@@ -72,7 +73,28 @@ void Reset()
     Registers[0x81] = 0x64;
 }
 
+void DoSavestate(Savestate* file)
+{
+    file->Section("I2BP");
+
+    file->VarArray(Registers, 0x100);
+    file->Var32(&CurPos);
+}
+
 u8 GetBootFlag() { return Registers[0x70]; }
+
+bool GetBatteryCharging() { return Registers[0x20] >> 7; }
+void SetBatteryCharging(bool charging)
+{
+    Registers[0x20] = (((charging ? 0x8 : 0x0) << 4) | (Registers[0x20] & 0x0F));
+}
+
+u8 GetBatteryLevel() { return Registers[0x20] & 0xF; }
+void SetBatteryLevel(u8 batteryLevel)
+{
+    Registers[0x20] = ((Registers[0x20] & 0xF0) | (batteryLevel & 0x0F));
+    SPI_Powerman::SetBatteryLevelOkay(batteryLevel > batteryLevel_Low ? true : false);
+}
 
 void Start()
 {
@@ -167,6 +189,18 @@ void Reset()
 
     DSi_BPTWL::Reset();
     DSi_Camera::Reset();
+}
+
+void DoSavestate(Savestate* file)
+{
+    file->Section("I2Ci");
+
+    file->Var8(&Cnt);
+    file->Var8(&Data);
+    file->Var32(&Device);
+
+    DSi_BPTWL::DoSavestate(file);
+    // cameras are savestated from the DSi_Camera module
 }
 
 void WriteCnt(u8 val)

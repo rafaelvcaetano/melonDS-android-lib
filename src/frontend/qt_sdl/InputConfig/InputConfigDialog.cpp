@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -25,7 +25,6 @@
 
 #include "types.h"
 #include "Config.h"
-#include "PlatformConfig.h"
 
 #include "MapButton.h"
 #include "Input.h"
@@ -70,7 +69,7 @@ const char* hk_general_labels[] =
     "Frame step",
     "Fast forward",
     "Toggle FPS limit",
-    "Toggle Fullscreen",
+    "Toggle fullscreen",
     "Close/open lid",
     "Microphone",
     "Swap screens"
