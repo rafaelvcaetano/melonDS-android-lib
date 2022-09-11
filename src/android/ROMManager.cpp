@@ -62,41 +62,41 @@ int LastSep(std::string path)
     return -1;
 }
 
-std::string VerifyDSBIOS()
+SetupResult VerifyDSBIOS()
 {
     FILE* f;
     long len;
 
     f = Platform::OpenLocalFile(Config::BIOS9Path, "rb");
-    if (!f) return "DS ARM9 BIOS was not found or could not be accessed. Check your emu settings.";
+    if (!f) return BIOS9_MISSING;
 
     fseek(f, 0, SEEK_END);
     len = ftell(f);
     if (len != 0x1000)
     {
         fclose(f);
-        return "DS ARM9 BIOS is not a valid BIOS dump.";
+        return BIOS9_BAD;
     }
 
     fclose(f);
 
     f = Platform::OpenLocalFile(Config::BIOS7Path, "rb");
-    if (!f) return "DS ARM7 BIOS was not found or could not be accessed. Check your emu settings.";
+    if (!f) return BIOS7_MISSING;
 
     fseek(f, 0, SEEK_END);
     len = ftell(f);
     if (len != 0x4000)
     {
         fclose(f);
-        return "DS ARM7 BIOS is not a valid BIOS dump.";
+        return BIOS7_BAD;
     }
 
     fclose(f);
 
-    return "";
+    return SUCCESS;
 }
 
-std::string VerifyDSiBIOS()
+SetupResult VerifyDSiBIOS()
 {
     FILE* f;
     long len;
@@ -104,41 +104,41 @@ std::string VerifyDSiBIOS()
     // TODO: check the first 32 bytes
 
     f = Platform::OpenLocalFile(Config::DSiBIOS9Path, "rb");
-    if (!f) return "DSi ARM9 BIOS was not found or could not be accessed. Check your emu settings.";
+    if (!f) return DSI_BIOS9_MISSING;
 
     fseek(f, 0, SEEK_END);
     len = ftell(f);
     if (len != 0x10000)
     {
         fclose(f);
-        return "DSi ARM9 BIOS is not a valid BIOS dump.";
+        return DSI_BIOS9_BAD;
     }
 
     fclose(f);
 
     f = Platform::OpenLocalFile(Config::DSiBIOS7Path, "rb");
-    if (!f) return "DSi ARM7 BIOS was not found or could not be accessed. Check your emu settings.";
+    if (!f) return DSI_BIOS7_MISSING;
 
     fseek(f, 0, SEEK_END);
     len = ftell(f);
     if (len != 0x10000)
     {
         fclose(f);
-        return "DSi ARM7 BIOS is not a valid BIOS dump.";
+        return DSI_BIOS7_BAD;
     }
 
     fclose(f);
 
-    return "";
+    return SUCCESS;
 }
 
-std::string VerifyDSFirmware()
+SetupResult VerifyDSFirmware()
 {
     FILE* f;
     long len;
 
     f = Platform::OpenLocalFile(Config::FirmwarePath, "rb");
-    if (!f) return "DS firmware was not found or could not be accessed. Check your emu settings.";
+    if (!f) return FIRMWARE_MISSING;
 
     fseek(f, 0, SEEK_END);
     len = ftell(f);
@@ -147,26 +147,26 @@ std::string VerifyDSFirmware()
         // 128KB firmware, not bootable
         fclose(f);
         // TODO report it somehow? detect in core?
-        return "";
+        return SUCCESS;
     }
     else if (len != 0x40000 && len != 0x80000)
     {
         fclose(f);
-        return "DS firmware is not a valid firmware dump.";
+        return FIRMWARE_BAD;
     }
 
     fclose(f);
 
-    return "";
+    return SUCCESS;
 }
 
-std::string VerifyDSiFirmware()
+SetupResult VerifyDSiFirmware()
 {
     FILE* f;
     long len;
 
     f = Platform::OpenLocalFile(Config::DSiFirmwarePath, "rb");
-    if (!f) return "DSi firmware was not found or could not be accessed. Check your emu settings.";
+    if (!f) return FIRMWARE_MISSING;
 
     fseek(f, 0, SEEK_END);
     len = ftell(f);
@@ -175,64 +175,64 @@ std::string VerifyDSiFirmware()
         // not 128KB
         // TODO: check whether those work
         fclose(f);
-        return "DSi firmware is not a valid firmware dump.";
+        return FIRMWARE_BAD;
     }
 
     fclose(f);
 
-    return "";
+    return SUCCESS;
 }
 
-std::string VerifyDSiNAND()
+SetupResult VerifyDSiNAND()
 {
     FILE* f;
     long len;
 
     f = Platform::OpenLocalFile(Config::DSiNANDPath, "r+b");
-    if (!f) return "DSi NAND was not found or could not be accessed. Check your emu settings.";
+    if (!f) return DSI_NAND_MISSING;
 
     // TODO: some basic checks
     // check that it has the nocash footer, and all
 
     fclose(f);
 
-    return "";
+    return SUCCESS;
 }
 
-std::string VerifySetup()
+SetupResult VerifySetup()
 {
-    std::string res;
+    SetupResult res;
 
     if (Config::ExternalBIOSEnable)
     {
         res = VerifyDSBIOS();
-        if (!res.empty()) return res;
+        if (res != SUCCESS) return res;
     }
 
     if (Config::ConsoleType == 1)
     {
         res = VerifyDSiBIOS();
-        if (!res.empty()) return res;
+        if (res != SUCCESS) return res;
 
         if (Config::ExternalBIOSEnable)
         {
             res = VerifyDSiFirmware();
-            if (!res.empty()) return res;
+            if (res != SUCCESS) return res;
         }
 
         res = VerifyDSiNAND();
-        if (!res.empty()) return res;
+        if (res != SUCCESS) return res;
     }
     else
     {
         if (Config::ExternalBIOSEnable)
         {
             res = VerifyDSFirmware();
-            if (!res.empty()) return res;
+            if (res != SUCCESS) return res;
         }
     }
 
-    return "";
+    return SUCCESS;
 }
 
 void SetBatteryLevels()

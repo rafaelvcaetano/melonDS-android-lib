@@ -29,10 +29,27 @@
 namespace ROMManager
 {
 
+enum SetupResult {
+    SUCCESS = 0,
+    BIOS9_MISSING,
+    BIOS9_BAD,
+    BIOS7_MISSING,
+    BIOS7_BAD,
+    FIRMWARE_MISSING,
+    FIRMWARE_BAD,
+    FIRMWARE_NOT_BOOTABLE,
+    DSI_BIOS9_MISSING,
+    DSI_BIOS9_BAD,
+    DSI_BIOS7_MISSING,
+    DSI_BIOS7_BAD,
+    DSI_NAND_MISSING,
+    DSI_NAND_BAD
+};
+
 extern SaveManager* NDSSave;
 extern SaveManager* GBASave;
 
-std::string VerifySetup();
+SetupResult VerifySetup();
 void Reset();
 bool LoadBIOS();
 

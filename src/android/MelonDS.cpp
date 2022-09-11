@@ -234,21 +234,21 @@ namespace MelonDSAndroid
     int bootFirmware()
     {
         currentRunMode = FIRMWARE;
-        std::string result = ROMManager::VerifySetup();
-        if (!result.empty())
+        ROMManager::SetupResult result = ROMManager::VerifySetup();
+        if (result != ROMManager::SUCCESS)
         {
-            return 1;
+            return result;
         }
 
         bool successful = ROMManager::LoadBIOS();
         if (successful)
         {
             NDS::Start();
-            return 0;
+            return ROMManager::SUCCESS;
         }
         else
         {
-            return 1;
+            return ROMManager::FIRMWARE_NOT_BOOTABLE;
         }
     }
 
