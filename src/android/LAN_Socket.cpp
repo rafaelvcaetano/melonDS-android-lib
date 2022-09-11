@@ -23,7 +23,7 @@
 #include <string.h>
 #include "../Wifi.h"
 #include "LAN_Socket.h"
-#include "../Config.h"
+#include "Config.h"
 
 #ifdef __WIN32__
 	#include <winsock2.h>

@@ -567,7 +567,7 @@ void Write(u8 val, u32 hold)
         break;
     }
 
-    if (!hold && (CurCmd == 0x02 || CurCmd == 0x0A) && Config::ExternalBIOSEnable)
+    if (!hold && (CurCmd == 0x02 || CurCmd == 0x0A) && Platform::GetConfigBool(Platform::ExternalBIOSEnable))
     {
         if (!FirmwarePath.empty())
         {

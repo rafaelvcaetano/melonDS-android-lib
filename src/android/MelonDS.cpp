@@ -11,15 +11,14 @@
 #include "../GBACart.h"
 #include "../SPU.h"
 #include "../Platform.h"
-#include "../Config.h"
 #include "../AREngine.h"
-#include "../DSi.h"
 #include "../FileSavestate.h"
+#include "../DSi_I2C.h"
+#include "Config.h"
 #include "MemorySavestate.h"
-#include "SharedConfig.h"
-#include "PlatformConfig.h"
 #include "FrontendUtil.h"
 #include "RewindManager.h"
+#include "ROMManager.h"
 #include <android/asset_manager.h>
 #include <cstring>
 
@@ -49,7 +48,6 @@ namespace MelonDSAndroid
     char* currentGbaRomPath = NULL;
     char* currentGbaSramPath = NULL;
     bool currentLoadGbaRom;
-    bool currentLoadDirect;
     RunMode currentRunMode;
 
     void setupAudioOutputStream();
@@ -77,50 +75,55 @@ namespace MelonDSAndroid
 
         // Internal BIOS and Firmware can only be used for DS
         if (emulatorConfiguration.userInternalFirmwareAndBios) {
-            memcpy(Config::FirmwareUsername, emulatorConfiguration.firmwareConfiguration.username, sizeof(emulatorConfiguration.firmwareConfiguration.username));
-            memcpy(Config::FirmwareMessage, emulatorConfiguration.firmwareConfiguration.message, sizeof(emulatorConfiguration.firmwareConfiguration.message));
+            Config::FirmwareUsername = emulatorConfiguration.firmwareConfiguration.username;
+            Config::FirmwareUsername =emulatorConfiguration.firmwareConfiguration.username;
+            Config::FirmwareMessage = emulatorConfiguration.firmwareConfiguration.message;
             Config::FirmwareLanguage = emulatorConfiguration.firmwareConfiguration.language;
             Config::FirmwareBirthdayMonth = emulatorConfiguration.firmwareConfiguration.birthdayMonth;
             Config::FirmwareBirthdayDay = emulatorConfiguration.firmwareConfiguration.birthdayDay;
             Config::FirmwareFavouriteColour = emulatorConfiguration.firmwareConfiguration.favouriteColour;
-            memcpy(Config::InternalMacAddress, emulatorConfiguration.firmwareConfiguration.macAddress, sizeof(emulatorConfiguration.firmwareConfiguration.macAddress));
+            Config::FirmwareMAC = emulatorConfiguration.firmwareConfiguration.macAddress;
+            Config::DSBatteryLevelOkay = true;
             Config::ConsoleType = 0;
-            Config::ExternalBIOSEnable = 0;
-            NDS::SetConsoleType(0);
+            Config::ExternalBIOSEnable = false;
         } else {
             // DS BIOS files are always required
-            strcpy(Config::BIOS7Path, emulatorConfiguration.dsBios7Path);
-            strcpy(Config::BIOS9Path, emulatorConfiguration.dsBios9Path);
-            Config::ExternalBIOSEnable = 1;
+            Config::BIOS7Path = emulatorConfiguration.dsBios7Path;
+            Config::BIOS9Path = emulatorConfiguration.dsBios9Path;
+            Config::ExternalBIOSEnable = true;
+            Config::DirectBoot = !emulatorConfiguration.showBootScreen;
 
             if (emulatorConfiguration.consoleType == 0) {
-                strcpy(Config::FirmwarePath, emulatorConfiguration.dsFirmwarePath);
+                Config::FirmwarePath = emulatorConfiguration.dsFirmwarePath;
+                Config::DSBatteryLevelOkay = true;
                 Config::ConsoleType = 0;
-                NDS::SetConsoleType(0);
             } else {
-                strcpy(Config::DSiBIOS7Path, emulatorConfiguration.dsiBios7Path);
-                strcpy(Config::DSiBIOS9Path, emulatorConfiguration.dsiBios9Path);
-                strcpy(Config::DSiFirmwarePath, emulatorConfiguration.dsiFirmwarePath);
-                strcpy(Config::DSiNANDPath, emulatorConfiguration.dsiNandPath);
+                Config::DSiBIOS7Path = emulatorConfiguration.dsiBios7Path;
+                Config::DSiBIOS9Path = emulatorConfiguration.dsiBios9Path;
+                Config::DSiFirmwarePath = emulatorConfiguration.dsiFirmwarePath;
+                Config::DSiNANDPath = emulatorConfiguration.dsiNandPath;
+                Config::DSiBatteryLevel = DSi_BPTWL::batteryLevel_Full;
+                Config::DSiBatteryCharging = true;
                 Config::ConsoleType = 1;
-                NDS::SetConsoleType(1);
             }
         }
 
 #ifdef JIT_ENABLED
-        Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
+        Config::JIT_Enable = emulatorConfiguration.useJit;
 #endif
 
         Config::AudioBitrate = emulatorConfiguration.audioBitrate;
         Config::FirmwareOverrideSettings = false;
-        Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress ? 1 : 0;
-        Config::SocketBindAnyAddr = 1;
+        Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress;
+        Config::SocketBindAnyAddr = true;
+        Config::DLDIEnable = false;
+        Config::DSiSDEnable = false;
 
         Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
         Config::RewindCaptureSpacingSeconds = emulatorConfiguration.rewindCaptureSpacingSeconds;
         Config::RewindLengthSeconds = emulatorConfiguration.rewindLengthSeconds;
-        // Use 10MB per savestate
-        RewindManager::SetRewindBufferSizes(1024 * 1024 * 10, 256 * 384 * 4);
+        // Use 20MB per savestate
+        RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
 
         NDS::Init();
         GPU::InitRenderer(0);
@@ -203,35 +206,27 @@ namespace MelonDSAndroid
         }
     }
 
-    int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
+    int loadRom(char* romPath, char* sramPath, bool loadGbaRom, char* gbaRom, char* gbaSram)
     {
         copyString(&currentRomPath, romPath);
         copyString(&currentSramPath, sramPath);
         copyString(&currentGbaRomPath, gbaRom);
         copyString(&currentGbaSramPath, gbaSram);
-        currentLoadDirect = loadDirect;
         currentLoadGbaRom = loadGbaRom;
         currentRunMode = ROM;
 
-        if (NDS::ConsoleType == 1)
-        {
-            DSi::CloseDSiNAND();
-            if (Frontend::SetupDSiNAND() != Frontend::Load_OK)
-            {
-                return 3;
-            }
-        }
-
-        bool loaded = NDS::LoadROM(romPath, sramPath, loadDirect);
+        bool loaded = ROMManager::LoadROM(romPath, sramPath, true);
         if (!loaded)
             return 2;
 
         // Slot 2 is not supported in DSi
         if (loadGbaRom && NDS::ConsoleType == 0)
         {
-            if (!NDS::LoadGBAROM(gbaRom, gbaSram))
+            if (!ROMManager::LoadGBAROM(gbaRom, gbaSram))
                 return 1;
         }
+
+        NDS::Start();
 
         return 0;
     }
@@ -239,7 +234,22 @@ namespace MelonDSAndroid
     int bootFirmware()
     {
         currentRunMode = FIRMWARE;
-        return Frontend::LoadBIOS();
+        std::string result = ROMManager::VerifySetup();
+        if (!result.empty())
+        {
+            return 1;
+        }
+
+        bool successful = ROMManager::LoadBIOS();
+        if (successful)
+        {
+            NDS::Start();
+            return 0;
+        }
+        else
+        {
+            return 1;
+        }
     }
 
     void start()
@@ -256,6 +266,12 @@ namespace MelonDSAndroid
     u32 loop()
     {
         u32 nLines = NDS::RunFrame();
+
+        if (ROMManager::NDSSave)
+            ROMManager::NDSSave->CheckFlush();
+
+        if (ROMManager::GBASave)
+            ROMManager::GBASave->CheckFlush();
 
         int frontbuf = GPU::FrontBuffer;
         if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
@@ -294,7 +310,8 @@ namespace MelonDSAndroid
     {
         frame = 0;
         if (currentRunMode == ROM) {
-            int result = loadRom(currentRomPath, currentSramPath, currentLoadDirect, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
+            NDS::Reset();
+            int result = loadRom(currentRomPath, currentSramPath, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
             if (result != 2 && arCodeFile != NULL) {
                 AREngine::SetCodeFile(arCodeFile);
             }
@@ -429,7 +446,10 @@ namespace MelonDSAndroid
 
     void cleanup()
     {
-        GBACart::Eject();
+        ROMManager::EjectCart();
+        ROMManager::EjectGBACart();
+        //GBACart::EjectCart();
+        NDS::Stop();
         GPU::DeInitRenderer();
         NDS::DeInit();
         RewindManager::Reset();
@@ -563,13 +583,27 @@ namespace MelonDSAndroid
 
     void copyString(char** dest, const char* source)
     {
-        if (source == NULL) {
-            *dest = NULL;
+        if (source == nullptr)
+        {
+            if (*dest != nullptr)
+            {
+                free(*dest);
+                *dest = nullptr;
+            }
+
             return;
         }
 
         int length = strlen(source);
-        *dest = (char*) malloc(length + 1);
+        if (*dest == nullptr)
+        {
+            *dest = (char*) malloc(length + 1);
+        }
+        else
+        {
+            *dest = (char*) realloc(*dest, length + 1);
+        }
+
         strcpy(*dest, source);
     }
 }

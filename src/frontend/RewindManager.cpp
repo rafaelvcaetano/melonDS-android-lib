@@ -17,7 +17,7 @@
 */
 
 #include "RewindManager.h"
-#include "SharedConfig.h"
+#include "Config.h"
 #include <list>
 
 namespace RewindManager

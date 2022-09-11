@@ -10,17 +10,16 @@ set(ANDROID_SOURCES
         MicInputOboeCallback.cpp
         OpenGLRenderer.cpp
         PlatformAndroid.cpp
-        PlatformConfig.cpp
         FileUtils.cpp
         ifaddrs.c
         android_fopen.c
-        SharedConfig.cpp
         AndroidARCodeFile.cpp
+        Config.cpp
+        ROMManager.cpp
+        SaveManager.cpp
 
-        ../frontend/Util_ROM.cpp
         ../frontend/Util_Video.cpp
         ../frontend/Util_Audio.cpp
-        ../frontend/FrontendUtil.h
         ../frontend/RewindManager.cpp
         ../frontend/mic_blow.h
 )
