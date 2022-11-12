@@ -21,6 +21,10 @@
 #include "NDS.h"
 #include "GPU.h"
 
+#ifdef JIT_ENABLED
+#include "ARMJIT.h"
+#endif
+
 #include "GPU2D_Soft.h"
 
 namespace GPU
@@ -529,6 +533,8 @@ u8* GetUniqueBankPtr(u32 mask, u32 offset)
 
 void MapVRAM_AB(u32 bank, u8 cnt)
 {
+    cnt &= 0x9B;
+
     u8 oldcnt = VRAMCNT[bank];
     VRAMCNT[bank] = cnt;
 
@@ -587,6 +593,8 @@ void MapVRAM_AB(u32 bank, u8 cnt)
 
 void MapVRAM_CD(u32 bank, u8 cnt)
 {
+    cnt &= 0x9F;
+
     u8 oldcnt = VRAMCNT[bank];
     VRAMCNT[bank] = cnt;
 
@@ -649,6 +657,9 @@ void MapVRAM_CD(u32 bank, u8 cnt)
             VRAMMap_ARM7[ofs] |= bankmask;
             memset(VRAMDirty[bank].Data, 0xFF, sizeof(VRAMDirty[bank].Data));
             VRAMSTAT |= (1 << (bank-2));
+#ifdef JIT_ENABLED
+            ARMJIT::CheckAndInvalidateWVRAM(ofs);
+#endif
             break;
 
         case 3: // texture
@@ -671,6 +682,8 @@ void MapVRAM_CD(u32 bank, u8 cnt)
 
 void MapVRAM_E(u32 bank, u8 cnt)
 {
+    cnt &= 0x87;
+
     u8 oldcnt = VRAMCNT[bank];
     VRAMCNT[bank] = cnt;
 
@@ -733,6 +746,8 @@ void MapVRAM_E(u32 bank, u8 cnt)
 
 void MapVRAM_FG(u32 bank, u8 cnt)
 {
+    cnt &= 0x9F;
+
     u8 oldcnt = VRAMCNT[bank];
     VRAMCNT[bank] = cnt;
 
@@ -831,6 +846,8 @@ void MapVRAM_FG(u32 bank, u8 cnt)
 
 void MapVRAM_H(u32 bank, u8 cnt)
 {
+    cnt &= 0x83;
+
     u8 oldcnt = VRAMCNT[bank];
     VRAMCNT[bank] = cnt;
 
@@ -891,6 +908,8 @@ void MapVRAM_H(u32 bank, u8 cnt)
 
 void MapVRAM_I(u32 bank, u8 cnt)
 {
+    cnt &= 0x83;
+
     u8 oldcnt = VRAMCNT[bank];
     VRAMCNT[bank] = cnt;
 

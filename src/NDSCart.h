@@ -22,6 +22,7 @@
 #include <string>
 
 #include "types.h"
+#include "Savestate.h"
 #include "NDS_Header.h"
 #include "FATStorage.h"
 
@@ -188,6 +189,7 @@ public:
     void ROMCommandFinish(u8* cmd, u8* data, u32 len) override;
 
 private:
+    void ApplyDLDIPatchAt(u8* binary, u32 dldioffset, const u8* patch, u32 patchlen, bool readonly);
     void ApplyDLDIPatch(const u8* patch, u32 patchlen, bool readonly);
     void ReadROM_B7(u32 addr, u32 len, u8* data, u32 offset);
 

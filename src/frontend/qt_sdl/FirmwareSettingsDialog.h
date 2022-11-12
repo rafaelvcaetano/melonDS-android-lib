@@ -123,7 +123,7 @@ private slots:
     void done(int r);
 
     void on_cbxBirthdayMonth_currentIndexChanged(int idx);
-    void on_cbRandomizeMAC_toggled();
+    void on_overrideFirmwareBox_toggled();
 
 private:
     bool verifyMAC();

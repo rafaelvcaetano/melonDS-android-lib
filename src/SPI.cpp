@@ -127,8 +127,8 @@ void LoadDefaultFirmware()
     if (NDS::ConsoleType == 1)
     {
         Firmware[0x1D] = 0x57; // DSi
-        Firmware[0x2F] = 0x18;
-        Firmware[0x1FD] = 0x02;
+        Firmware[0x2F] = 0x0F;
+        Firmware[0x1FD] = 0x01;
         Firmware[0x1FE] = 0x20;
     }
     else
@@ -215,41 +215,52 @@ void LoadDefaultFirmware()
     // wifi access points
     // TODO: WFC ID??
 
-    u32 apdata = userdata - 0x400;
-    memset(&Firmware[apdata], 0, 0x300);
-
-    strcpy((char*)&Firmware[apdata+0x40], "melonAP");
-    if (NDS::ConsoleType == 1) *(u16*)&Firmware[apdata+0xEA] = 1400;
-    Firmware[apdata+0xEF] = 0x01;
-    *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
-
-    apdata += 0x100;
-    Firmware[apdata+0xE7] = 0xFF;
-    Firmware[apdata+0xEF] = 0x01;
-    *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
-
-    apdata += 0x100;
-    Firmware[apdata+0xE7] = 0xFF;
-    Firmware[apdata+0xEF] = 0x01;
-    *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
-
-    if (NDS::ConsoleType == 1)
+    FILE* f = Platform::OpenLocalFile("wfcsettings.bin"+Platform::InstanceFileSuffix(), "rb");
+    if (!f) f = Platform::OpenLocalFile("wfcsettings.bin", "rb");
+    if (f)
     {
-        apdata = userdata - 0xA00;
-        Firmware[apdata+0xE7] = 0xFF;
+        u32 apdata = userdata - 0xA00;
+        fread(&Firmware[apdata], 0x900, 1, f);
+        fclose(f);
+    }
+    else
+    {
+        u32 apdata = userdata - 0x400;
+        memset(&Firmware[apdata], 0, 0x300);
+
+        strcpy((char*)&Firmware[apdata+0x40], "melonAP");
+        if (NDS::ConsoleType == 1) *(u16*)&Firmware[apdata+0xEA] = 1400;
+        Firmware[apdata+0xEF] = 0x01;
         *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
 
-        apdata += 0x200;
+        apdata += 0x100;
         Firmware[apdata+0xE7] = 0xFF;
+        Firmware[apdata+0xEF] = 0x01;
         *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
 
-        apdata += 0x200;
+        apdata += 0x100;
         Firmware[apdata+0xE7] = 0xFF;
+        Firmware[apdata+0xEF] = 0x01;
         *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
+
+        if (NDS::ConsoleType == 1)
+        {
+            apdata = userdata - 0xA00;
+            Firmware[apdata+0xE7] = 0xFF;
+            *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
+
+            apdata += 0x200;
+            Firmware[apdata+0xE7] = 0xFF;
+            *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
+
+            apdata += 0x200;
+            Firmware[apdata+0xE7] = 0xFF;
+            *(u16*)&Firmware[apdata+0xFE] = CRC16(&Firmware[apdata], 0xFE, 0x0000);
+        }
     }
 }
 
-void LoadFirmwareFromFile(FILE* f)
+void LoadFirmwareFromFile(FILE* f, bool makecopy)
 {
     fseek(f, 0, SEEK_END);
 
@@ -261,7 +272,9 @@ void LoadFirmwareFromFile(FILE* f)
     fread(Firmware, 1, FirmwareLength, f);
 
     // take a backup
-    std::string fwBackupPath = FirmwarePath + ".bak";
+    std::string fwBackupPath;
+    if (!makecopy) fwBackupPath = FirmwarePath + ".bak";
+    else           fwBackupPath = FirmwarePath;
     FILE* bf = Platform::OpenLocalFile(fwBackupPath, "rb");
     if (!bf)
     {
@@ -323,7 +336,16 @@ void Reset()
         else
             FirmwarePath = Platform::GetConfigString(Platform::FirmwarePath);
 
+        bool makecopy = false;
+        std::string origpath = FirmwarePath;
+        FirmwarePath += Platform::InstanceFileSuffix();
+
         FILE* f = Platform::OpenLocalFile(FirmwarePath, "rb");
+        if (!f)
+        {
+            f = Platform::OpenLocalFile(origpath, "rb");
+            makecopy = true;
+        }
         if (!f)
         {
             printf("Firmware not found! Generating default firmware.\n");
@@ -331,7 +353,7 @@ void Reset()
         }
         else
         {
-            LoadFirmwareFromFile(f);
+            LoadFirmwareFromFile(f, makecopy);
             fclose(f);
         }
     }
@@ -375,28 +397,28 @@ void Reset()
 
     *(u16*)&Firmware[userdata+0x72] = CRC16(&Firmware[userdata], 0x70, 0xFFFF);
 
-    if (firmoverride)
+    //if (firmoverride)
     {
         u8 mac[6];
-        bool rep;
+        bool rep = false;
 
-        if (Platform::GetConfigBool(Platform::Firm_RandomizeMAC))
-        {
-            mac[0] = 0x00;
-            mac[1] = 0x09;
-            mac[2] = 0xBF;
-            mac[3] = rand()&0xFF;
-            mac[4] = rand()&0xFF;
-            mac[5] = rand()&0xFF;
-            rep = true;
-        }
-        else
-        {
+        memcpy(mac, &Firmware[0x36], 6);
+
+        if (firmoverride)
             rep = Platform::GetConfigArray(Platform::Firm_MAC, mac);
+
+        int inst = Platform::InstanceID();
+        if (inst > 0)
+        {
+            rep = true;
+            mac[3] += inst;
+            mac[4] += inst*0x44;
+            mac[5] += inst*0x10;
         }
 
         if (rep)
         {
+            mac[0] &= 0xFC; // ensure the MAC isn't a broadcast MAC
             memcpy(&Firmware[0x36], mac, 6);
 
             *(u16*)&Firmware[0x2A] = CRC16(&Firmware[0x2C], *(u16*)&Firmware[0x2C], 0x0000);
@@ -564,6 +586,7 @@ void Write(u8 val, u32 hold)
 
     default:
         printf("unknown firmware SPI command %02X\n", CurCmd);
+        Data = 0xFF;
         break;
     }
 
@@ -574,9 +597,24 @@ void Write(u8 val, u32 hold)
             FILE* f = Platform::OpenLocalFile(FirmwarePath, "r+b");
             if (f)
             {
-                u32 cutoff = 0x7FA00 & FirmwareMask;
+                u32 cutoff = ((NDS::ConsoleType==1) ? 0x7F400 : 0x7FA00) & FirmwareMask;
                 fseek(f, cutoff, SEEK_SET);
                 fwrite(&Firmware[cutoff], FirmwareLength-cutoff, 1, f);
+                fclose(f);
+            }
+        }
+        else
+        {
+            char wfcfile[50] = {0};
+            int inst = Platform::InstanceID();
+            if (inst > 0) snprintf(wfcfile, 49, "wfcsettings.bin", Platform::InstanceID());
+            else          strncpy(wfcfile, "wfcsettings.bin", 49);
+
+            FILE* f = Platform::OpenLocalFile(wfcfile, "wb");
+            if (f)
+            {
+                u32 cutoff = 0x7F400 & FirmwareMask;
+                fwrite(&Firmware[cutoff], 0x900, 1, f);
                 fclose(f);
             }
         }
@@ -896,6 +934,8 @@ void WriteCnt(u16 val)
         }
     }
 
+    // TODO: presumably the transfer speed can be changed during a transfer
+    // like with the NDSCart SPI interface
     Cnt = (Cnt & 0x0080) | (val & 0xCF03);
     if (val & 0x0400) printf("!! CRAPOED 16BIT SPI MODE\n");
     if (Cnt & (1<<7)) printf("!! CHANGING SPICNT DURING TRANSFER: %04X\n", val);
@@ -930,8 +970,7 @@ u8 ReadData()
 void WriteData(u8 val)
 {
     if (!(Cnt & (1<<15))) return;
-
-    if (Cnt & (1<<7)) printf("!! WRITING AUXSPIDATA DURING PENDING TRANSFER\n");
+    if (Cnt & (1<<7)) return;
 
     Cnt |= (1<<7);
     switch (Cnt & 0x0300)

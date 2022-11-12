@@ -56,8 +56,11 @@ extern u32 NWRAMMask[2][3];
 bool Init();
 void DeInit();
 void Reset();
+void Stop();
 
 void DoSavestate(Savestate* file);
+
+void SetCartInserted(bool inserted);
 
 void SetupDirectBoot();
 void SoftReset();

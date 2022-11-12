@@ -18,6 +18,7 @@
 
 #include <QMessageBox>
 
+#include "Platform.h"
 #include "Config.h"
 
 #include "FirmwareSettingsDialog.h"
@@ -64,8 +65,14 @@ FirmwareSettingsDialog::FirmwareSettingsDialog(QWidget* parent) : QDialog(parent
     ui->overrideFirmwareBox->setChecked(Config::FirmwareOverrideSettings);
 
     ui->txtMAC->setText(QString::fromStdString(Config::FirmwareMAC));
-    ui->cbRandomizeMAC->setChecked(Config::RandomizeMAC);
-    on_cbRandomizeMAC_toggled();
+
+    on_overrideFirmwareBox_toggled();
+
+    int inst = Platform::InstanceID();
+    if (inst > 0)
+        ui->lblInstanceNum->setText(QString("Configuring settings for instance %1").arg(inst+1));
+    else
+        ui->lblInstanceNum->hide();
 }
 
 FirmwareSettingsDialog::~FirmwareSettingsDialog()
@@ -133,7 +140,6 @@ void FirmwareSettingsDialog::done(int r)
         std::string newMessage = ui->messageEdit->text().toStdString();
 
         std::string newMAC = ui->txtMAC->text().toStdString();
-        bool newRandomizeMAC = ui->cbRandomizeMAC->isChecked();
 
         if (   newOverride != Config::FirmwareOverrideSettings
             || newName != Config::FirmwareUsername
@@ -142,8 +148,7 @@ void FirmwareSettingsDialog::done(int r)
             || newBirthdayDay != Config::FirmwareBirthdayDay
             || newBirthdayMonth != Config::FirmwareBirthdayMonth
             || newMessage != Config::FirmwareMessage
-            || newMAC != Config::FirmwareMAC
-            || newRandomizeMAC != Config::RandomizeMAC)
+            || newMAC != Config::FirmwareMAC)
         {
             if (RunningSomething
                 && QMessageBox::warning(this, "Reset necessary to apply changes",
@@ -161,7 +166,6 @@ void FirmwareSettingsDialog::done(int r)
             Config::FirmwareMessage = newMessage;
 
             Config::FirmwareMAC = newMAC;
-            Config::RandomizeMAC = newRandomizeMAC;
 
             Config::Save();
 
@@ -202,8 +206,9 @@ void FirmwareSettingsDialog::on_cbxBirthdayMonth_currentIndexChanged(int idx)
     }
 }
 
-void FirmwareSettingsDialog::on_cbRandomizeMAC_toggled()
+void FirmwareSettingsDialog::on_overrideFirmwareBox_toggled()
 {
-    bool disable = ui->cbRandomizeMAC->isChecked();
-    ui->txtMAC->setDisabled(disable);
+    bool disable = !ui->overrideFirmwareBox->isChecked();
+    ui->grpUserSettings->setDisabled(disable);
+    ui->grpWifiSettings->setDisabled(disable);
 }

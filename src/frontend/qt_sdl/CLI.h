@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team
+    Copyright 2021-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -11,14 +11,31 @@
     melonDS is distributed in the hope that it will be useful, but WITHOUT ANY
     WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
     FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-
+    
     You should have received a copy of the GNU General Public License along
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
-#ifndef DSICRYPTO_H
-#define DSICRYPTO_H
+#ifndef CLI_H
+#define CLI_H
 
-//
+#include <QApplication>
+#include <QStringList>
 
-#endif // DSICRYPTO_H
+namespace CLI {
+
+struct CommandLineOptions
+{
+    QStringList errorsToDisplay = {};
+
+    QStringList dsRomPath;
+    QStringList gbaRomPath;
+    bool fullscreen;
+    bool boot;
+};
+
+extern CommandLineOptions* ManageArgs(QApplication& melon);
+
+}
+
+#endif

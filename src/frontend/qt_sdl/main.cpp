@@ -25,6 +25,7 @@
 #include <string>
 #include <algorithm>
 
+#include <QProcess>
 #include <QApplication>
 #include <QMessageBox>
 #include <QMenuBar>
@@ -35,18 +36,22 @@
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QVector>
+#include <QCommandLineParser>
 #ifndef _WIN32
+#include <QGuiApplication>
 #include <QSocketNotifier>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <signal.h>
+#ifndef APPLE
+#include <qpa/qplatformnativeinterface.h>
+#endif
 #endif
 
 #include <SDL2/SDL.h>
 
-#ifdef OGLRENDERER_ENABLED
 #include "OpenGLSupport.h"
-#endif
+#include "duckstation/gl/context.h"
 
 #include "main.h"
 #include "Input.h"
@@ -54,9 +59,11 @@
 #include "EmuSettingsDialog.h"
 #include "InputConfig/InputConfigDialog.h"
 #include "VideoSettingsDialog.h"
+#include "CameraSettingsDialog.h"
 #include "AudioSettingsDialog.h"
 #include "FirmwareSettingsDialog.h"
 #include "PathSettingsDialog.h"
+#include "MPSettingsDialog.h"
 #include "WifiSettingsDialog.h"
 #include "InterfaceSettingsDialog.h"
 #include "ROMInfoDialog.h"
@@ -77,6 +84,7 @@
 #include "SPU.h"
 #include "Wifi.h"
 #include "Platform.h"
+#include "LocalMP.h"
 #include "Config.h"
 
 #include "Savestate.h"
@@ -85,6 +93,9 @@
 
 #include "ROMManager.h"
 #include "ArchiveUtil.h"
+#include "CameraManager.h"
+
+#include "CLI.h"
 
 // TODO: uniform variable spelling
 
@@ -101,6 +112,7 @@ bool videoSettingsDirty;
 
 SDL_AudioDeviceID audioDevice;
 int audioFreq;
+bool audioMuted;
 SDL_cond* audioSync;
 SDL_mutex* audioSyncLock;
 
@@ -111,7 +123,20 @@ u32 micExtBufferWritePos;
 u32 micWavLength;
 s16* micWavBuffer;
 
+CameraManager* camManager[2];
+bool camStarted[2];
+
+const struct { int id; float ratio; const char* label; } aspectRatios[] =
+{
+    { 0, 1,                       "4:3 (native)" },
+    { 4, (5.f  / 3) / (4.f / 3), "5:3 (3DS)"},
+    { 1, (16.f / 9) / (4.f / 3),  "16:9" },
+    { 2, (21.f / 9) / (4.f / 3),  "21:9" },
+    { 3, 0,                       "window" }
+};
+
 void micCallback(void* data, Uint8* stream, int len);
+
 
 
 void audioCallback(void* data, Uint8* stream, int len)
@@ -129,7 +154,7 @@ void audioCallback(void* data, Uint8* stream, int len)
     SDL_CondSignal(audioSync);
     SDL_UnlockMutex(audioSyncLock);
 
-    if (num_in < 1)
+    if ((num_in < 1) || audioMuted)
     {
         memset(stream, 0, len*sizeof(s16)*2);
         return;
@@ -147,6 +172,23 @@ void audioCallback(void* data, Uint8* stream, int len)
     }
 
     Frontend::AudioOut_Resample(buf_in, num_in, (s16*)stream, len, Config::AudioVolume);
+}
+
+void audioMute()
+{
+    int inst = Platform::InstanceID();
+    audioMuted = false;
+
+    switch (Config::MPAudioMode)
+    {
+    case 1: // only instance 1
+        if (inst > 0) audioMuted = true;
+        break;
+
+    case 2: // only currently focused instance
+        if (!mainWindow->isActiveWindow()) audioMuted = true;
+        break;
+    }
 }
 
 
@@ -321,7 +363,7 @@ EmuThread::EmuThread(QObject* parent) : QThread(parent)
     EmuPause = 0;
     RunningSomething = false;
 
-    connect(this, SIGNAL(windowUpdate()), mainWindow->panel, SLOT(repaint()));
+    connect(this, SIGNAL(windowUpdate()), mainWindow->panelWidget, SLOT(repaint()));
     connect(this, SIGNAL(windowTitleChange(QString)), mainWindow, SLOT(onTitleUpdate(QString)));
     connect(this, SIGNAL(windowEmuStart()), mainWindow, SLOT(onEmuStart()));
     connect(this, SIGNAL(windowEmuStop()), mainWindow, SLOT(onEmuStop()));
@@ -329,55 +371,125 @@ EmuThread::EmuThread(QObject* parent) : QThread(parent)
     connect(this, SIGNAL(windowEmuReset()), mainWindow->actReset, SLOT(trigger()));
     connect(this, SIGNAL(windowEmuFrameStep()), mainWindow->actFrameStep, SLOT(trigger()));
     connect(this, SIGNAL(windowLimitFPSChange()), mainWindow->actLimitFramerate, SLOT(trigger()));
-    connect(this, SIGNAL(screenLayoutChange()), mainWindow->panel, SLOT(onScreenLayoutChanged()));
+    connect(this, SIGNAL(screenLayoutChange()), mainWindow->panelWidget, SLOT(onScreenLayoutChanged()));
     connect(this, SIGNAL(windowFullscreenToggle()), mainWindow, SLOT(onFullscreenToggled()));
     connect(this, SIGNAL(swapScreensToggle()), mainWindow->actScreenSwap, SLOT(trigger()));
 
-    if (mainWindow->hasOGL) initOpenGL();
+    static_cast<ScreenPanelGL*>(mainWindow->panel)->transferLayout(this);
+}
+
+void EmuThread::updateScreenSettings(bool filter, const WindowInfo& windowInfo, int numScreens, int* screenKind, float* screenMatrix)
+{
+    screenSettingsLock.lock();
+
+    if (lastScreenWidth != windowInfo.surface_width || lastScreenHeight != windowInfo.surface_height)
+    {
+        if (oglContext)
+            oglContext->ResizeSurface(windowInfo.surface_width, windowInfo.surface_height);
+        lastScreenWidth = windowInfo.surface_width;
+        lastScreenHeight = windowInfo.surface_height;
+    }
+
+    this->filter = filter;
+    this->windowInfo = windowInfo;
+    this->numScreens = numScreens;
+    memcpy(this->screenKind, screenKind, sizeof(int)*numScreens);
+    memcpy(this->screenMatrix, screenMatrix, sizeof(float)*numScreens*6);
+
+    screenSettingsLock.unlock();
 }
 
 void EmuThread::initOpenGL()
 {
-    QOpenGLContext* windowctx = mainWindow->getOGLContext();
-    QSurfaceFormat format = windowctx->format();
+    GL::Context* windowctx = mainWindow->getOGLContext();
 
-    format.setSwapInterval(0);
+    oglContext = windowctx;
+    oglContext->MakeCurrent();
 
-    oglSurface = new QOffscreenSurface();
-    oglSurface->setFormat(format);
-    oglSurface->create();
-    if (!oglSurface->isValid())
+    OpenGL::BuildShaderProgram(kScreenVS, kScreenFS, screenShaderProgram, "ScreenShader");
+    GLuint pid = screenShaderProgram[2];
+    glBindAttribLocation(pid, 0, "vPosition");
+    glBindAttribLocation(pid, 1, "vTexcoord");
+    glBindFragDataLocation(pid, 0, "oColor");
+
+    OpenGL::LinkShaderProgram(screenShaderProgram);
+
+    glUseProgram(pid);
+    glUniform1i(glGetUniformLocation(pid, "ScreenTex"), 0);
+
+    screenShaderScreenSizeULoc = glGetUniformLocation(pid, "uScreenSize");
+    screenShaderTransformULoc = glGetUniformLocation(pid, "uTransform");
+
+    // to prevent bleeding between both parts of the screen
+    // with bilinear filtering enabled
+    const int paddedHeight = 192*2+2;
+    const float padPixels = 1.f / paddedHeight;
+
+    const float vertices[] =
     {
-        // TODO handle this!
-        printf("oglSurface shat itself :(\n");
-        delete oglSurface;
-        return;
-    }
+        0.f,   0.f,    0.f, 0.f,
+        0.f,   192.f,  0.f, 0.5f - padPixels,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        0.f,   0.f,    0.f, 0.f,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        256.f, 0.f,    1.f, 0.f,
 
-    oglContext = new QOpenGLContext();
-    oglContext->setFormat(oglSurface->format());
-    oglContext->setShareContext(windowctx);
-    if (!oglContext->create())
-    {
-        // TODO handle this!
-        printf("oglContext shat itself :(\n");
-        delete oglContext;
-        delete oglSurface;
-        return;
-    }
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        0.f,   192.f,  0.f, 1.f,
+        256.f, 192.f,  1.f, 1.f,
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        256.f, 192.f,  1.f, 1.f,
+        256.f, 0.f,    1.f, 0.5f + padPixels
+    };
 
-    oglContext->moveToThread(this);
+    glGenBuffers(1, &screenVertexBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glGenVertexArrays(1, &screenVertexArray);
+    glBindVertexArray(screenVertexArray);
+    glEnableVertexAttribArray(0); // position
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(0));
+    glEnableVertexAttribArray(1); // texcoord
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(2*4));
+
+    glGenTextures(1, &screenTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, screenTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, paddedHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    // fill the padding
+    u8 zeroData[256*4*4];
+    memset(zeroData, 0, sizeof(zeroData));
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256, 2, GL_RGBA, GL_UNSIGNED_BYTE, zeroData);
+
+    OSD::Init(true);
+
+    oglContext->SetSwapInterval(Config::ScreenVSync ? Config::ScreenVSyncInterval : 0);
 }
 
 void EmuThread::deinitOpenGL()
 {
-    delete oglContext;
-    delete oglSurface;
+    glDeleteTextures(1, &screenTexture);
+
+    glDeleteVertexArrays(1, &screenVertexArray);
+    glDeleteBuffers(1, &screenVertexBuffer);
+
+    OpenGL::DeleteShaderProgram(screenShaderProgram);
+
+    OSD::DeInit();
+
+    oglContext->DoneCurrent();
+    oglContext = nullptr;
+
+    lastScreenWidth = lastScreenHeight = -1;
 }
 
 void EmuThread::run()
 {
-    bool hasOGL = mainWindow->hasOGL;
     u32 mainScreenPos[3];
 
     NDS::Init();
@@ -392,14 +504,12 @@ void EmuThread::run()
     videoSettings.GL_ScaleFactor = Config::GL_ScaleFactor;
     videoSettings.GL_BetterPolygons = Config::GL_BetterPolygons;
 
-#ifdef OGLRENDERER_ENABLED
-    if (hasOGL)
+    if (mainWindow->hasOGL)
     {
-        oglContext->makeCurrent(oglSurface);
+        initOpenGL();
         videoRenderer = Config::_3DRenderer;
     }
     else
-#endif
     {
         videoRenderer = 0;
     }
@@ -462,25 +572,24 @@ void EmuThread::run()
             if (EmuRunning == 3) EmuRunning = 2;
 
             // update render settings if needed
-            if (videoSettingsDirty)
+            // HACK:
+            // once the fast forward hotkey is released, we need to update vsync
+            // to the old setting again
+            if (videoSettingsDirty || Input::HotkeyReleased(HK_FastForward))
             {
-                if (hasOGL != mainWindow->hasOGL)
+                if (oglContext)
                 {
-                    hasOGL = mainWindow->hasOGL;
-#ifdef OGLRENDERER_ENABLED
-                    if (hasOGL)
-                    {
-                        oglContext->makeCurrent(oglSurface);
-                        videoRenderer = Config::_3DRenderer;
-                    }
-                    else
-#endif
-                    {
-                        videoRenderer = 0;
-                    }
+                    oglContext->SetSwapInterval(Config::ScreenVSync ? Config::ScreenVSyncInterval : 0);
+                    videoRenderer = Config::_3DRenderer;
                 }
+#ifdef OGLRENDERER_ENABLED
                 else
-                    videoRenderer = hasOGL ? Config::_3DRenderer : 0;
+#endif
+                {
+                    videoRenderer = 0;
+                }                
+
+                videoRenderer = oglContext ? Config::_3DRenderer : 0;
 
                 videoSettingsDirty = false;
 
@@ -534,15 +643,6 @@ void EmuThread::run()
                 }
             }
 
-#ifdef OGLRENDERER_ENABLED
-            if (videoRenderer == 1)
-            {
-                FrontBufferLock.lock();
-                if (FrontBufferReverseSyncs[FrontBuffer ^ 1])
-                    glWaitSync(FrontBufferReverseSyncs[FrontBuffer ^ 1], 0, GL_TIMEOUT_IGNORED);
-                FrontBufferLock.unlock();
-            }
-#endif
 
             // emulate
             u32 nlines = NDS::RunFrame();
@@ -553,21 +653,17 @@ void EmuThread::run()
             if (ROMManager::GBASave)
                 ROMManager::GBASave->CheckFlush();
 
-            FrontBufferLock.lock();
-            FrontBuffer = GPU::FrontBuffer;
-#ifdef OGLRENDERER_ENABLED
-            if (videoRenderer == 1)
+            if (!oglContext)
             {
-                if (FrontBufferSyncs[FrontBuffer])
-                    glDeleteSync(FrontBufferSyncs[FrontBuffer]);
-                FrontBufferSyncs[FrontBuffer] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-                // this is hacky but this is the easiest way to call
-                // this function without dealling with a ton of
-                // macro mess
-                epoxy_glFlush();
+                FrontBufferLock.lock();
+                FrontBuffer = GPU::FrontBuffer;
+                FrontBufferLock.unlock();
             }
-#endif
-            FrontBufferLock.unlock();
+            else
+            {
+                FrontBuffer = GPU::FrontBuffer;
+                drawScreenGL();
+            }
 
 #ifdef MELONCAP
             MelonCap::Update();
@@ -576,13 +672,18 @@ void EmuThread::run()
             if (EmuRunning == 0) break;
 
             winUpdateCount++;
-            if (winUpdateCount >= winUpdateFreq)
+            if (winUpdateCount >= winUpdateFreq && !oglContext)
             {
                 emit windowUpdate();
                 winUpdateCount = 0;
             }
 
             bool fastforward = Input::HotkeyDown(HK_FastForward);
+
+            if (fastforward && oglContext && Config::ScreenVSync)
+            {
+                oglContext->SetSwapInterval(0);
+            }
 
             if (Config::AudioSync && !fastforward && audioDevice)
             {
@@ -637,7 +738,11 @@ void EmuThread::run()
                 if (winUpdateFreq < 1)
                     winUpdateFreq = 1;
 
-                sprintf(melontitle, "[%d/%.0f] melonDS " MELONDS_VERSION, fps, fpstarget);
+                int inst = Platform::InstanceID();
+                if (inst == 0)
+                    sprintf(melontitle, "[%d/%.0f] melonDS " MELONDS_VERSION, fps, fpstarget);
+                else
+                    sprintf(melontitle, "[%d/%.0f] melonDS (%d)", fps, fpstarget, inst+1);
                 changeWindowTitle(melontitle);
             }
         }
@@ -652,10 +757,29 @@ void EmuThread::run()
 
             EmuStatus = EmuRunning;
 
-            sprintf(melontitle, "melonDS " MELONDS_VERSION);
+            int inst = Platform::InstanceID();
+            if (inst == 0)
+                sprintf(melontitle, "melonDS " MELONDS_VERSION);
+            else
+                sprintf(melontitle, "melonDS (%d)", inst+1);
             changeWindowTitle(melontitle);
 
             SDL_Delay(75);
+
+            if (oglContext)
+                drawScreenGL();
+
+            int contextRequest = ContextRequest;
+            if (contextRequest == 1)
+            {
+                initOpenGL();
+                ContextRequest = 0;
+            }
+            else if (contextRequest == 2)
+            {
+                deinitOpenGL();
+                ContextRequest = 0;
+            }
         }
     }
 
@@ -664,12 +788,6 @@ void EmuThread::run()
     GPU::DeInitRenderer();
     NDS::DeInit();
     //Platform::LAN_DeInit();
-
-    if (hasOGL)
-    {
-        oglContext->doneCurrent();
-        deinitOpenGL();
-    }
 }
 
 void EmuThread::changeWindowTitle(char* title)
@@ -687,6 +805,18 @@ void EmuThread::emuRun()
     emit windowEmuStart();
     if (audioDevice) SDL_PauseAudioDevice(audioDevice, 0);
     micOpen();
+}
+
+void EmuThread::initContext()
+{
+    ContextRequest = 1;
+    while (ContextRequest != 0);
+}
+
+void EmuThread::deinitContext()
+{
+    ContextRequest = 2;
+    while (ContextRequest != 0);
 }
 
 void EmuThread::emuPause()
@@ -740,19 +870,105 @@ bool EmuThread::emuIsActive()
     return (RunningSomething == 1);
 }
 
+void EmuThread::drawScreenGL()
+{
+    int w = windowInfo.surface_width;
+    int h = windowInfo.surface_height;
+    float factor = windowInfo.surface_scale;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(false);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glViewport(0, 0, w, h);
+
+    glUseProgram(screenShaderProgram[2]);
+    glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
+
+    int frontbuf = FrontBuffer;
+    glActiveTexture(GL_TEXTURE0);
+
+#ifdef OGLRENDERER_ENABLED
+    if (GPU::Renderer != 0)
+    {
+        // hardware-accelerated render
+        GPU::CurGLCompositor->BindOutputTexture(frontbuf);
+    }
+    else
+#endif
+    {
+        // regular render
+        glBindTexture(GL_TEXTURE_2D, screenTexture);
+
+        if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
+        {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
+                            GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192+2, 256, 192, GL_RGBA,
+                            GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
+        }
+    }
+
+    screenSettingsLock.lock();
+
+    GLint filter = this->filter ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+    glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
+    glBindVertexArray(screenVertexArray);
+
+    for (int i = 0; i < numScreens; i++)
+    {
+        glUniformMatrix2x3fv(screenShaderTransformULoc, 1, GL_TRUE, screenMatrix[i]);
+        glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2*3, 2*3);
+    }
+
+    screenSettingsLock.unlock();
+
+    OSD::Update();
+    OSD::DrawGL(w, h);
+
+    oglContext->SwapBuffers();
+}
+
+ScreenHandler::ScreenHandler(QWidget* widget)
+{
+    widget->setMouseTracking(true);
+    widget->setAttribute(Qt::WA_AcceptTouchEvents);
+    QTimer* mouseTimer = setupMouseTimer();
+    widget->connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) widget->setCursor(Qt::BlankCursor);});
+}
+
+ScreenHandler::~ScreenHandler()
+{
+    mouseTimer->stop();
+}
 
 void ScreenHandler::screenSetupLayout(int w, int h)
 {
     int sizing = Config::ScreenSizing;
     if (sizing == 3) sizing = autoScreenSizing;
 
-    float aspectRatios[] =
+    float aspectTop, aspectBot;
+
+    for (auto ratio : aspectRatios)
     {
-        1.f,
-        (16.f/9)/(4.f/3),
-        (21.f/9)/(4.f/3),
-        ((float)w/h)/(4.f/3)
-    };
+        if (ratio.id == Config::ScreenAspectTop)
+            aspectTop = ratio.ratio;
+        if (ratio.id == Config::ScreenAspectBot)
+            aspectBot = ratio.ratio;
+    }
+
+    if (aspectTop == 0)
+        aspectTop = (float) w / h;
+
+    if (aspectBot == 0)
+        aspectBot = (float) w / h;
 
     Frontend::SetupScreenLayout(w, h,
                                 Config::ScreenLayout,
@@ -761,8 +977,8 @@ void ScreenHandler::screenSetupLayout(int w, int h)
                                 Config::ScreenGap,
                                 Config::IntegerScaling != 0,
                                 Config::ScreenSwap != 0,
-                                aspectRatios[Config::ScreenAspectTop],
-                                aspectRatios[Config::ScreenAspectBot]);
+                                aspectTop,
+                                aspectBot);
 
     numScreens = Frontend::GetScreenTransforms(screenMatrix[0], screenKind);
 }
@@ -770,10 +986,15 @@ void ScreenHandler::screenSetupLayout(int w, int h)
 QSize ScreenHandler::screenGetMinSize(int factor = 1)
 {
     bool isHori = (Config::ScreenRotation == 1 || Config::ScreenRotation == 3);
-    int gap = Config::ScreenGap;
+    int gap = Config::ScreenGap * factor;
 
     int w = 256 * factor;
     int h = 192 * factor;
+
+    if (Config::ScreenSizing == 4 || Config::ScreenSizing == 5)
+    {
+        return QSize(w, h);
+    }
 
     if (Config::ScreenLayout == 0) // natural
     {
@@ -799,9 +1020,9 @@ QSize ScreenHandler::screenGetMinSize(int factor = 1)
     else // hybrid
     {
         if (isHori)
-            return QSize(h+gap+h, 3*w +(4*gap) / 3);
+            return QSize(h+gap+h, 3*w + (int)ceil((4*gap) / 3.0));
         else
-            return QSize(3*w +(4*gap) / 3, h+gap+h);
+            return QSize(3*w + (int)ceil((4*gap) / 3.0), h+gap+h);
     }
 }
 
@@ -910,7 +1131,7 @@ void ScreenHandler::screenHandleTouch(QTouchEvent* event)
 
 void ScreenHandler::showCursor()
 {
-    mainWindow->panel->setCursor(Qt::ArrowCursor);
+    mainWindow->panelWidget->setCursor(Qt::ArrowCursor);
     mouseTimer->start();
 }
 
@@ -924,7 +1145,7 @@ QTimer* ScreenHandler::setupMouseTimer()
     return mouseTimer;
 }
 
-ScreenPanelNative::ScreenPanelNative(QWidget* parent) : QWidget(parent)
+ScreenPanelNative::ScreenPanelNative(QWidget* parent) : QWidget(parent), ScreenHandler(this)
 {
     screen[0] = QImage(256, 192, QImage::Format_RGB32);
     screen[1] = QImage(256, 192, QImage::Format_RGB32);
@@ -932,17 +1153,12 @@ ScreenPanelNative::ScreenPanelNative(QWidget* parent) : QWidget(parent)
     screenTrans[0].reset();
     screenTrans[1].reset();
 
-    touching = false;
-
-    setAttribute(Qt::WA_AcceptTouchEvents);
-
-    OSD::Init(nullptr);
+    OSD::Init(false);
 }
 
 ScreenPanelNative::~ScreenPanelNative()
 {
-    OSD::DeInit(nullptr);
-    mouseTimer->stop();
+    OSD::DeInit();
 }
 
 void ScreenPanelNative::setupScreenLayout()
@@ -993,7 +1209,7 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
         }
     }
 
-    OSD::Update(nullptr);
+    OSD::Update();
     OSD::DrawNative(painter);
 }
 
@@ -1041,29 +1257,102 @@ void ScreenPanelNative::onScreenLayoutChanged()
 }
 
 
-ScreenPanelGL::ScreenPanelGL(QWidget* parent) : QOpenGLWidget(parent)
+ScreenPanelGL::ScreenPanelGL(QWidget* parent) : QWidget(parent), ScreenHandler(this)
 {
-    touching = false;
-
-    setAttribute(Qt::WA_AcceptTouchEvents);
+    setAutoFillBackground(false);
+    setAttribute(Qt::WA_NativeWindow, true);
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAttribute(Qt::WA_PaintOnScreen, true);
+    setAttribute(Qt::WA_KeyCompression, false);
+    setFocusPolicy(Qt::StrongFocus);
+    setMinimumSize(screenGetMinSize());
 }
 
 ScreenPanelGL::~ScreenPanelGL()
+{}
+
+bool ScreenPanelGL::createContext()
 {
-    mouseTimer->stop();
+    std::optional<WindowInfo> windowInfo = getWindowInfo();
+    std::array<GL::Context::Version, 2> versionsToTry = {
+        GL::Context::Version{GL::Context::Profile::Core, 4, 3},
+        GL::Context::Version{GL::Context::Profile::Core, 3, 2}};
+    if (windowInfo.has_value())
+    {
+        glContext = GL::Context::Create(*getWindowInfo(), versionsToTry);
+        glContext->DoneCurrent();
+    }
 
-    makeCurrent();
+    return glContext != nullptr;
+}
 
-    OSD::DeInit(this);
+qreal ScreenPanelGL::devicePixelRatioFromScreen() const
+{
+    const QScreen* screen_for_ratio = window()->windowHandle()->screen();
+    if (!screen_for_ratio)
+        screen_for_ratio = QGuiApplication::primaryScreen();
 
-    glDeleteTextures(1, &screenTexture);
+    return screen_for_ratio ? screen_for_ratio->devicePixelRatio() : static_cast<qreal>(1);
+}
 
-    glDeleteVertexArrays(1, &screenVertexArray);
-    glDeleteBuffers(1, &screenVertexBuffer);
+int ScreenPanelGL::scaledWindowWidth() const
+{
+  return std::max(static_cast<int>(std::ceil(static_cast<qreal>(width()) * devicePixelRatioFromScreen())), 1);
+}
 
-    delete screenShader;
+int ScreenPanelGL::scaledWindowHeight() const
+{
+  return std::max(static_cast<int>(std::ceil(static_cast<qreal>(height()) * devicePixelRatioFromScreen())), 1);
+}
 
-    doneCurrent();
+std::optional<WindowInfo> ScreenPanelGL::getWindowInfo()
+{
+    WindowInfo wi;
+
+    // Windows and Apple are easy here since there's no display connection.
+    #if defined(_WIN32)
+    wi.type = WindowInfo::Type::Win32;
+    wi.window_handle = reinterpret_cast<void*>(winId());
+    #elif defined(__APPLE__)
+    wi.type = WindowInfo::Type::MacOS;
+    wi.window_handle = reinterpret_cast<void*>(winId());
+    #else
+    QPlatformNativeInterface* pni = QGuiApplication::platformNativeInterface();
+    const QString platform_name = QGuiApplication::platformName();
+    if (platform_name == QStringLiteral("xcb"))
+    {
+        wi.type = WindowInfo::Type::X11;
+        wi.display_connection = pni->nativeResourceForWindow("display", windowHandle());
+        wi.window_handle = reinterpret_cast<void*>(winId());
+    }
+    else if (platform_name == QStringLiteral("wayland"))
+    {
+        wi.type = WindowInfo::Type::Wayland;
+        QWindow* handle = windowHandle();
+        if (handle == nullptr)
+            return std::nullopt;
+
+        wi.display_connection = pni->nativeResourceForWindow("display", handle);
+        wi.window_handle = pni->nativeResourceForWindow("surface", handle);
+    }
+    else
+    {
+        qCritical() << "Unknown PNI platform " << platform_name;
+        return std::nullopt;
+    }
+    #endif
+
+    wi.surface_width = static_cast<u32>(scaledWindowWidth());
+    wi.surface_height = static_cast<u32>(scaledWindowHeight());
+    wi.surface_scale = static_cast<float>(devicePixelRatioFromScreen());
+
+    return wi;
+}
+
+
+QPaintEngine* ScreenPanelGL::paintEngine() const
+{
+  return nullptr;
 }
 
 void ScreenPanelGL::setupScreenLayout()
@@ -1072,163 +1361,15 @@ void ScreenPanelGL::setupScreenLayout()
     int h = height();
 
     screenSetupLayout(w, h);
-}
-
-void ScreenPanelGL::initializeGL()
-{
-    initializeOpenGLFunctions();
-
-    const GLubyte* renderer = glGetString(GL_RENDERER); // get renderer string
-    const GLubyte* version = glGetString(GL_VERSION); // version as a string
-    printf("OpenGL: renderer: %s\n", renderer);
-    printf("OpenGL: version: %s\n", version);
-
-    glClearColor(0, 0, 0, 1);
-
-    screenShader = new QOpenGLShaderProgram(this);
-    screenShader->addShaderFromSourceCode(QOpenGLShader::Vertex, kScreenVS);
-    screenShader->addShaderFromSourceCode(QOpenGLShader::Fragment, kScreenFS);
-
-    GLuint pid = screenShader->programId();
-    glBindAttribLocation(pid, 0, "vPosition");
-    glBindAttribLocation(pid, 1, "vTexcoord");
-    glBindFragDataLocation(pid, 0, "oColor");
-
-    screenShader->link();
-
-    screenShader->bind();
-    screenShader->setUniformValue("ScreenTex", (GLint)0);
-    screenShader->release();
-
-    // to prevent bleeding between both parts of the screen
-    // with bilinear filtering enabled
-    const int paddedHeight = 192*2+2;
-    const float padPixels = 1.f / paddedHeight;
-
-    const float vertices[] =
-    {
-        0.f,   0.f,    0.f, 0.f,
-        0.f,   192.f,  0.f, 0.5f - padPixels,
-        256.f, 192.f,  1.f, 0.5f - padPixels,
-        0.f,   0.f,    0.f, 0.f,
-        256.f, 192.f,  1.f, 0.5f - padPixels,
-        256.f, 0.f,    1.f, 0.f,
-
-        0.f,   0.f,    0.f, 0.5f + padPixels,
-        0.f,   192.f,  0.f, 1.f,
-        256.f, 192.f,  1.f, 1.f,
-        0.f,   0.f,    0.f, 0.5f + padPixels,
-        256.f, 192.f,  1.f, 1.f,
-        256.f, 0.f,    1.f, 0.5f + padPixels
-    };
-
-    glGenBuffers(1, &screenVertexBuffer);
-    glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glGenVertexArrays(1, &screenVertexArray);
-    glBindVertexArray(screenVertexArray);
-    glEnableVertexAttribArray(0); // position
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(0));
-    glEnableVertexAttribArray(1); // texcoord
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(2*4));
-
-    glGenTextures(1, &screenTexture);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, screenTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, paddedHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    // fill the padding
-    u8 zeroData[256*4*4];
-    memset(zeroData, 0, sizeof(zeroData));
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256, 2, GL_RGBA, GL_UNSIGNED_BYTE, zeroData);
-
-    OSD::Init(this);
-}
-
-void ScreenPanelGL::paintGL()
-{
-    int w = width();
-    int h = height();
-    float factor = devicePixelRatioF();
-
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glViewport(0, 0, w*factor, h*factor);
-
     if (emuThread)
-    {
-        screenShader->bind();
-
-        screenShader->setUniformValue("uScreenSize", (float)w, (float)h);
-        screenShader->setUniformValue("uScaleFactor", factor);
-
-        emuThread->FrontBufferLock.lock();
-        int frontbuf = emuThread->FrontBuffer;
-        glActiveTexture(GL_TEXTURE0);
-
-    #ifdef OGLRENDERER_ENABLED
-        if (GPU::Renderer != 0)
-        {
-            if (emuThread->FrontBufferSyncs[emuThread->FrontBuffer])
-                glWaitSync(emuThread->FrontBufferSyncs[emuThread->FrontBuffer], 0, GL_TIMEOUT_IGNORED);
-            // hardware-accelerated render
-            GPU::CurGLCompositor->BindOutputTexture(frontbuf);
-        }
-        else
-    #endif
-        {
-            // regular render
-            glBindTexture(GL_TEXTURE_2D, screenTexture);
-
-            if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
-            {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
-                                GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192+2, 256, 192, GL_RGBA,
-                                GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
-            }
-        }
-
-        GLint filter = Config::ScreenFilter ? GL_LINEAR : GL_NEAREST;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-
-        glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
-        glBindVertexArray(screenVertexArray);
-
-        GLint transloc = screenShader->uniformLocation("uTransform");
-
-        for (int i = 0; i < numScreens; i++)
-        {
-            glUniformMatrix2x3fv(transloc, 1, GL_TRUE, screenMatrix[i]);
-            glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2*3, 2*3);
-        }
-
-        screenShader->release();
-
-        if (emuThread->FrontBufferReverseSyncs[emuThread->FrontBuffer])
-            glDeleteSync(emuThread->FrontBufferReverseSyncs[emuThread->FrontBuffer]);
-        emuThread->FrontBufferReverseSyncs[emuThread->FrontBuffer] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        emuThread->FrontBufferLock.unlock();
-    }
-
-    OSD::Update(this);
-    OSD::DrawGL(this, w*factor, h*factor);
+        transferLayout(emuThread);
 }
 
 void ScreenPanelGL::resizeEvent(QResizeEvent* event)
 {
     setupScreenLayout();
 
-    QOpenGLWidget::resizeEvent(event);
-}
-
-void ScreenPanelGL::resizeGL(int w, int h)
-{
+    QWidget::resizeEvent(event);
 }
 
 void ScreenPanelGL::mousePressEvent(QMouseEvent* event)
@@ -1261,6 +1402,13 @@ bool ScreenPanelGL::event(QEvent* event)
         return true;
     }
     return QWidget::event(event);
+}
+
+void ScreenPanelGL::transferLayout(EmuThread* thread)
+{
+    std::optional<WindowInfo> windowInfo = getWindowInfo();
+    if (windowInfo.has_value())
+        thread->updateScreenSettings(Config::ScreenFilter, *windowInfo, numScreens, screenKind, &screenMatrix[0][0]);
 }
 
 void ScreenPanelGL::onScreenLayoutChanged()
@@ -1307,6 +1455,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     setWindowTitle("melonDS " MELONDS_VERSION);
     setAttribute(Qt::WA_DeleteOnClose);
     setAcceptDrops(true);
+    setFocusPolicy(Qt::ClickFocus);
+
+    int inst = Platform::InstanceID();
 
     QMenuBar* menubar = new QMenuBar();
     {
@@ -1439,19 +1590,30 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         actEnableCheats->setCheckable(true);
         connect(actEnableCheats, &QAction::triggered, this, &MainWindow::onEnableCheats);
 
-        actSetupCheats = menu->addAction("Setup cheat codes");
-        actSetupCheats->setMenuRole(QAction::NoRole);
-        connect(actSetupCheats, &QAction::triggered, this, &MainWindow::onSetupCheats);
+        //if (inst == 0)
+        {
+            actSetupCheats = menu->addAction("Setup cheat codes");
+            actSetupCheats->setMenuRole(QAction::NoRole);
+            connect(actSetupCheats, &QAction::triggered, this, &MainWindow::onSetupCheats);
 
-        menu->addSeparator();
-        actROMInfo = menu->addAction("ROM info");
-        connect(actROMInfo, &QAction::triggered, this, &MainWindow::onROMInfo);
+            menu->addSeparator();
+            actROMInfo = menu->addAction("ROM info");
+            connect(actROMInfo, &QAction::triggered, this, &MainWindow::onROMInfo);
 
-        actRAMInfo = menu->addAction("RAM search");
-        connect(actRAMInfo, &QAction::triggered, this, &MainWindow::onRAMInfo);
+            actRAMInfo = menu->addAction("RAM search");
+            connect(actRAMInfo, &QAction::triggered, this, &MainWindow::onRAMInfo);
 
-        actTitleManager = menu->addAction("Manage DSi titles");
-        connect(actTitleManager, &QAction::triggered, this, &MainWindow::onOpenTitleManager);
+            actTitleManager = menu->addAction("Manage DSi titles");
+            connect(actTitleManager, &QAction::triggered, this, &MainWindow::onOpenTitleManager);
+        }
+
+        {
+            menu->addSeparator();
+            QMenu* submenu = menu->addMenu("Multiplayer");
+
+            actMPNewInstance = submenu->addAction("Launch new instance");
+            connect(actMPNewInstance, &QAction::triggered, this, &MainWindow::onMPNewInstance);
+        }
     }
     {
         QMenu* menu = menubar->addMenu("Config");
@@ -1460,7 +1622,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         connect(actEmuSettings, &QAction::triggered, this, &MainWindow::onOpenEmuSettings);
 
 #ifdef __APPLE__
-        QAction* actPreferences = menu->addAction("Preferences...");
+        actPreferences = menu->addAction("Preferences...");
         connect(actPreferences, &QAction::triggered, this, &MainWindow::onOpenEmuSettings);
         actPreferences->setMenuRole(QAction::PreferencesRole);
 #endif
@@ -1471,17 +1633,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         actVideoSettings = menu->addAction("Video settings");
         connect(actVideoSettings, &QAction::triggered, this, &MainWindow::onOpenVideoSettings);
 
+        actCameraSettings = menu->addAction("Camera settings");
+        connect(actCameraSettings, &QAction::triggered, this, &MainWindow::onOpenCameraSettings);
+
         actAudioSettings = menu->addAction("Audio settings");
         connect(actAudioSettings, &QAction::triggered, this, &MainWindow::onOpenAudioSettings);
+
+        actMPSettings = menu->addAction("Multiplayer settings");
+        connect(actMPSettings, &QAction::triggered, this, &MainWindow::onOpenMPSettings);
 
         actWifiSettings = menu->addAction("Wifi settings");
         connect(actWifiSettings, &QAction::triggered, this, &MainWindow::onOpenWifiSettings);
 
-        actInterfaceSettings = menu->addAction("Interface settings");
-        connect(actInterfaceSettings, &QAction::triggered, this, &MainWindow::onOpenInterfaceSettings);
-
         actFirmwareSettings = menu->addAction("Firmware settings");
         connect(actFirmwareSettings, &QAction::triggered, this, &MainWindow::onOpenFirmwareSettings);
+
+        actInterfaceSettings = menu->addAction("Interface settings");
+        connect(actInterfaceSettings, &QAction::triggered, this, &MainWindow::onOpenInterfaceSettings);
 
         actPathSettings = menu->addAction("Path settings");
         connect(actPathSettings, &QAction::triggered, this, &MainWindow::onOpenPathSettings);
@@ -1586,34 +1754,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         {
             QMenu* submenu = menu->addMenu("Aspect ratio");
             grpScreenAspectTop = new QActionGroup(submenu);
-
-            const char* aspectRatiosTop[] = {"Top 4:3 (native)", "Top 16:9", "Top 21:9", "Top window"};
-
-            for (int i = 0; i < 4; i++)
-            {
-                actScreenAspectTop[i] = submenu->addAction(QString(aspectRatiosTop[i]));
-                actScreenAspectTop[i]->setActionGroup(grpScreenAspectTop);
-                actScreenAspectTop[i]->setData(QVariant(i));
-                actScreenAspectTop[i]->setCheckable(true);
-            }
-
-            connect(grpScreenAspectTop, &QActionGroup::triggered, this, &MainWindow::onChangeScreenAspectTop);
-
-            submenu->addSeparator();
-
             grpScreenAspectBot = new QActionGroup(submenu);
+            actScreenAspectTop = new QAction*[sizeof(aspectRatios) / sizeof(aspectRatios[0])];
+            actScreenAspectBot = new QAction*[sizeof(aspectRatios) / sizeof(aspectRatios[0])];
 
-            const char* aspectRatiosBot[] = {"Bottom 4:3 (native)", "Bottom 16:9", "Bottom 21:9", "Bottom window"};
-
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 2; i++)
             {
-                actScreenAspectBot[i] = submenu->addAction(QString(aspectRatiosBot[i]));
-                actScreenAspectBot[i]->setActionGroup(grpScreenAspectBot);
-                actScreenAspectBot[i]->setData(QVariant(i));
-                actScreenAspectBot[i]->setCheckable(true);
-            }
+                QActionGroup* group = grpScreenAspectTop;
+                QAction** actions = actScreenAspectTop;
 
-            connect(grpScreenAspectBot, &QActionGroup::triggered, this, &MainWindow::onChangeScreenAspectBot);
+                if (i == 1)
+                {
+                    group = grpScreenAspectBot;
+                    submenu->addSeparator();
+                    actions = actScreenAspectBot;
+                }
+
+                for (int j = 0; j < sizeof(aspectRatios) / sizeof(aspectRatios[0]); j++)
+                {
+                    auto ratio = aspectRatios[j];
+                    QString label = QString("%1 %2").arg(i ? "Bottom" : "Top", ratio.label);
+                    actions[j] = submenu->addAction(label);
+                    actions[j]->setActionGroup(group);
+                    actions[j]->setData(QVariant(ratio.id));
+                    actions[j]->setCheckable(true);
+                }
+
+                connect(group, &QActionGroup::triggered, this, &MainWindow::onChangeScreenAspect);
+            }
         }
 
         actScreenFiltering = menu->addAction("Screen filtering");
@@ -1637,6 +1805,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     setMenuBar(menubar);
 
     resize(Config::WindowWidth, Config::WindowHeight);
+
+    if (Config::FirmwareUsername == "Arisotura")
+        actMPNewInstance->setText("Fart");
 
 #ifdef Q_OS_MAC
     QPoint screenCenter = screen()->availableGeometry().center();
@@ -1704,71 +1875,84 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     actScreenSwap->setChecked(Config::ScreenSwap);
 
-    actScreenAspectTop[Config::ScreenAspectTop]->setChecked(true);
-    actScreenAspectBot[Config::ScreenAspectBot]->setChecked(true);
+    for (int i = 0; i < sizeof(aspectRatios) / sizeof(aspectRatios[0]); i++)
+    {
+        if (Config::ScreenAspectTop == aspectRatios[i].id)
+            actScreenAspectTop[i]->setChecked(true);
+        if (Config::ScreenAspectBot == aspectRatios[i].id)
+            actScreenAspectBot[i]->setChecked(true);
+    }
 
     actScreenFiltering->setChecked(Config::ScreenFilter);
     actShowOSD->setChecked(Config::ShowOSD);
 
     actLimitFramerate->setChecked(Config::LimitFPS);
     actAudioSync->setChecked(Config::AudioSync);
+
+    if (inst > 0)
+    {
+        actEmuSettings->setEnabled(false);
+        actVideoSettings->setEnabled(false);
+        actMPSettings->setEnabled(false);
+        actWifiSettings->setEnabled(false);
+        actInterfaceSettings->setEnabled(false);
+
+#ifdef __APPLE__
+        actPreferences->setEnabled(false);
+#endif // __APPLE__
+    }
 }
 
 MainWindow::~MainWindow()
 {
 }
 
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    if (hasOGL)
+    {
+        // we intentionally don't unpause here
+        emuThread->emuPause();
+        emuThread->deinitContext();
+    }
+
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::createScreenPanel()
 {
     hasOGL = (Config::ScreenUseGL != 0) || (Config::_3DRenderer != 0);
 
-    QTimer* mouseTimer;
-
     if (hasOGL)
     {
-        panelGL = new ScreenPanelGL(this);
+        ScreenPanelGL* panelGL = new ScreenPanelGL(this);
         panelGL->show();
 
         panel = panelGL;
-        panelGL->setMouseTracking(true);
-        mouseTimer = panelGL->setupMouseTimer();
-        connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) panelGL->setCursor(Qt::BlankCursor);});
+        panelWidget = panelGL;
 
-        if (!panelGL->isValid())
-            hasOGL = false;
-        else
-        {
-            QSurfaceFormat fmt = panelGL->format();
-            if (fmt.majorVersion() < 3 || (fmt.majorVersion() == 3 && fmt.minorVersion() < 2))
-                hasOGL = false;
-        }
-
-        if (!hasOGL)
-            delete panelGL;
+        panelGL->createContext();
     }
 
     if (!hasOGL)
     {
-        panelNative = new ScreenPanelNative(this);
+        ScreenPanelNative* panelNative = new ScreenPanelNative(this);
         panel = panelNative;
-        panel->show();
-
-        panelNative->setMouseTracking(true);
-        mouseTimer = panelNative->setupMouseTimer();
-        connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) panelNative->setCursor(Qt::BlankCursor);});
+        panelWidget = panelNative;
+        panelWidget->show();
     }
-    setCentralWidget(panel);
+    setCentralWidget(panelWidget);
 
-    connect(this, SIGNAL(screenLayoutChange()), panel, SLOT(onScreenLayoutChanged()));
+    connect(this, SIGNAL(screenLayoutChange()), panelWidget, SLOT(onScreenLayoutChanged()));
     emit screenLayoutChange();
 }
 
-QOpenGLContext* MainWindow::getOGLContext()
+GL::Context* MainWindow::getOGLContext()
 {
     if (!hasOGL) return nullptr;
 
-    QOpenGLWidget* glpanel = (QOpenGLWidget*)panel;
-    return glpanel->context();
+    ScreenPanelGL* glpanel = static_cast<ScreenPanelGL*>(panel);
+    return glpanel->getContext();
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -1909,6 +2093,16 @@ void MainWindow::dropEvent(QDropEvent* event)
     }
 }
 
+void MainWindow::focusInEvent(QFocusEvent* event)
+{
+    audioMute();
+}
+
+void MainWindow::focusOutEvent(QFocusEvent* event)
+{
+    audioMute();
+}
+
 void MainWindow::onAppStateChanged(Qt::ApplicationState state)
 {
     if (state == Qt::ApplicationInactive)
@@ -1935,7 +2129,7 @@ bool MainWindow::verifySetup()
     return true;
 }
 
-bool MainWindow::preloadROMs(QString filename, QString gbafilename)
+bool MainWindow::preloadROMs(QStringList file, QStringList gbafile, bool boot)
 {
     if (!verifySetup())
     {
@@ -1943,9 +2137,8 @@ bool MainWindow::preloadROMs(QString filename, QString gbafilename)
     }
 
     bool gbaloaded = false;
-    if (!gbafilename.isEmpty())
+    if (!gbafile.isEmpty())
     {
-        QStringList gbafile = gbafilename.split('|');
         if (!ROMManager::LoadGBAROM(gbafile))
         {
             // TODO: better error reporting?
@@ -1956,20 +2149,33 @@ bool MainWindow::preloadROMs(QString filename, QString gbafilename)
         gbaloaded = true;
     }
 
-    QStringList file = filename.split('|');
-    if (!ROMManager::LoadROM(file, true))
+    bool ndsloaded = false;
+    if (!file.isEmpty())
     {
-        // TODO: better error reporting?
-        QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
-        return false;
+        if (!ROMManager::LoadROM(file, true))
+        {
+            // TODO: better error reporting?
+            QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+            return false;
+        }
+        recentFileList.removeAll(file.join("|"));
+        recentFileList.prepend(file.join("|"));
+        updateRecentFilesMenu();
+        ndsloaded = true;
     }
 
-    recentFileList.removeAll(filename);
-    recentFileList.prepend(filename);
-    updateRecentFilesMenu();
-
-    NDS::Start();
-    emuThread->emuRun();
+    if (boot)
+    {
+        if (ndsloaded)
+        {
+            NDS::Start();
+            emuThread->emuRun();
+        }
+        else
+        {
+            onBootFirmware();
+        }
+    }
 
     updateCartInserted(false);
 
@@ -2237,7 +2443,7 @@ void MainWindow::onBootFirmware()
     }
 
     if (!ROMManager::LoadBIOS())
-    {
+{
         // TODO: better error reporting?
         QMessageBox::critical(this, "melonDS", "This firmware is not bootable.");
         emuThread->emuUnpause();
@@ -2581,6 +2787,23 @@ void MainWindow::onOpenTitleManager()
     TitleManagerDialog* dlg = TitleManagerDialog::openDlg(this);
 }
 
+void MainWindow::onMPNewInstance()
+{
+    //QProcess::startDetached(QApplication::applicationFilePath());
+    QProcess newinst;
+    newinst.setProgram(QApplication::applicationFilePath());
+    newinst.setArguments(QApplication::arguments().mid(1, QApplication::arguments().length()-1));
+
+#ifdef __WIN32__
+    newinst.setCreateProcessArgumentsModifier([] (QProcess::CreateProcessArguments *args)
+    {
+        args->flags |= CREATE_NEW_CONSOLE;
+    });
+#endif
+
+    newinst.startDetached();
+}
+
 void MainWindow::onOpenEmuSettings()
 {
     emuThread->emuPause();
@@ -2639,6 +2862,27 @@ void MainWindow::onOpenVideoSettings()
 {
     VideoSettingsDialog* dlg = VideoSettingsDialog::openDlg(this);
     connect(dlg, &VideoSettingsDialog::updateVideoSettings, this, &MainWindow::onUpdateVideoSettings);
+}
+
+void MainWindow::onOpenCameraSettings()
+{
+    emuThread->emuPause();
+
+    camStarted[0] = camManager[0]->isStarted();
+    camStarted[1] = camManager[1]->isStarted();
+    if (camStarted[0]) camManager[0]->stop();
+    if (camStarted[1]) camManager[1]->stop();
+
+    CameraSettingsDialog* dlg = CameraSettingsDialog::openDlg(this);
+    connect(dlg, &CameraSettingsDialog::finished, this, &MainWindow::onCameraSettingsFinished);
+}
+
+void MainWindow::onCameraSettingsFinished(int res)
+{
+    if (camStarted[0]) camManager[0]->start();
+    if (camStarted[1]) camManager[1]->start();
+
+    emuThread->emuUnpause();
 }
 
 void MainWindow::onOpenAudioSettings()
@@ -2715,6 +2959,22 @@ void MainWindow::onAudioSettingsFinished(int res)
     micOpen();
 }
 
+void MainWindow::onOpenMPSettings()
+{
+    emuThread->emuPause();
+
+    MPSettingsDialog* dlg = MPSettingsDialog::openDlg(this);
+    connect(dlg, &MPSettingsDialog::finished, this, &MainWindow::onMPSettingsFinished);
+}
+
+void MainWindow::onMPSettingsFinished(int res)
+{
+    audioMute();
+    LocalMP::SetRecvTimeout(Config::MPRecvTimeout);
+
+    emuThread->emuUnpause();
+}
+
 void MainWindow::onOpenWifiSettings()
 {
     emuThread->emuPause();
@@ -2725,12 +2985,6 @@ void MainWindow::onOpenWifiSettings()
 
 void MainWindow::onWifiSettingsFinished(int res)
 {
-    if (Wifi::MPInited)
-    {
-        Platform::MP_DeInit();
-        Platform::MP_Init();
-    }
-
     Platform::LAN_DeInit();
     Platform::LAN_Init();
 
@@ -2750,10 +3004,7 @@ void MainWindow::onOpenInterfaceSettings()
 
 void MainWindow::onUpdateMouseTimer()
 {
-    if (hasOGL)
-        panelGL->mouseTimer->setInterval(Config::MouseHideSeconds*1000);
-    else
-        panelNative->mouseTimer->setInterval(Config::MouseHideSeconds*1000);
+    panel->mouseTimer->setInterval(Config::MouseHideSeconds*1000);
 }
 
 void MainWindow::onInterfaceSettingsFinished(int res)
@@ -2769,8 +3020,8 @@ void MainWindow::onChangeSavestateSRAMReloc(bool checked)
 void MainWindow::onChangeScreenSize()
 {
     int factor = ((QAction*)sender())->data().toInt();
-    QSize diff = size() - panel->size();
-    resize(dynamic_cast<ScreenHandler*>(panel)->screenGetMinSize(factor) + diff);
+    QSize diff = size() - panelWidget->size();
+    resize(panel->screenGetMinSize(factor) + diff);
 }
 
 void MainWindow::onChangeScreenRotation(QAction* act)
@@ -2828,18 +3079,19 @@ void MainWindow::onChangeScreenSizing(QAction* act)
     emit screenLayoutChange();
 }
 
-void MainWindow::onChangeScreenAspectTop(QAction* act)
+void MainWindow::onChangeScreenAspect(QAction* act)
 {
     int aspect = act->data().toInt();
-    Config::ScreenAspectTop = aspect;
+    QActionGroup* group = act->actionGroup();
 
-    emit screenLayoutChange();
-}
-
-void MainWindow::onChangeScreenAspectBot(QAction* act)
-{
-    int aspect = act->data().toInt();
-    Config::ScreenAspectBot = aspect;
+    if (group == grpScreenAspectTop)
+    {
+        Config::ScreenAspectTop = aspect;
+    }
+    else
+    {
+        Config::ScreenAspectBot = aspect;
+    }
 
     emit screenLayoutChange();
 }
@@ -2854,13 +3106,14 @@ void MainWindow::onChangeIntegerScaling(bool checked)
 void MainWindow::onChangeScreenFiltering(bool checked)
 {
     Config::ScreenFilter = checked?1:0;
+
+    emit screenLayoutChange();
 }
 
 void MainWindow::onChangeShowOSD(bool checked)
 {
     Config::ShowOSD = checked?1:0;
 }
-
 void MainWindow::onChangeLimitFramerate(bool checked)
 {
     Config::LimitFPS = checked?1:0;
@@ -2877,8 +3130,7 @@ void MainWindow::onTitleUpdate(QString title)
     setWindowTitle(title);
 }
 
-void MainWindow::onFullscreenToggled()
-{
+void ToggleFullscreen(MainWindow* mainWindow) {
     if (!mainWindow->isFullScreen())
     {
         mainWindow->showFullScreen();
@@ -2890,6 +3142,11 @@ void MainWindow::onFullscreenToggled()
         int menuBarHeight = mainWindow->menuBar()->sizeHint().height();
         mainWindow->menuBar()->setFixedHeight(menuBarHeight);
     }
+}
+
+void MainWindow::onFullscreenToggled()
+{
+    ToggleFullscreen(this);
 }
 
 void MainWindow::onEmuStart()
@@ -2940,25 +3197,20 @@ void MainWindow::onUpdateVideoSettings(bool glchange)
     if (glchange)
     {
         emuThread->emuPause();
+        if (hasOGL) emuThread->deinitContext();
 
-        if (hasOGL)
-        {
-            emuThread->deinitOpenGL();
-            delete panelGL;
-        }
-        else
-        {
-            delete panelNative;
-        }
+        delete panel;
         createScreenPanel();
-        connect(emuThread, SIGNAL(windowUpdate()), panel, SLOT(repaint()));
-        if (hasOGL) emuThread->initOpenGL();
+        connect(emuThread, SIGNAL(windowUpdate()), panelWidget, SLOT(repaint()));
     }
 
     videoSettingsDirty = true;
 
     if (glchange)
+    {
+        if (hasOGL) emuThread->initContext();
         emuThread->emuUnpause();
+    }
 }
 
 
@@ -2984,7 +3236,7 @@ bool MelonApplication::event(QEvent *event)
         QFileOpenEvent *openEvent = static_cast<QFileOpenEvent*>(event);
 
         emuThread->emuPause();
-        if (!mainWindow->preloadROMs(openEvent->file(), ""))
+        if (!mainWindow->preloadROMs(openEvent->file().split("|"), {}, true))
             emuThread->emuUnpause();
     }
 
@@ -2993,14 +3245,22 @@ bool MelonApplication::event(QEvent *event)
 
 int main(int argc, char** argv)
 {
-    srand(time(NULL));
+    srand(time(nullptr));
+
+    qputenv("QT_SCALE_FACTOR", "1");
 
     printf("melonDS " MELONDS_VERSION "\n");
     printf(MELONDS_URL "\n");
 
+    // easter egg - not worth checking other cases for something so dumb
+    if (argc != 0 && (!strcasecmp(argv[0], "derpDS") || !strcasecmp(argv[0], "./derpDS")))
+        printf("did you just call me a derp???\n");
+    
     Platform::Init(argc, argv);
 
     MelonApplication melon(argc, argv);
+
+    CLI::CommandLineOptions* options = CLI::ManageArgs(melon);
 
     // http://stackoverflow.com/questions/14543333/joystick-wont-work-using-sdl
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -3049,14 +3309,7 @@ int main(int argc, char** argv)
     SANITIZE(Config::ScreenAspectBot, 0, 4);
 #undef SANITIZE
 
-    QSurfaceFormat format;
-    format.setDepthBufferSize(24);
-    format.setStencilBufferSize(8);
-    format.setVersion(3, 2);
-    format.setProfile(QSurfaceFormat::CoreProfile);
-    format.setSwapInterval(0);
-    QSurfaceFormat::setDefaultFormat(format);
-
+    audioMuted = false;
     audioSync = SDL_CreateCond();
     audioSyncLock = SDL_CreateMutex();
 
@@ -3082,10 +3335,16 @@ int main(int argc, char** argv)
 
     micDevice = 0;
 
-
     memset(micExtBuffer, 0, sizeof(micExtBuffer));
     micExtBufferWritePos = 0;
     micWavBuffer = nullptr;
+
+    camStarted[0] = false;
+    camStarted[1] = false;
+    camManager[0] = new CameraManager(0, 640, 480, true);
+    camManager[1] = new CameraManager(1, 640, 480, true);
+    camManager[0]->setXFlip(Config::Camera[0].XFlip);
+    camManager[1]->setXFlip(Config::Camera[1].XFlip);
 
     ROMManager::EnableCheats(Config::EnableCheats != 0);
 
@@ -3105,21 +3364,18 @@ int main(int argc, char** argv)
     Input::OpenJoystick();
 
     mainWindow = new MainWindow();
+    if (options->fullscreen)
+        ToggleFullscreen(mainWindow);
 
     emuThread = new EmuThread();
     emuThread->start();
     emuThread->emuPause();
 
+    audioMute();
+
     QObject::connect(&melon, &QApplication::applicationStateChanged, mainWindow, &MainWindow::onAppStateChanged);
 
-    if (argc > 1)
-    {
-        QString file = argv[1];
-        QString gbafile = "";
-        if (argc > 2) gbafile = argv[2];
-
-        mainWindow->preloadROMs(file, gbafile);
-    }
+    mainWindow->preloadROMs(options->dsRomPath, options->gbaRomPath, options->boot);
 
     int ret = melon.exec();
 
@@ -3137,6 +3393,9 @@ int main(int argc, char** argv)
 
     if (micWavBuffer) delete[] micWavBuffer;
 
+    delete camManager[0];
+    delete camManager[1];
+
     Config::Save();
 
     SDL_Quit();
@@ -3152,7 +3411,7 @@ int CALLBACK WinMain(HINSTANCE hinst, HINSTANCE hprev, LPSTR cmdline, int cmdsho
 {
     int argc = 0;
     wchar_t** argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
-    char* nullarg = "";
+    char nullarg[] = {'\0'};
 
     char** argv = new char*[argc];
     for (int i = 0; i < argc; i++)
@@ -3167,7 +3426,8 @@ int CALLBACK WinMain(HINSTANCE hinst, HINSTANCE hprev, LPSTR cmdline, int cmdsho
 
     if (argv_w) LocalFree(argv_w);
 
-    /*if (AttachConsole(ATTACH_PARENT_PROCESS))
+    //if (AttachConsole(ATTACH_PARENT_PROCESS))
+    /*if (AllocConsole())
     {
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);

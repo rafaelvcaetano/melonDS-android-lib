@@ -65,7 +65,8 @@ namespace MelonDSAndroid {
     extern AAssetManager* assetManager;
     extern AndroidFileHandler* fileHandler;
 
-    extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, u32* textureBufferPointer);
+    extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
+    extern void setup(AAssetManager* androidAssetManager, u32* textureBufferPointer);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 
