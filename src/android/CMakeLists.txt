@@ -17,6 +17,10 @@ set(ANDROID_SOURCES
         Config.cpp
         ROMManager.cpp
         SaveManager.cpp
+        LocalMultiplayer.cpp
+
+        fd_recv.cpp
+        fd_send.cpp
 
         ../frontend/Util_Video.cpp
         ../frontend/Util_Audio.cpp

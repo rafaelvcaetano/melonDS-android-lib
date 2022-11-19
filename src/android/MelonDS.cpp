@@ -19,6 +19,7 @@
 #include "FrontendUtil.h"
 #include "RewindManager.h"
 #include "ROMManager.h"
+#include "LocalMultiplayer.h"
 #include <android/asset_manager.h>
 #include <cstring>
 
@@ -38,6 +39,7 @@ namespace MelonDSAndroid
     int actualMicSource = 0;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
+    std::string internalFilesDir;
     EmulatorConfiguration currentConfiguration;
 
     // Variables used to keep the current state so that emulation can be reset
@@ -61,6 +63,7 @@ namespace MelonDSAndroid
      */
     void setConfiguration(EmulatorConfiguration emulatorConfiguration) {
         currentConfiguration = emulatorConfiguration;
+        internalFilesDir = emulatorConfiguration.internalFilesDir;
         actualMicSource = emulatorConfiguration.micSource;
 
         Config::BIOS7Path = emulatorConfiguration.dsBios7Path;
@@ -117,9 +120,10 @@ namespace MelonDSAndroid
         RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
     }
 
-    void setup(AAssetManager* androidAssetManager, u32* textureBufferPointer) {
+    void setup(AAssetManager* androidAssetManager, u32* textureBufferPointer, bool isMasterInstance) {
         assetManager = androidAssetManager;
         textureBuffer = textureBufferPointer;
+        LocalMultiplayer::SetIsMasterInstance(isMasterInstance);
 
         if (currentConfiguration.soundEnabled) {
             setupAudioOutputStream(currentConfiguration.audioLatency, currentConfiguration.volume);
