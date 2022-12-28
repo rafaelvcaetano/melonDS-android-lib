@@ -62,16 +62,7 @@ namespace MelonDSAndroid
     void setConfiguration(EmulatorConfiguration emulatorConfiguration) {
         currentConfiguration = emulatorConfiguration;
         actualMicSource = emulatorConfiguration.micSource;
-
-        Config::BIOS7Path = emulatorConfiguration.dsBios7Path;
-        Config::BIOS9Path = emulatorConfiguration.dsBios9Path;
-        Config::FirmwarePath = emulatorConfiguration.dsFirmwarePath;
-
-        Config::DSiBIOS7Path = emulatorConfiguration.dsiBios7Path;
-        Config::DSiBIOS9Path = emulatorConfiguration.dsiBios9Path;
-        Config::DSiFirmwarePath = emulatorConfiguration.dsiFirmwarePath;
-        Config::DSiNANDPath = emulatorConfiguration.dsiNandPath;
-
+        
         // Internal BIOS and Firmware can only be used for DS
         if (emulatorConfiguration.userInternalFirmwareAndBios) {
             Config::FirmwareUsername = emulatorConfiguration.firmwareConfiguration.username;
@@ -86,6 +77,15 @@ namespace MelonDSAndroid
             Config::ConsoleType = 0;
             Config::ExternalBIOSEnable = false;
         } else {
+            Config::BIOS7Path = emulatorConfiguration.dsBios7Path;
+            Config::BIOS9Path = emulatorConfiguration.dsBios9Path;
+            Config::FirmwarePath = emulatorConfiguration.dsFirmwarePath;
+
+            Config::DSiBIOS7Path = emulatorConfiguration.dsiBios7Path;
+            Config::DSiBIOS9Path = emulatorConfiguration.dsiBios9Path;
+            Config::DSiFirmwarePath = emulatorConfiguration.dsiFirmwarePath;
+            Config::DSiNANDPath = emulatorConfiguration.dsiNandPath;
+
             Config::ExternalBIOSEnable = true;
             Config::DirectBoot = !emulatorConfiguration.showBootScreen;
 
