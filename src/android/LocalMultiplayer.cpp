@@ -18,7 +18,7 @@
 
 void debug(std::string message)
 {
-#ifdef DEBUG
+#ifndef NDEBUG
     __android_log_print(ANDROID_LOG_DEBUG, "LocalMultiplayer", "%s", message.c_str());
 #endif
 }
@@ -66,6 +66,8 @@ int LastHostID;
 bool SemInited[32];
 int SemPool[32];
 
+void StopMasterInstanceThread();
+
 void MasterInstanceThread()
 {
     int socketFd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -106,6 +108,9 @@ void MasterInstanceThread()
         uint32_t length = sizeof(struct sockaddr_un);
         debug("Waiting for connection...");
         int remoteSocketFd = accept(socketFd, (struct sockaddr*) &remote, &length);
+        if (!Running)
+            break;
+
         debug("Connection received");
         int readBytes;
 
@@ -285,7 +290,8 @@ bool LocalMultiplayer::Init()
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(struct sockaddr_un));
 
-        sprintf(addr.sun_path, "/data/data/me.magnum.melonds.dev/files/mp.socket");
+        std::string socketPath = MelonDSAndroid::internalFilesDir + "/mp.socket";
+        sprintf(addr.sun_path, "%s", socketPath.c_str());
         addr.sun_family = AF_UNIX;
 
         if (connect(socketFd, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) != 0)
@@ -305,6 +311,8 @@ bool LocalMultiplayer::Init()
             close(socketFd);
             return false;
         }
+
+        close(socketFd);
 
         debug("Shared memory FD: " + std::to_string(MemoryFile));
         if (MemoryFile < 0)
@@ -356,10 +364,14 @@ bool LocalMultiplayer::Init()
 
 void LocalMultiplayer::DeInit()
 {
+    debug("DeInit");
     Running = false;
     if (MasterThread != nullptr)
     {
+        debug("Waiting for master instance thread to stop");
+        StopMasterInstanceThread();
         Platform::Thread_Wait(MasterThread);
+        debug("Master instance thread stopped");
         Platform::Thread_Free(MasterThread);
         MasterThread = nullptr;
     }
@@ -702,4 +714,32 @@ u16 LocalMultiplayer::RecvReplies(u8* packets, u64 timestamp, u16 aidmask)
 void LocalMultiplayer::SetIsMasterInstance(bool masterInstance)
 {
     IsMasterInstance = masterInstance;
+}
+
+void StopMasterInstanceThread()
+{
+    // The master instance thread is stopped by making a connection to the master instance socket. This way, the thread is unblocked and can then exit
+
+    int socketFd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (socketFd < 0)
+    {
+        debug("Failed to create socket");
+        debug(strerror(errno));
+        return;
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(struct sockaddr_un));
+
+    std::string socketPath = MelonDSAndroid::internalFilesDir + "/mp.socket";
+    sprintf(addr.sun_path, "%s", socketPath.c_str());
+    addr.sun_family = AF_UNIX;
+
+    if (connect(socketFd, (struct sockaddr*) &addr, sizeof(struct sockaddr_un)) != 0)
+    {
+        debug("Failed to connect to master instance");
+        debug(strerror(errno));
+    }
+
+    close(socketFd);
 }
