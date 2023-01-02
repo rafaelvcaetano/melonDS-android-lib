@@ -105,7 +105,7 @@ void MasterInstanceThread()
     while (Running)
     {
         struct sockaddr_un remote;
-        uint32_t length = sizeof(struct sockaddr_un);
+        socklen_t length = (socklen_t) sizeof(struct sockaddr_un);
         debug("Waiting for connection...");
         int remoteSocketFd = accept(socketFd, (struct sockaddr*) &remote, &length);
         if (!Running)
