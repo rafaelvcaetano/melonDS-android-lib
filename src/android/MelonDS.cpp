@@ -66,14 +66,14 @@ namespace MelonDSAndroid
         internalFilesDir = emulatorConfiguration.internalFilesDir;
         actualMicSource = emulatorConfiguration.micSource;
 
-        Config::BIOS7Path = emulatorConfiguration.dsBios7Path;
-        Config::BIOS9Path = emulatorConfiguration.dsBios9Path;
-        Config::FirmwarePath = emulatorConfiguration.dsFirmwarePath;
+        Config::BIOS7Path = emulatorConfiguration.dsBios7Path ?: "";
+        Config::BIOS9Path = emulatorConfiguration.dsBios9Path ?: "";
+        Config::FirmwarePath = emulatorConfiguration.dsFirmwarePath ?: "";
 
-        Config::DSiBIOS7Path = emulatorConfiguration.dsiBios7Path;
-        Config::DSiBIOS9Path = emulatorConfiguration.dsiBios9Path;
-        Config::DSiFirmwarePath = emulatorConfiguration.dsiFirmwarePath;
-        Config::DSiNANDPath = emulatorConfiguration.dsiNandPath;
+        Config::DSiBIOS7Path = emulatorConfiguration.dsiBios7Path ?: "";
+        Config::DSiBIOS9Path = emulatorConfiguration.dsiBios9Path ?: "";
+        Config::DSiFirmwarePath = emulatorConfiguration.dsiFirmwarePath ?: "";
+        Config::DSiNANDPath = emulatorConfiguration.dsiNandPath ?: "";
 
         // Internal BIOS and Firmware can only be used for DS
         if (emulatorConfiguration.userInternalFirmwareAndBios) {
