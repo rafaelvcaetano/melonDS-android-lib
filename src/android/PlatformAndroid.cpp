@@ -115,7 +115,7 @@ namespace Platform
             case DSiSD_ReadOnly: return Config::DSiSDReadOnly != 0;
             case DSiSD_FolderSync: return Config::DSiSDFolderSync != 0;
 
-            //case Firm_RandomizeMAC: return Config::RandomizeMAC != 0;
+            case Firm_RandomizeMAC: return Config::RandomizeMAC != 0;
             case Firm_OverrideSettings: return Config::FirmwareOverrideSettings != 0;
         }
 

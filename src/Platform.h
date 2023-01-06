@@ -80,6 +80,7 @@ enum ConfigEntry
     Firm_BirthdayDay,
     Firm_Color,
     Firm_Message,
+    Firm_RandomizeMAC,
     Firm_MAC,
 
     AudioBitrate,

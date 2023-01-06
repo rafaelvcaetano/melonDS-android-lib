@@ -365,7 +365,7 @@ void Reset()
     }
     else
     {
-        firmoverride = Platform::GetConfigBool(Platform::Firm_OverrideSettings);
+        // firmoverride = Platform::GetConfigBool(Platform::Firm_OverrideSettings);
     }
 
     FirmwareMask = FirmwareLength - 1;
@@ -404,8 +404,7 @@ void Reset()
 
         memcpy(mac, &Firmware[0x36], 6);
 
-        if (firmoverride)
-            rep = Platform::GetConfigArray(Platform::Firm_MAC, mac);
+        rep = Platform::GetConfigBool(Platform::ConfigEntry::Firm_RandomizeMAC) || (firmoverride && Platform::GetConfigArray(Platform::Firm_MAC, mac));
 
         int inst = Platform::InstanceID();
         if (inst > 0)
@@ -418,6 +417,13 @@ void Reset()
 
         if (rep)
         {
+            if (Platform::GetConfigBool(Platform::ConfigEntry::Firm_RandomizeMAC))
+            {
+                mac[3] = rand() & 0xFF;
+                mac[4] = rand() & 0xFF;
+                mac[5] = rand() & 0xFF;
+            }
+
             mac[0] &= 0xFC; // ensure the MAC isn't a broadcast MAC
             memcpy(&Firmware[0x36], mac, 6);
 
