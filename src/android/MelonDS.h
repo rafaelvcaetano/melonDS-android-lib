@@ -3,6 +3,7 @@
 
 #include <list>
 #include "AndroidFileHandler.h"
+#include "AndroidCameraHandler.h"
 #include "RewindManager.h"
 #include "../types.h"
 #include "../GPU.h"
@@ -64,10 +65,11 @@ namespace MelonDSAndroid {
 
     extern AAssetManager* assetManager;
     extern AndroidFileHandler* fileHandler;
+    extern AndroidCameraHandler* cameraHandler;
     extern std::string internalFilesDir;
 
     extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
-    extern void setup(AAssetManager* androidAssetManager, u32* textureBufferPointer, bool isMasterInstance);
+    extern void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, u32* textureBufferPointer, bool isMasterInstance);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 

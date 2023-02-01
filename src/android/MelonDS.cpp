@@ -19,6 +19,7 @@
 #include "FrontendUtil.h"
 #include "RewindManager.h"
 #include "ROMManager.h"
+#include "AndroidCameraHandler.h"
 #include "LocalMultiplayer.h"
 #include <android/asset_manager.h>
 #include <cstring>
@@ -39,6 +40,7 @@ namespace MelonDSAndroid
     int actualMicSource = 0;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
+    AndroidCameraHandler* cameraHandler;
     std::string internalFilesDir;
     EmulatorConfiguration currentConfiguration;
 
@@ -120,7 +122,8 @@ namespace MelonDSAndroid
         RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
     }
 
-    void setup(AAssetManager* androidAssetManager, u32* textureBufferPointer, bool isMasterInstance) {
+    void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, u32* textureBufferPointer, bool isMasterInstance) {
+        cameraHandler = androidCameraHandler;
         assetManager = androidAssetManager;
         textureBuffer = textureBufferPointer;
         LocalMultiplayer::SetIsMasterInstance(isMasterInstance);

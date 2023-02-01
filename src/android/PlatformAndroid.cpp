@@ -442,13 +442,16 @@ namespace Platform
 
     void Camera_Start(int num)
     {
+        MelonDSAndroid::cameraHandler->startCamera(num);
     }
 
     void Camera_Stop(int num)
     {
+        MelonDSAndroid::cameraHandler->stopCamera(num);
     }
 
     void Camera_CaptureFrame(int num, u32* frame, int width, int height, bool yuv)
     {
+        MelonDSAndroid::cameraHandler->captureFrame(num, frame, width, height, yuv);
     }
 }
