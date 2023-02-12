@@ -20,6 +20,8 @@
 #include "RewindManager.h"
 #include "ROMManager.h"
 #include "LocalMultiplayer.h"
+#include "retroachievements/RetroAchievements.h"
+#include "retroachievements/RACallback.h"
 #include <android/asset_manager.h>
 #include <cstring>
 
@@ -37,6 +39,7 @@ namespace MelonDSAndroid
     u32* textureBuffer;
     int frame = 0;
     int actualMicSource = 0;
+    RetroAchievements::RACallback* retroAchievementsCallback;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
     std::string internalFilesDir;
@@ -120,8 +123,9 @@ namespace MelonDSAndroid
         RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
     }
 
-    void setup(AAssetManager* androidAssetManager, u32* textureBufferPointer, bool isMasterInstance) {
+    void setup(AAssetManager* androidAssetManager, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance) {
         assetManager = androidAssetManager;
+        retroAchievementsCallback = raCallback;
         textureBuffer = textureBufferPointer;
         LocalMultiplayer::SetIsMasterInstance(isMasterInstance);
 
@@ -162,6 +166,11 @@ namespace MelonDSAndroid
         }
 
         arCodeFile->updateCodeList(codeList);
+    }
+
+    void setAchievementList(std::list<RetroAchievements::RAAchievement> achievements)
+    {
+        RetroAchievements::LoadAchievements(achievements);
     }
 
     /**
@@ -236,6 +245,7 @@ namespace MelonDSAndroid
                 return 1;
         }
 
+        RetroAchievements::Init(retroAchievementsCallback);
         NDS::Start();
 
         return 0;
@@ -276,6 +286,7 @@ namespace MelonDSAndroid
     u32 loop()
     {
         u32 nLines = NDS::RunFrame();
+        RetroAchievements::FrameUpdate();
 
         if (ROMManager::NDSSave)
             ROMManager::NDSSave->CheckFlush();
@@ -320,6 +331,7 @@ namespace MelonDSAndroid
     {
         frame = 0;
         if (currentRunMode == ROM) {
+            RetroAchievements::Reset();
             NDS::Reset();
             int result = loadRom(currentRomPath, currentSramPath, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
             if (result != 2 && arCodeFile != NULL) {
@@ -456,6 +468,7 @@ namespace MelonDSAndroid
 
     void cleanup()
     {
+        RetroAchievements::DeInit();
         ROMManager::EjectCart();
         ROMManager::EjectGBACart();
         //GBACart::EjectCart();

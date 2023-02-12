@@ -4,6 +4,8 @@
 #include <list>
 #include "AndroidFileHandler.h"
 #include "RewindManager.h"
+#include "retroachievements/RAAchievement.h"
+#include "retroachievements/RACallback.h"
 #include "../types.h"
 #include "../GPU.h"
 #include <android/asset_manager.h>
@@ -67,8 +69,9 @@ namespace MelonDSAndroid {
     extern std::string internalFilesDir;
 
     extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
-    extern void setup(AAssetManager* androidAssetManager, u32* textureBufferPointer, bool isMasterInstance);
+    extern void setup(AAssetManager* androidAssetManager, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance);
     extern void setCodeList(std::list<Cheat> cheats);
+    extern void setAchievementList(std::list<RetroAchievements::RAAchievement> achievements);
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 
     /**

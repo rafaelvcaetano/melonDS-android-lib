@@ -18,6 +18,7 @@ set(ANDROID_SOURCES
         ROMManager.cpp
         SaveManager.cpp
         LocalMultiplayer.cpp
+        retroachievements/RetroAchievements.cpp
 
         fd_recv.cpp
         fd_send.cpp
@@ -29,11 +30,14 @@ set(ANDROID_SOURCES
 )
 
 set(OBOE ./oboe)
+set(RCHEEVOS ./rcheevos)
 add_subdirectory(${OBOE} ./oboe)
+add_subdirectory(${RCHEEVOS} ./rcheevos)
 add_library(melonDS-lib SHARED ${ANDROID_SOURCES})
 find_library(android-lib android)
 target_include_directories(${PROJECT_NAME} PUBLIC ${OBOE}/include)
+target_include_directories(${PROJECT_NAME} PUBLIC ${RCHEEVOS}/include)
 target_include_directories(${PROJECT_NAME} PUBLIC ./)
 target_include_directories(${PROJECT_NAME} PUBLIC ../)
 target_include_directories(${PROJECT_NAME} PUBLIC ../frontend)
-target_link_libraries(melonDS-lib ${android-lib} core oboe)
+target_link_libraries(melonDS-lib ${android-lib} core oboe rcheevos)
