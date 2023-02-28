@@ -1,3 +1,6 @@
 [submodule "oboe"]
 	path = src/android/oboe
 	url = https://github.com/google/oboe.git
+[submodule "rcheevos"]
+    path = src/android/rcheevos
+    url = https://github.com/RetroAchievements/rcheevos.git
