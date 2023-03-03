@@ -4,6 +4,7 @@
 #include "rcheevos.h"
 
 rc_runtime_t rcheevosRuntime;
+bool isRichPresenceEnabled = false;
 
 void CheevosEventHandler(const rc_runtime_event_t* runtime_event);
 unsigned PeekMemory(unsigned address, unsigned numBytes, void* ud);
@@ -27,6 +28,23 @@ bool RetroAchievements::LoadAchievements(std::list<RetroAchievements::RAAchievem
     return true;
 }
 
+void RetroAchievements::SetupRichPresence(std::string richPresenceScript)
+{
+    rc_runtime_activate_richpresence(&rcheevosRuntime, richPresenceScript.c_str(), nullptr, 0);
+    isRichPresenceEnabled = true;
+}
+
+std::string RetroAchievements::GetRichPresenceStatus()
+{
+    if (!isRichPresenceEnabled)
+        return "";
+
+    char buffer[512];
+    rc_runtime_get_richpresence(&rcheevosRuntime, buffer, 512, PeekMemory, nullptr, nullptr);
+
+    return buffer;
+}
+
 void RetroAchievements::Reset()
 {
     rc_runtime_reset(&rcheevosRuntime);
@@ -35,6 +53,7 @@ void RetroAchievements::Reset()
 void RetroAchievements::DeInit()
 {
     rc_runtime_destroy(&rcheevosRuntime);
+    isRichPresenceEnabled = false;
 }
 
 void RetroAchievements::FrameUpdate()

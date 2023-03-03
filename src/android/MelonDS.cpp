@@ -168,9 +168,16 @@ namespace MelonDSAndroid
         arCodeFile->updateCodeList(codeList);
     }
 
-    void setAchievementList(std::list<RetroAchievements::RAAchievement> achievements)
+    void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::string* richPresenceScript)
     {
         RetroAchievements::LoadAchievements(achievements);
+        if (richPresenceScript != nullptr)
+            RetroAchievements::SetupRichPresence(*richPresenceScript);
+    }
+
+    std::string getRichPresenceStatus()
+    {
+        return RetroAchievements::GetRichPresenceStatus();
     }
 
     /**

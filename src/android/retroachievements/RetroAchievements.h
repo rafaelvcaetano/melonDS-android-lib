@@ -10,6 +10,8 @@ namespace RetroAchievements
 
 void Init(RACallback* callback);
 bool LoadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
+void SetupRichPresence(std::string richPresenceScript);
+std::string GetRichPresenceStatus();
 void Reset();
 void DeInit();
 void FrameUpdate();
