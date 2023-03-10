@@ -45,6 +45,41 @@ std::string RetroAchievements::GetRichPresenceStatus()
     return buffer;
 }
 
+bool RetroAchievements::DoSavestate(Savestate* savestate)
+{
+    savestate->Section("RCHV");
+    if (savestate->Saving)
+    {
+        u32 rcheevosStateSize = (u32) rc_runtime_progress_size(&rcheevosRuntime, nullptr);
+        u8* rcheevosStateBuffer = new u8[rcheevosStateSize];
+        int result = rc_runtime_serialize_progress(rcheevosStateBuffer, &rcheevosRuntime, nullptr);
+        if (result != RC_OK)
+        {
+            delete[] rcheevosStateBuffer;
+            return false;
+        }
+
+        savestate->Var32(&rcheevosStateSize);
+        savestate->VarArray(rcheevosStateBuffer, rcheevosStateSize);
+        delete[] rcheevosStateBuffer;
+    }
+    else
+    {
+        u32 rcheevosStateSize;
+        savestate->Var32(&rcheevosStateSize);
+        u8* rcheevosStateBuffer = new u8[rcheevosStateSize];
+        savestate->VarArray(rcheevosStateBuffer, rcheevosStateSize);
+
+        int result = rc_runtime_deserialize_progress(&rcheevosRuntime, rcheevosStateBuffer, nullptr);
+        delete[] rcheevosStateBuffer;
+
+        if (result != RC_OK)
+            return false;
+    }
+
+    return true;
+}
+
 void RetroAchievements::Reset()
 {
     rc_runtime_reset(&rcheevosRuntime);

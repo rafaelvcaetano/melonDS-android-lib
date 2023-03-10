@@ -380,9 +380,12 @@ namespace MelonDSAndroid
         }
         else
         {
-            NDS::DoSavestate(savestate);
+            bool result = NDS::DoSavestate(savestate);
+            if (result)
+                result = RetroAchievements::DoSavestate(savestate);
+
             delete savestate;
-            return true;
+            return result;
         }
     }
 
@@ -393,6 +396,7 @@ namespace MelonDSAndroid
 
         FileSavestate* backup = new FileSavestate(backupPath, true);
         NDS::DoSavestate(backup);
+        RetroAchievements::DoSavestate(backup);
         delete backup;
 
         FileSavestate* savestate = new FileSavestate(path, false);
@@ -405,6 +409,7 @@ namespace MelonDSAndroid
         }
 
         NDS::DoSavestate(savestate);
+        RetroAchievements::DoSavestate(savestate);
         delete savestate;
 
         // Delete backup file
@@ -425,11 +430,15 @@ namespace MelonDSAndroid
         }
         else
         {
-            NDS::DoSavestate(savestate);
-            memcpy(rewindSaveState.screenshot, textureBuffer, 256 * 384 * 4);
+            bool success = NDS::DoSavestate(savestate);
+            if (success)
+                success = RetroAchievements::DoSavestate(savestate);
+
+            if (success)
+                memcpy(rewindSaveState.screenshot, textureBuffer, 256 * 384 * 4);
 
             delete savestate;
-            return true;
+            return success;
         }
     }
 
@@ -440,6 +449,7 @@ namespace MelonDSAndroid
 
         FileSavestate* backup = new FileSavestate(backupPath, true);
         NDS::DoSavestate(backup);
+        RetroAchievements::DoSavestate(backup);
         delete backup;
 
         Savestate* savestate = new MemorySavestate(rewindSaveState.buffer, false);
@@ -452,6 +462,7 @@ namespace MelonDSAndroid
         }
 
         NDS::DoSavestate(savestate);
+        RetroAchievements::DoSavestate(savestate);
         delete savestate;
 
         // Delete backup file
