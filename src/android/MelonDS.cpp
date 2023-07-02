@@ -19,6 +19,7 @@
 #include "FrontendUtil.h"
 #include "RewindManager.h"
 #include "ROMManager.h"
+#include "AndroidCameraHandler.h"
 #include "LocalMultiplayer.h"
 #include "retroachievements/RetroAchievements.h"
 #include "retroachievements/RACallback.h"
@@ -42,6 +43,7 @@ namespace MelonDSAndroid
     RetroAchievements::RACallback* retroAchievementsCallback;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
+    AndroidCameraHandler* cameraHandler;
     std::string internalFilesDir;
     EmulatorConfiguration currentConfiguration;
 
@@ -123,8 +125,9 @@ namespace MelonDSAndroid
         RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
     }
 
-    void setup(AAssetManager* androidAssetManager, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance) {
+    void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance) {
         assetManager = androidAssetManager;
+        cameraHandler = androidCameraHandler;
         retroAchievementsCallback = raCallback;
         textureBuffer = textureBufferPointer;
         LocalMultiplayer::SetIsMasterInstance(isMasterInstance);
