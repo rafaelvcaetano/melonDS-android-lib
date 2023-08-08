@@ -112,6 +112,7 @@ bool GetConfigArray(ConfigEntry entry, void* data);
 FILE* OpenFile(std::string path, std::string mode, bool mustexist=false);
 FILE* OpenLocalFile(std::string path, std::string mode);
 FILE* OpenDataFile(std::string path);
+FILE* OpenInternalFile(std::string path, std::string mode);
 
 inline bool FileExists(std::string name)
 {

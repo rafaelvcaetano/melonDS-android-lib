@@ -215,8 +215,8 @@ void LoadDefaultFirmware()
     // wifi access points
     // TODO: WFC ID??
 
-    FILE* f = Platform::OpenLocalFile("wfcsettings.bin"+Platform::InstanceFileSuffix(), "rb");
-    if (!f) f = Platform::OpenLocalFile("wfcsettings.bin", "rb");
+    FILE* f = Platform::OpenInternalFile("wfcsettings.bin"+Platform::InstanceFileSuffix(), "rb");
+    if (!f) f = Platform::OpenInternalFile("wfcsettings.bin", "rb");
     if (f)
     {
         u32 apdata = userdata - 0xA00;
@@ -596,7 +596,7 @@ void Write(u8 val, u32 hold)
         break;
     }
 
-    if (!hold && (CurCmd == 0x02 || CurCmd == 0x0A) && Platform::GetConfigBool(Platform::ExternalBIOSEnable))
+    if (!hold && (CurCmd == 0x02 || CurCmd == 0x0A))
     {
         if (!FirmwarePath.empty())
         {
@@ -616,7 +616,7 @@ void Write(u8 val, u32 hold)
             if (inst > 0) snprintf(wfcfile, 49, "wfcsettings.bin", Platform::InstanceID());
             else          strncpy(wfcfile, "wfcsettings.bin", 49);
 
-            FILE* f = Platform::OpenLocalFile(wfcfile, "wb");
+            FILE* f = Platform::OpenInternalFile(wfcfile, "wb");
             if (f)
             {
                 u32 cutoff = 0x7F400 & FirmwareMask;

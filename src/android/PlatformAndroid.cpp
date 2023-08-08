@@ -32,10 +32,10 @@
 #include "LocalMultiplayer.h"
 #include <string>
 
-extern char* EmuDirectory;
-
 namespace Platform
 {
+    FILE* OpenInternalFile(char* path, char* mode);
+
     typedef struct
     {
         int val;
@@ -224,6 +224,12 @@ namespace Platform
     FILE* OpenDataFile(const char* path)
     {
         return android_fopen(MelonDSAndroid::assetManager, path, "rb");
+    }
+
+    FILE* OpenInternalFile(std::string path, std::string mode)
+    {
+        std::string fullFilePath = MelonDSAndroid::internalFilesDir + "/" + path;
+        return OpenFile(fullFilePath, mode, mode[0] == 'r');
     }
 
     Thread* Thread_Create(std::function<void()> func)
