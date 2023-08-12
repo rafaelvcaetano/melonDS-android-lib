@@ -49,12 +49,16 @@ const u32 kReplyStart = kMemorySize / 2;
 const u32 kPacketEnd = kReplyStart;
 const u32 kReplyEnd = kMemorySize;
 
+const u32 kSemMemorySize = sizeof(short) * 32;
+
 bool IsMasterInstance = true;
 volatile bool Running = false;
 Platform::Thread* MasterThread;
 
 int MemoryFile = -1;
 u8* Memory;
+int SemMemoryFile = -1;
+u16* SemMemory;
 int InstanceID;
 u32 PacketReadOffset;
 u32 ReplyReadOffset;
@@ -101,7 +105,7 @@ void MasterInstanceThread()
         return;
     }
 
-    u8* buffer[16];
+    u8 buffer[16];
     while (Running)
     {
         struct sockaddr_un remote;
@@ -118,15 +122,32 @@ void MasterInstanceThread()
         do
         {
             readBytes = recv(remoteSocketFd, buffer, 16, 0);
+            if (readBytes <= 0)
+                break;
+
+            switch (buffer[0])
+            {
+                case 1:
+                    debug("Sending FD to slave");
+                    if (ancil_send_fd(remoteSocketFd, MemoryFile) != 0)
+                    {
+                        debug("Failed to send FD");
+                        debug(strerror(errno));
+                    }
+                    break;
+                case 2:
+                    debug("Sending shared semaphores FD to slave");
+                    if (ancil_send_fd(remoteSocketFd, SemMemoryFile) != 0)
+                    {
+                        debug("Failed to send shared semaphores FD");
+                        debug(strerror(errno));
+                    }
+                    break;
+            }
+
         }
         while (readBytes == 16);
 
-        debug("Sending FD to slave");
-        if (ancil_send_fd(remoteSocketFd, MemoryFile) != 0)
-        {
-            debug("Failed to send FD");
-            debug(strerror(errno));
-        }
         close(remoteSocketFd);
     }
 
@@ -182,43 +203,43 @@ void SemDeinit(int num)
 bool SemPost(int num)
 {
     SemInit(num);
+
+    flock(SemPool[num], LOCK_EX);
+    SemMemory[num]++;
+
     return flock(SemPool[num], LOCK_UN) == 0;
 }
 
 bool SemWait(int num, int timeout)
 {
-    if (!timeout)
-        return flock(SemPool[num], LOCK_EX | LOCK_NB) == 0;
-
     long remainingWaitingTime = timeout;
-
     do
     {
-        if (flock(SemPool[num], LOCK_EX | LOCK_NB) == 0)
+        flock(SemPool[num], LOCK_EX);
+        bool gotLock = false;
+        if (SemMemory[num] > 0)
         {
-            return true;
+            SemMemory[num]--;
+            gotLock = true;
         }
+        flock(SemPool[num], LOCK_UN);
 
-        if (errno != EWOULDBLOCK)
-        {
-            debug("Failed to check file lock");
-            debug(strerror(errno));
-            // Error occurred
-            return false;
-        }
-        debug("Semaphore is locked " + std::to_string(num));
+        if (gotLock)
+            return true;
+
+        if (remainingWaitingTime <= 0)
+            break;
 
         usleep(1000);
         remainingWaitingTime--;
-    } while (remainingWaitingTime > 0);
+    } while (true);
 
-    debug("Semaphore timed out " + std::to_string(num) + ", timeout: " + std::to_string(timeout));
     return false;
 }
 
 void SemReset(int num)
 {
-    while (!SemWait(num, 0));
+    while (SemWait(num, 0));
 }
 
 void LockMemory()
@@ -231,6 +252,50 @@ void UnlockMemory()
     flock(MemoryFile, LOCK_UN);
 }
 
+int CreateSharedMemory(const char* name, u32 size)
+{
+    static void* libandroid = dlopen("libandroid.so", RTLD_LAZY | RTLD_LOCAL);
+    using type_ASharedMemory_create = int(*)(const char* name, size_t size);
+    static void* symbol = dlsym(libandroid, "ASharedMemory_create");
+    static auto shared_memory_create = reinterpret_cast<type_ASharedMemory_create>(symbol);
+
+    if (shared_memory_create)
+    {
+        return shared_memory_create(name, size);
+    }
+    else
+    {
+        int fd = open("/dev/ashmem", O_RDWR);
+        if (fd == -1)
+            return -1;
+
+        ioctl(fd, ASHMEM_SET_NAME, name);
+        ioctl(fd, ASHMEM_SET_SIZE, size);
+        return fd;
+    }
+}
+
+void ReleaseResources()
+{
+    if (Memory != nullptr && Memory != MAP_FAILED)
+        munmap(Memory, kMemorySize);
+
+    if (MemoryFile != -1)
+    {
+        close(MemoryFile);
+        MemoryFile = -1;
+    }
+
+    if (SemMemory != nullptr && SemMemory != MAP_FAILED)
+        munmap(SemMemory, kSemMemorySize);
+
+    if (SemMemoryFile != -1)
+    {
+        close(SemMemoryFile);
+        SemMemoryFile = -1;
+    }
+}
+
 bool LocalMultiplayer::Init()
 {
     debug("Init");
@@ -239,30 +304,28 @@ bool LocalMultiplayer::Init()
     if (IsMasterInstance)
     {
         debug("Master instance. Creating...");
-        static void* libandroid = dlopen("libandroid.so", RTLD_LAZY | RTLD_LOCAL);
-        using type_ASharedMemory_create = int(*)(const char* name, size_t size);
-        static void* symbol = dlsym(libandroid, "ASharedMemory_create");
-        static auto shared_memory_create = reinterpret_cast<type_ASharedMemory_create>(symbol);
-
-        if (shared_memory_create)
-        {
-            MemoryFile = shared_memory_create("melonNIFI", kMemorySize);
-        }
-        else
-        {
-            int fd = open("/dev/ashmem", O_RDWR);
-            if (fd == -1)
-                return false;
-
-            ioctl(fd, ASHMEM_SET_NAME, "melonNIFI");
-            ioctl(fd, ASHMEM_SET_SIZE, kMemorySize);
-            MemoryFile = fd;
-        }
+        MemoryFile = CreateSharedMemory("melonNIFI", kMemorySize);
+        if (MemoryFile == -1)
+            return false;
 
         Memory = (u8*) mmap(NULL, kMemorySize, PROT_READ | PROT_WRITE, MAP_SHARED, MemoryFile, 0);
         if (Memory == MAP_FAILED)
         {
-            close(MemoryFile);
+            ReleaseResources();
+            return false;
+        }
+
+        SemMemoryFile = CreateSharedMemory("melonNIFISem", kSemMemorySize);
+        if (SemMemoryFile == -1)
+        {
+            ReleaseResources();
+            return false;
+        }
+
+        SemMemory = (u16*) mmap(NULL, kSemMemorySize, PROT_READ | PROT_WRITE, MAP_SHARED, SemMemoryFile, 0);
+        if (SemMemory == MAP_FAILED)
+        {
+            ReleaseResources();
             return false;
         }
 
@@ -272,6 +335,11 @@ bool LocalMultiplayer::Init()
         header->PacketWriteOffset = kPacketStart;
         header->ReplyWriteOffset = kReplyStart;
         UnlockMemory();
+
+        for (int i = 0; i < 32; ++i)
+        {
+            SemMemory[i] = 1;
+        }
 
         MasterThread = Platform::Thread_Create(MasterInstanceThread);
     }
@@ -303,10 +371,21 @@ bool LocalMultiplayer::Init()
         }
 
         debug("Connected to master instance. Waiting for shared memory FD...");
-        send(socketFd, "1", 1, 0);
+        u8 data = 1;
+        send(socketFd, &data, 1, 0);
         if (ancil_recv_fd(socketFd, &MemoryFile) != 0)
         {
             debug("Failed to receive shared memory FD");
+            debug(strerror(errno));
+            close(socketFd);
+            return false;
+        }
+
+        data = 2;
+        send(socketFd, &data, 1, 0);
+        if (ancil_recv_fd(socketFd, &SemMemoryFile) != 0)
+        {
+            debug("Failed to receive semaphores shared memory FD");
             debug(strerror(errno));
             close(socketFd);
             return false;
@@ -318,6 +397,14 @@ bool LocalMultiplayer::Init()
         if (MemoryFile < 0)
         {
             debug("Failed to retrieve FD");
+            ReleaseResources();
+            return false;
+        }
+
+        if (SemMemoryFile < 0)
+        {
+            debug("Failed to retrieve shared semaphores FD");
+            ReleaseResources();
             return false;
         }
 
@@ -326,7 +413,15 @@ bool LocalMultiplayer::Init()
         {
             debug("Failed to map memory");
             debug(strerror(errno));
-            close(MemoryFile);
+            ReleaseResources();
+            return false;
+        }
+
+        SemMemory = (u16*) mmap(NULL, kSemMemorySize, PROT_READ | PROT_WRITE, MAP_SHARED, SemMemoryFile, 0);
+        if (Memory == MAP_FAILED)
+        {
+            debug("Failed to map semaphore memory");
+            ReleaseResources();
             return false;
         }
     }
@@ -352,9 +447,15 @@ bool LocalMultiplayer::Init()
 
     UnlockMemory();
 
+    // prepare semaphores
+    // semaphores 0-15: regular frames; semaphore I is posted when instance I needs to process a new frame
+    // semaphores 16-31: MP replies; semaphore I is posted when instance I needs to process a new MP reply
+
     SemPoolInit();
     SemInit(InstanceID);
     SemInit(16+InstanceID);
+
+    debug("MP comm init OK, instance ID " + std::to_string(InstanceID));
 
     LastHostID = -1;
     RecvTimeout = 25;
@@ -384,10 +485,7 @@ void LocalMultiplayer::DeInit()
     UnlockMemory();
 
     SemPoolDeinit();
-
-    munmap(Memory, kMemorySize);
-    close(MemoryFile);
-    MemoryFile = -1;
+    ReleaseResources();
 }
 
 void LocalMultiplayer::SetRecvTimeout(int timeout)
