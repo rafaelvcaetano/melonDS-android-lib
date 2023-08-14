@@ -16,6 +16,11 @@
 #include <android/log.h>
 #include <linux/un.h>
 
+enum RequestType {
+    SHARED_MEMORY_FD = 1,
+    SEMAPHORE_MEMORY_FD = 2,
+};
+
 void debug(std::string message)
 {
 #ifndef NDEBUG
@@ -118,8 +123,7 @@ void MasterInstanceThread()
         debug("Connection received");
         int readBytes;
 
-        // Flush data
-        do
+        for(;;)
         {
             readBytes = recv(remoteSocketFd, buffer, 16, 0);
             if (readBytes <= 0)
@@ -127,7 +131,7 @@ void MasterInstanceThread()
 
             switch (buffer[0])
             {
-                case 1:
+                case RequestType::SHARED_MEMORY_FD:
                     debug("Sending FD to slave");
                     if (ancil_send_fd(remoteSocketFd, MemoryFile) != 0)
                     {
@@ -135,7 +139,7 @@ void MasterInstanceThread()
                         debug(strerror(errno));
                     }
                     break;
-                case 2:
+                case RequestType::SEMAPHORE_MEMORY_FD:
                     debug("Sending shared semaphores FD to slave");
                     if (ancil_send_fd(remoteSocketFd, SemMemoryFile) != 0)
                     {
@@ -144,9 +148,7 @@ void MasterInstanceThread()
                     }
                     break;
             }
-
         }
-        while (readBytes == 16);
 
         close(remoteSocketFd);
     }
@@ -371,7 +373,7 @@ bool LocalMultiplayer::Init()
         }
 
         debug("Connected to master instance. Waiting for shared memory FD...");
-        u8 data = 1;
+        u8 data = RequestType::SHARED_MEMORY_FD;
         send(socketFd, &data, 1, 0);
         if (ancil_recv_fd(socketFd, &MemoryFile) != 0)
         {
@@ -381,7 +383,7 @@ bool LocalMultiplayer::Init()
             return false;
         }
 
-        data = 2;
+        data = RequestType::SEMAPHORE_MEMORY_FD;
         send(socketFd, &data, 1, 0);
         if (ancil_recv_fd(socketFd, &SemMemoryFile) != 0)
         {
