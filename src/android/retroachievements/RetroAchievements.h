@@ -11,6 +11,7 @@ namespace RetroAchievements
 
 void Init(RACallback* callback);
 bool LoadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
+void UnloadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
 void SetupRichPresence(std::string richPresenceScript);
 std::string GetRichPresenceStatus();
 bool DoSavestate(Savestate* savestate);

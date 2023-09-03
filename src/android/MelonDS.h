@@ -74,6 +74,7 @@ namespace MelonDSAndroid {
     extern void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::string* richPresenceScript);
+    extern void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
     extern std::string getRichPresenceStatus();
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 

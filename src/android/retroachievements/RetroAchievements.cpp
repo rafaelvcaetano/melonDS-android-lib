@@ -28,6 +28,13 @@ bool RetroAchievements::LoadAchievements(std::list<RetroAchievements::RAAchievem
     return true;
 }
 
+void RetroAchievements::UnloadAchievements(std::list<RetroAchievements::RAAchievement> achievements)
+{
+    for (const auto &achievement : achievements) {
+        rc_runtime_deactivate_achievement(&rcheevosRuntime, achievement.id);
+    }
+}
+
 void RetroAchievements::SetupRichPresence(std::string richPresenceScript)
 {
     rc_runtime_activate_richpresence(&rcheevosRuntime, richPresenceScript.c_str(), nullptr, 0);

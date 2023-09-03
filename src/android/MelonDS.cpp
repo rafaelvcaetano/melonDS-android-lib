@@ -178,6 +178,11 @@ namespace MelonDSAndroid
             RetroAchievements::SetupRichPresence(*richPresenceScript);
     }
 
+    void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements)
+    {
+        RetroAchievements::UnloadAchievements(achievements);
+    }
+
     std::string getRichPresenceStatus()
     {
         return RetroAchievements::GetRichPresenceStatus();
