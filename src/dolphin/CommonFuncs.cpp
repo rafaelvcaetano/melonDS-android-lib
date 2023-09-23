@@ -33,8 +33,8 @@ std::string LastStrerrorString()
   const char* str = strerror_r(errno, error_message, BUFFER_SIZE);
   return std::string(str);
 #else
-  int error_code = strerror_r(errno, error_message, BUFFER_SIZE);
-  return error_code == 0 ? std::string(error_message) : "";
+  const char* str = strerror_r(errno, error_message, BUFFER_SIZE);
+  return std::string(str);
 #endif
 }
 

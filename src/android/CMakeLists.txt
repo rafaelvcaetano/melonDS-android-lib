@@ -8,7 +8,7 @@ set(ANDROID_SOURCES
         MelonDS.cpp
         OboeCallback.cpp
         MicInputOboeCallback.cpp
-        OpenGLRenderer.cpp
+        OpenGLContext.cpp
         PlatformAndroid.cpp
         FileUtils.cpp
         ifaddrs.c
@@ -43,4 +43,4 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${LIBSLIRP}/src)
 target_include_directories(${PROJECT_NAME} PUBLIC ./)
 target_include_directories(${PROJECT_NAME} PUBLIC ../)
 target_include_directories(${PROJECT_NAME} PUBLIC ../frontend)
-target_link_libraries(melonDS-lib ${android-lib} core oboe rcheevos libslirp)
+target_link_libraries(melonDS-lib ${android-lib} core oboe rcheevos libslirp EGL GLESv3)

@@ -48,6 +48,7 @@ namespace MelonDSAndroid {
         int rewindLengthSeconds;
         FirmwareConfiguration firmwareConfiguration;
         GPU::RenderSettings renderSettings;
+        int renderer;
     } EmulatorConfiguration;
 
     typedef struct {
@@ -76,7 +77,7 @@ namespace MelonDSAndroid {
     extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::string* richPresenceScript);
     extern void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
     extern std::string getRichPresenceStatus();
-    extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
+    extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration, u32* frameBuffer);
 
     /**
      * Loads the NDS ROM and, optionally, the GBA ROM.

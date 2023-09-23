@@ -61,7 +61,7 @@ add_library(core STATIC
     tiny-AES-c/aes.c
     xxhash/xxhash.c)
 
-#[[if (ENABLE_OGLRENDERER)
+if (ENABLE_OGLRENDERER)
     target_sources(core PRIVATE
         GPU_OpenGL.cpp
         GPU_OpenGL_shaders.h
@@ -70,7 +70,7 @@ add_library(core STATIC
         OpenGLSupport.cpp)
 
     target_compile_definitions(core PUBLIC OGLRENDERER_ENABLED)
-endif()]]
+endif()
 
 if (ENABLE_JIT)
     enable_language(ASM)
@@ -134,6 +134,9 @@ if (WIN32)
     target_link_libraries(core PRIVATE ole32 comctl32 ws2_32)
 elseif (ANDROID)
 	target_link_libraries(core)
+    if (ENABLE_OGLRENDERER)
+        target_link_libraries(core PRIVATE EGL GLESv3)
+    endif()
 elseif(NOT APPLE)
     target_link_libraries(core PRIVATE rt)
 endif()
