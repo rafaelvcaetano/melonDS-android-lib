@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -20,6 +20,7 @@
 #define FIFO_H
 
 #include "types.h"
+#include "Savestate.h"
 
 template<typename T, u32 NumEntries>
 class FIFO

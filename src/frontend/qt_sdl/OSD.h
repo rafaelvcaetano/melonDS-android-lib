@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -22,14 +22,14 @@
 namespace OSD
 {
 
-bool Init(QOpenGLFunctions_3_2_Core* f);
-void DeInit(QOpenGLFunctions_3_2_Core* f);
+bool Init(bool openGL);
+void DeInit();
 
 void AddMessage(u32 color, const char* text);
 
-void Update(QOpenGLFunctions_3_2_Core* f);
+void Update();
 void DrawNative(QPainter& painter);
-void DrawGL(QOpenGLFunctions_3_2_Core* f, float w, float h);
+void DrawGL(float w, float h);
 
 }
 

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -23,8 +23,7 @@
 #include "types.h"
 #include "Platform.h"
 #include "Config.h"
-#include "PlatformConfig.h"
-#include "FrontendUtil.h"
+#include "ROMManager.h"
 #include "DSi_NAND.h"
 
 #include "TitleManagerDialog.h"
@@ -32,10 +31,10 @@
 #include "ui_TitleImportDialog.h"
 
 
-FILE* TitleManagerDialog::curNAND = nullptr;
+bool TitleManagerDialog::NANDInited = false;
 TitleManagerDialog* TitleManagerDialog::currentDlg = nullptr;
 
-extern char* EmuDirectory;
+extern std::string EmuDirectory;
 
 
 TitleManagerDialog::TitleManagerDialog(QWidget* parent) : QDialog(parent), ui(new Ui::TitleManagerDialog)
@@ -112,7 +111,7 @@ void TitleManagerDialog::createTitleItem(u32 category, u32 titleid)
     DSi_NAND::GetTitleInfo(category, titleid, version, &header, &banner);
 
     u32 icondata[32*32];
-    Frontend::ROMIcon(banner.Icon, banner.Palette, icondata);
+    ROMManager::ROMIcon(banner.Icon, banner.Palette, icondata);
     QImage iconimg((const uchar*)icondata, 32, 32, QImage::Format_ARGB32);
     QIcon icon(QPixmap::fromImage(iconimg.copy()));
 
@@ -137,6 +136,8 @@ void TitleManagerDialog::createTitleItem(u32 category, u32 titleid)
 
 bool TitleManagerDialog::openNAND()
 {
+    NANDInited = false;
+
     FILE* bios7i = Platform::OpenLocalFile(Config::DSiBIOS7Path, "rb");
     if (!bios7i)
         return false;
@@ -146,28 +147,21 @@ bool TitleManagerDialog::openNAND()
     fread(es_keyY, 16, 1, bios7i);
     fclose(bios7i);
 
-    curNAND = Platform::OpenLocalFile(Config::DSiNANDPath, "r+b");
-    if (!curNAND)
-        return false;
-
-    if (!DSi_NAND::Init(curNAND, es_keyY))
+    if (!DSi_NAND::Init(es_keyY))
     {
-        fclose(curNAND);
-        curNAND = nullptr;
         return false;
     }
 
+    NANDInited = true;
     return true;
 }
 
 void TitleManagerDialog::closeNAND()
 {
-    if (curNAND)
+    if (NANDInited)
     {
         DSi_NAND::DeInit();
-
-        fclose(curNAND);
-        curNAND = nullptr;
+        NANDInited = false;
     }
 }
 
@@ -285,7 +279,7 @@ void TitleManagerDialog::onImportTitleData()
 
     QString file = QFileDialog::getOpenFileName(this,
                                                 "Select file to import...",
-                                                EmuDirectory,
+                                                QString::fromStdString(EmuDirectory),
                                                 "Title data files (*.sav);;Any file (*.*)");
 
     if (file.isEmpty()) return;
@@ -355,7 +349,7 @@ void TitleManagerDialog::onExportTitleData()
 
     QString file = QFileDialog::getSaveFileName(this,
                                                 "Select path to export to...",
-                                                QString(EmuDirectory) + exportname,
+                                                QString::fromStdString(EmuDirectory) + exportname,
                                                 "Title data files (*.sav);;Any file (*.*)");
 
     if (file.isEmpty()) return;
@@ -528,7 +522,7 @@ void TitleImportDialog::on_btnAppBrowse_clicked()
 {
     QString file = QFileDialog::getOpenFileName(this,
                                                 "Select title executable...",
-                                                EmuDirectory,
+                                                QString::fromStdString(EmuDirectory),
                                                 "DSiWare executables (*.app *.nds *.dsi *.srl);;Any file (*.*)");
 
     if (file.isEmpty()) return;
@@ -540,7 +534,7 @@ void TitleImportDialog::on_btnTmdBrowse_clicked()
 {
     QString file = QFileDialog::getOpenFileName(this,
                                                 "Select title metadata...",
-                                                EmuDirectory,
+                                                QString::fromStdString(EmuDirectory),
                                                 "DSiWare metadata (*.tmd);;Any file (*.*)");
 
     if (file.isEmpty()) return;

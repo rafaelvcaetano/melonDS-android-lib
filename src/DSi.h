@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -39,9 +39,6 @@ extern u64 ConsoleID;
 extern DSi_SDHost* SDMMC;
 extern DSi_SDHost* SDIO;
 
-extern FILE* SDMMCFile;
-extern FILE* SDIOFile;
-
 const u32 NWRAMSize = 0x40000;
 
 extern u8* NWRAM_A;
@@ -59,14 +56,17 @@ extern u32 NWRAMMask[2][3];
 bool Init();
 void DeInit();
 void Reset();
+void Stop();
+
+void DoSavestate(Savestate* file);
+
+void SetCartInserted(bool inserted);
 
 void SetupDirectBoot();
 void SoftReset();
 
 bool LoadBIOS();
 bool LoadNAND();
-
-void CloseDSiNAND();
 
 void RunNDMAs(u32 cpu);
 void StallNDMAs();

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -25,6 +25,7 @@
 #include <string>
 #include <algorithm>
 
+#include <QProcess>
 #include <QApplication>
 #include <QMessageBox>
 #include <QMenuBar>
@@ -35,18 +36,22 @@
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QVector>
+#include <QCommandLineParser>
 #ifndef _WIN32
+#include <QGuiApplication>
 #include <QSocketNotifier>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <signal.h>
+#ifndef APPLE
+#include <qpa/qplatformnativeinterface.h>
+#endif
 #endif
 
 #include <SDL2/SDL.h>
 
-#ifdef OGLRENDERER_ENABLED
 #include "OpenGLSupport.h"
-#endif
+#include "duckstation/gl/context.h"
 
 #include "main.h"
 #include "Input.h"
@@ -54,12 +59,17 @@
 #include "EmuSettingsDialog.h"
 #include "InputConfig/InputConfigDialog.h"
 #include "VideoSettingsDialog.h"
+#include "CameraSettingsDialog.h"
 #include "AudioSettingsDialog.h"
 #include "FirmwareSettingsDialog.h"
+#include "PathSettingsDialog.h"
+#include "MPSettingsDialog.h"
 #include "WifiSettingsDialog.h"
 #include "InterfaceSettingsDialog.h"
 #include "ROMInfoDialog.h"
+#include "RAMInfoDialog.h"
 #include "TitleManagerDialog.h"
+#include "PowerManagement/PowerManagementDialog.h"
 
 #include "types.h"
 #include "version.h"
@@ -74,14 +84,18 @@
 #include "SPU.h"
 #include "Wifi.h"
 #include "Platform.h"
+#include "LocalMP.h"
 #include "Config.h"
-#include "PlatformConfig.h"
 
 #include "Savestate.h"
 
 #include "main_shaders.h"
 
+#include "ROMManager.h"
 #include "ArchiveUtil.h"
+#include "CameraManager.h"
+
+#include "CLI.h"
 
 // TODO: uniform variable spelling
 
@@ -98,6 +112,7 @@ bool videoSettingsDirty;
 
 SDL_AudioDeviceID audioDevice;
 int audioFreq;
+bool audioMuted;
 SDL_cond* audioSync;
 SDL_mutex* audioSyncLock;
 
@@ -108,7 +123,20 @@ u32 micExtBufferWritePos;
 u32 micWavLength;
 s16* micWavBuffer;
 
+CameraManager* camManager[2];
+bool camStarted[2];
+
+const struct { int id; float ratio; const char* label; } aspectRatios[] =
+{
+    { 0, 1,                       "4:3 (native)" },
+    { 4, (5.f  / 3) / (4.f / 3), "5:3 (3DS)"},
+    { 1, (16.f / 9) / (4.f / 3),  "16:9" },
+    { 2, (21.f / 9) / (4.f / 3),  "21:9" },
+    { 3, 0,                       "window" }
+};
+
 void micCallback(void* data, Uint8* stream, int len);
+
 
 
 void audioCallback(void* data, Uint8* stream, int len)
@@ -126,7 +154,7 @@ void audioCallback(void* data, Uint8* stream, int len)
     SDL_CondSignal(audioSync);
     SDL_UnlockMutex(audioSyncLock);
 
-    if (num_in < 1)
+    if ((num_in < 1) || audioMuted)
     {
         memset(stream, 0, len*sizeof(s16)*2);
         return;
@@ -144,6 +172,23 @@ void audioCallback(void* data, Uint8* stream, int len)
     }
 
     Frontend::AudioOut_Resample(buf_in, num_in, (s16*)stream, len, Config::AudioVolume);
+}
+
+void audioMute()
+{
+    int inst = Platform::InstanceID();
+    audioMuted = false;
+
+    switch (Config::MPAudioMode)
+    {
+    case 1: // only instance 1
+        if (inst > 0) audioMuted = true;
+        break;
+
+    case 2: // only currently focused instance
+        if (!mainWindow->isActiveWindow()) audioMuted = true;
+        break;
+    }
 }
 
 
@@ -181,7 +226,7 @@ void micClose()
     micDevice = 0;
 }
 
-void micLoadWav(const char* name)
+void micLoadWav(std::string name)
 {
     SDL_AudioSpec format;
     memset(&format, 0, sizeof(SDL_AudioSpec));
@@ -192,7 +237,7 @@ void micLoadWav(const char* name)
 
     u8* buf;
     u32 len;
-    if (!SDL_LoadWAV(name, &format, &buf, &len))
+    if (!SDL_LoadWAV(name.c_str(), &format, &buf, &len))
         return;
 
     const u64 dstfreq = 44100;
@@ -318,7 +363,7 @@ EmuThread::EmuThread(QObject* parent) : QThread(parent)
     EmuPause = 0;
     RunningSomething = false;
 
-    connect(this, SIGNAL(windowUpdate()), mainWindow->panel, SLOT(repaint()));
+    connect(this, SIGNAL(windowUpdate()), mainWindow->panelWidget, SLOT(repaint()));
     connect(this, SIGNAL(windowTitleChange(QString)), mainWindow, SLOT(onTitleUpdate(QString)));
     connect(this, SIGNAL(windowEmuStart()), mainWindow, SLOT(onEmuStart()));
     connect(this, SIGNAL(windowEmuStop()), mainWindow, SLOT(onEmuStop()));
@@ -326,55 +371,125 @@ EmuThread::EmuThread(QObject* parent) : QThread(parent)
     connect(this, SIGNAL(windowEmuReset()), mainWindow->actReset, SLOT(trigger()));
     connect(this, SIGNAL(windowEmuFrameStep()), mainWindow->actFrameStep, SLOT(trigger()));
     connect(this, SIGNAL(windowLimitFPSChange()), mainWindow->actLimitFramerate, SLOT(trigger()));
-    connect(this, SIGNAL(screenLayoutChange()), mainWindow->panel, SLOT(onScreenLayoutChanged()));
+    connect(this, SIGNAL(screenLayoutChange()), mainWindow->panelWidget, SLOT(onScreenLayoutChanged()));
     connect(this, SIGNAL(windowFullscreenToggle()), mainWindow, SLOT(onFullscreenToggled()));
     connect(this, SIGNAL(swapScreensToggle()), mainWindow->actScreenSwap, SLOT(trigger()));
 
-    if (mainWindow->hasOGL) initOpenGL();
+    static_cast<ScreenPanelGL*>(mainWindow->panel)->transferLayout(this);
+}
+
+void EmuThread::updateScreenSettings(bool filter, const WindowInfo& windowInfo, int numScreens, int* screenKind, float* screenMatrix)
+{
+    screenSettingsLock.lock();
+
+    if (lastScreenWidth != windowInfo.surface_width || lastScreenHeight != windowInfo.surface_height)
+    {
+        if (oglContext)
+            oglContext->ResizeSurface(windowInfo.surface_width, windowInfo.surface_height);
+        lastScreenWidth = windowInfo.surface_width;
+        lastScreenHeight = windowInfo.surface_height;
+    }
+
+    this->filter = filter;
+    this->windowInfo = windowInfo;
+    this->numScreens = numScreens;
+    memcpy(this->screenKind, screenKind, sizeof(int)*numScreens);
+    memcpy(this->screenMatrix, screenMatrix, sizeof(float)*numScreens*6);
+
+    screenSettingsLock.unlock();
 }
 
 void EmuThread::initOpenGL()
 {
-    QOpenGLContext* windowctx = mainWindow->getOGLContext();
-    QSurfaceFormat format = windowctx->format();
+    GL::Context* windowctx = mainWindow->getOGLContext();
 
-    format.setSwapInterval(0);
+    oglContext = windowctx;
+    oglContext->MakeCurrent();
 
-    oglSurface = new QOffscreenSurface();
-    oglSurface->setFormat(format);
-    oglSurface->create();
-    if (!oglSurface->isValid())
+    OpenGL::BuildShaderProgram(kScreenVS, kScreenFS, screenShaderProgram, "ScreenShader");
+    GLuint pid = screenShaderProgram[2];
+    glBindAttribLocation(pid, 0, "vPosition");
+    glBindAttribLocation(pid, 1, "vTexcoord");
+    glBindFragDataLocation(pid, 0, "oColor");
+
+    OpenGL::LinkShaderProgram(screenShaderProgram);
+
+    glUseProgram(pid);
+    glUniform1i(glGetUniformLocation(pid, "ScreenTex"), 0);
+
+    screenShaderScreenSizeULoc = glGetUniformLocation(pid, "uScreenSize");
+    screenShaderTransformULoc = glGetUniformLocation(pid, "uTransform");
+
+    // to prevent bleeding between both parts of the screen
+    // with bilinear filtering enabled
+    const int paddedHeight = 192*2+2;
+    const float padPixels = 1.f / paddedHeight;
+
+    const float vertices[] =
     {
-        // TODO handle this!
-        printf("oglSurface shat itself :(\n");
-        delete oglSurface;
-        return;
-    }
+        0.f,   0.f,    0.f, 0.f,
+        0.f,   192.f,  0.f, 0.5f - padPixels,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        0.f,   0.f,    0.f, 0.f,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        256.f, 0.f,    1.f, 0.f,
 
-    oglContext = new QOpenGLContext();
-    oglContext->setFormat(oglSurface->format());
-    oglContext->setShareContext(windowctx);
-    if (!oglContext->create())
-    {
-        // TODO handle this!
-        printf("oglContext shat itself :(\n");
-        delete oglContext;
-        delete oglSurface;
-        return;
-    }
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        0.f,   192.f,  0.f, 1.f,
+        256.f, 192.f,  1.f, 1.f,
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        256.f, 192.f,  1.f, 1.f,
+        256.f, 0.f,    1.f, 0.5f + padPixels
+    };
 
-    oglContext->moveToThread(this);
+    glGenBuffers(1, &screenVertexBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glGenVertexArrays(1, &screenVertexArray);
+    glBindVertexArray(screenVertexArray);
+    glEnableVertexAttribArray(0); // position
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(0));
+    glEnableVertexAttribArray(1); // texcoord
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(2*4));
+
+    glGenTextures(1, &screenTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, screenTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, paddedHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    // fill the padding
+    u8 zeroData[256*4*4];
+    memset(zeroData, 0, sizeof(zeroData));
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256, 2, GL_RGBA, GL_UNSIGNED_BYTE, zeroData);
+
+    OSD::Init(true);
+
+    oglContext->SetSwapInterval(Config::ScreenVSync ? Config::ScreenVSyncInterval : 0);
 }
 
 void EmuThread::deinitOpenGL()
 {
-    delete oglContext;
-    delete oglSurface;
+    glDeleteTextures(1, &screenTexture);
+
+    glDeleteVertexArrays(1, &screenVertexArray);
+    glDeleteBuffers(1, &screenVertexBuffer);
+
+    OpenGL::DeleteShaderProgram(screenShaderProgram);
+
+    OSD::DeInit();
+
+    oglContext->DoneCurrent();
+    oglContext = nullptr;
+
+    lastScreenWidth = lastScreenHeight = -1;
 }
 
 void EmuThread::run()
 {
-    bool hasOGL = mainWindow->hasOGL;
     u32 mainScreenPos[3];
 
     NDS::Init();
@@ -389,14 +504,12 @@ void EmuThread::run()
     videoSettings.GL_ScaleFactor = Config::GL_ScaleFactor;
     videoSettings.GL_BetterPolygons = Config::GL_BetterPolygons;
 
-#ifdef OGLRENDERER_ENABLED
-    if (hasOGL)
+    if (mainWindow->hasOGL)
     {
-        oglContext->makeCurrent(oglSurface);
+        initOpenGL();
         videoRenderer = Config::_3DRenderer;
     }
     else
-#endif
     {
         videoRenderer = 0;
     }
@@ -413,6 +526,8 @@ void EmuThread::run()
     double lastTime = SDL_GetPerformanceCounter() * perfCountsSec;
     double frameLimitError = 0.0;
     double lastMeasureTime = lastTime;
+
+    u32 winUpdateCount = 0, winUpdateFreq = 1;
 
     char melontitle[100];
 
@@ -457,25 +572,24 @@ void EmuThread::run()
             if (EmuRunning == 3) EmuRunning = 2;
 
             // update render settings if needed
-            if (videoSettingsDirty)
+            // HACK:
+            // once the fast forward hotkey is released, we need to update vsync
+            // to the old setting again
+            if (videoSettingsDirty || Input::HotkeyReleased(HK_FastForward))
             {
-                if (hasOGL != mainWindow->hasOGL)
+                if (oglContext)
                 {
-                    hasOGL = mainWindow->hasOGL;
-#ifdef OGLRENDERER_ENABLED
-                    if (hasOGL)
-                    {
-                        oglContext->makeCurrent(oglSurface);
-                        videoRenderer = Config::_3DRenderer;
-                    }
-                    else
-#endif
-                    {
-                        videoRenderer = 0;
-                    }
+                    oglContext->SetSwapInterval(Config::ScreenVSync ? Config::ScreenVSyncInterval : 0);
+                    videoRenderer = Config::_3DRenderer;
                 }
+#ifdef OGLRENDERER_ENABLED
                 else
-                    videoRenderer = hasOGL ? Config::_3DRenderer : 0;
+#endif
+                {
+                    videoRenderer = 0;
+                }                
+
+                videoRenderer = oglContext ? Config::_3DRenderer : 0;
 
                 videoSettingsDirty = false;
 
@@ -500,7 +614,7 @@ void EmuThread::run()
             micProcess();
 
             // auto screen layout
-            if (Config::ScreenSizing == 3)
+            if (Config::ScreenSizing == screenSizing_Auto)
             {
                 mainScreenPos[2] = mainScreenPos[1];
                 mainScreenPos[1] = mainScreenPos[0];
@@ -512,14 +626,14 @@ void EmuThread::run()
                 {
                     // constant flickering, likely displaying 3D on both screens
                     // TODO: when both screens are used for 2D only...???
-                    guess = 0;
+                    guess = screenSizing_Even;
                 }
                 else
                 {
                     if (mainScreenPos[0] == 1)
-                        guess = 1;
+                        guess = screenSizing_EmphTop;
                     else
-                        guess = 2;
+                        guess = screenSizing_EmphBot;
                 }
 
                 if (guess != autoScreenSizing)
@@ -529,34 +643,27 @@ void EmuThread::run()
                 }
             }
 
-#ifdef OGLRENDERER_ENABLED
-            if (videoRenderer == 1)
-            {
-                FrontBufferLock.lock();
-                if (FrontBufferReverseSyncs[FrontBuffer ^ 1])
-                    glWaitSync(FrontBufferReverseSyncs[FrontBuffer ^ 1], 0, GL_TIMEOUT_IGNORED);
-                FrontBufferLock.unlock();
-            }
-#endif
 
             // emulate
             u32 nlines = NDS::RunFrame();
 
-            FrontBufferLock.lock();
-            FrontBuffer = GPU::FrontBuffer;
-#ifdef OGLRENDERER_ENABLED
-            if (videoRenderer == 1)
+            if (ROMManager::NDSSave)
+                ROMManager::NDSSave->CheckFlush();
+
+            if (ROMManager::GBASave)
+                ROMManager::GBASave->CheckFlush();
+
+            if (!oglContext)
             {
-                if (FrontBufferSyncs[FrontBuffer])
-                    glDeleteSync(FrontBufferSyncs[FrontBuffer]);
-                FrontBufferSyncs[FrontBuffer] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-                // this is hacky but this is the easiest way to call
-                // this function without dealling with a ton of
-                // macro mess
-                epoxy_glFlush();
+                FrontBufferLock.lock();
+                FrontBuffer = GPU::FrontBuffer;
+                FrontBufferLock.unlock();
             }
-#endif
-            FrontBufferLock.unlock();
+            else
+            {
+                FrontBuffer = GPU::FrontBuffer;
+                drawScreenGL();
+            }
 
 #ifdef MELONCAP
             MelonCap::Update();
@@ -564,11 +671,21 @@ void EmuThread::run()
 
             if (EmuRunning == 0) break;
 
-            emit windowUpdate();
+            winUpdateCount++;
+            if (winUpdateCount >= winUpdateFreq && !oglContext)
+            {
+                emit windowUpdate();
+                winUpdateCount = 0;
+            }
 
             bool fastforward = Input::HotkeyDown(HK_FastForward);
 
-            if (Config::AudioSync && (!fastforward) && audioDevice)
+            if (fastforward && oglContext && Config::ScreenVSync)
+            {
+                oglContext->SetSwapInterval(0);
+            }
+
+            if (Config::AudioSync && !fastforward && audioDevice)
             {
                 SDL_LockMutex(audioSyncLock);
                 while (SPU::GetOutputSize() > 1024)
@@ -617,7 +734,15 @@ void EmuThread::run()
 
                 float fpstarget = 1.0/frametimeStep;
 
-                sprintf(melontitle, "[%d/%.0f] melonDS " MELONDS_VERSION, fps, fpstarget);
+                winUpdateFreq = fps / (u32)round(fpstarget);
+                if (winUpdateFreq < 1)
+                    winUpdateFreq = 1;
+
+                int inst = Platform::InstanceID();
+                if (inst == 0)
+                    sprintf(melontitle, "[%d/%.0f] melonDS " MELONDS_VERSION, fps, fpstarget);
+                else
+                    sprintf(melontitle, "[%d/%.0f] melonDS (%d)", fps, fpstarget, inst+1);
                 changeWindowTitle(melontitle);
             }
         }
@@ -632,10 +757,29 @@ void EmuThread::run()
 
             EmuStatus = EmuRunning;
 
-            sprintf(melontitle, "melonDS " MELONDS_VERSION);
+            int inst = Platform::InstanceID();
+            if (inst == 0)
+                sprintf(melontitle, "melonDS " MELONDS_VERSION);
+            else
+                sprintf(melontitle, "melonDS (%d)", inst+1);
             changeWindowTitle(melontitle);
 
             SDL_Delay(75);
+
+            if (oglContext)
+                drawScreenGL();
+
+            int contextRequest = ContextRequest;
+            if (contextRequest == 1)
+            {
+                initOpenGL();
+                ContextRequest = 0;
+            }
+            else if (contextRequest == 2)
+            {
+                deinitOpenGL();
+                ContextRequest = 0;
+            }
         }
     }
 
@@ -644,12 +788,6 @@ void EmuThread::run()
     GPU::DeInitRenderer();
     NDS::DeInit();
     //Platform::LAN_DeInit();
-
-    if (hasOGL)
-    {
-        oglContext->doneCurrent();
-        deinitOpenGL();
-    }
 }
 
 void EmuThread::changeWindowTitle(char* title)
@@ -667,6 +805,18 @@ void EmuThread::emuRun()
     emit windowEmuStart();
     if (audioDevice) SDL_PauseAudioDevice(audioDevice, 0);
     micOpen();
+}
+
+void EmuThread::initContext()
+{
+    ContextRequest = 1;
+    while (ContextRequest != 0);
+}
+
+void EmuThread::deinitContext()
+{
+    ContextRequest = 2;
+    while (ContextRequest != 0);
 }
 
 void EmuThread::emuPause()
@@ -715,19 +865,110 @@ bool EmuThread::emuIsRunning()
     return (EmuRunning == 1);
 }
 
+bool EmuThread::emuIsActive()
+{
+    return (RunningSomething == 1);
+}
+
+void EmuThread::drawScreenGL()
+{
+    int w = windowInfo.surface_width;
+    int h = windowInfo.surface_height;
+    float factor = windowInfo.surface_scale;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(false);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glViewport(0, 0, w, h);
+
+    glUseProgram(screenShaderProgram[2]);
+    glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
+
+    int frontbuf = FrontBuffer;
+    glActiveTexture(GL_TEXTURE0);
+
+#ifdef OGLRENDERER_ENABLED
+    if (GPU::Renderer != 0)
+    {
+        // hardware-accelerated render
+        GPU::CurGLCompositor->BindOutputTexture(frontbuf);
+    }
+    else
+#endif
+    {
+        // regular render
+        glBindTexture(GL_TEXTURE_2D, screenTexture);
+
+        if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
+        {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
+                            GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192+2, 256, 192, GL_RGBA,
+                            GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
+        }
+    }
+
+    screenSettingsLock.lock();
+
+    GLint filter = this->filter ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+    glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
+    glBindVertexArray(screenVertexArray);
+
+    for (int i = 0; i < numScreens; i++)
+    {
+        glUniformMatrix2x3fv(screenShaderTransformULoc, 1, GL_TRUE, screenMatrix[i]);
+        glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2*3, 2*3);
+    }
+
+    screenSettingsLock.unlock();
+
+    OSD::Update();
+    OSD::DrawGL(w, h);
+
+    oglContext->SwapBuffers();
+}
+
+ScreenHandler::ScreenHandler(QWidget* widget)
+{
+    widget->setMouseTracking(true);
+    widget->setAttribute(Qt::WA_AcceptTouchEvents);
+    QTimer* mouseTimer = setupMouseTimer();
+    widget->connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) widget->setCursor(Qt::BlankCursor);});
+}
+
+ScreenHandler::~ScreenHandler()
+{
+    mouseTimer->stop();
+}
 
 void ScreenHandler::screenSetupLayout(int w, int h)
 {
     int sizing = Config::ScreenSizing;
     if (sizing == 3) sizing = autoScreenSizing;
 
-    float aspectRatios[] =
+    float aspectTop, aspectBot;
+
+    for (auto ratio : aspectRatios)
     {
-        1.f,
-        (16.f/9)/(4.f/3),
-        (21.f/9)/(4.f/3),
-        ((float)w/h)/(4.f/3)
-    };
+        if (ratio.id == Config::ScreenAspectTop)
+            aspectTop = ratio.ratio;
+        if (ratio.id == Config::ScreenAspectBot)
+            aspectBot = ratio.ratio;
+    }
+
+    if (aspectTop == 0)
+        aspectTop = (float) w / h;
+
+    if (aspectBot == 0)
+        aspectBot = (float) w / h;
 
     Frontend::SetupScreenLayout(w, h,
                                 Config::ScreenLayout,
@@ -736,8 +977,8 @@ void ScreenHandler::screenSetupLayout(int w, int h)
                                 Config::ScreenGap,
                                 Config::IntegerScaling != 0,
                                 Config::ScreenSwap != 0,
-                                aspectRatios[Config::ScreenAspectTop],
-                                aspectRatios[Config::ScreenAspectBot]);
+                                aspectTop,
+                                aspectBot);
 
     numScreens = Frontend::GetScreenTransforms(screenMatrix[0], screenKind);
 }
@@ -745,10 +986,15 @@ void ScreenHandler::screenSetupLayout(int w, int h)
 QSize ScreenHandler::screenGetMinSize(int factor = 1)
 {
     bool isHori = (Config::ScreenRotation == 1 || Config::ScreenRotation == 3);
-    int gap = Config::ScreenGap;
+    int gap = Config::ScreenGap * factor;
 
     int w = 256 * factor;
     int h = 192 * factor;
+
+    if (Config::ScreenSizing == 4 || Config::ScreenSizing == 5)
+    {
+        return QSize(w, h);
+    }
 
     if (Config::ScreenLayout == 0) // natural
     {
@@ -774,9 +1020,9 @@ QSize ScreenHandler::screenGetMinSize(int factor = 1)
     else // hybrid
     {
         if (isHori)
-            return QSize(h+gap+h, 3*w +(4*gap) / 3);
+            return QSize(h+gap+h, 3*w + (int)ceil((4*gap) / 3.0));
         else
-            return QSize(3*w +(4*gap) / 3, h+gap+h);
+            return QSize(3*w + (int)ceil((4*gap) / 3.0), h+gap+h);
     }
 }
 
@@ -885,7 +1131,7 @@ void ScreenHandler::screenHandleTouch(QTouchEvent* event)
 
 void ScreenHandler::showCursor()
 {
-    mainWindow->panel->setCursor(Qt::ArrowCursor);
+    mainWindow->panelWidget->setCursor(Qt::ArrowCursor);
     mouseTimer->start();
 }
 
@@ -899,7 +1145,7 @@ QTimer* ScreenHandler::setupMouseTimer()
     return mouseTimer;
 }
 
-ScreenPanelNative::ScreenPanelNative(QWidget* parent) : QWidget(parent)
+ScreenPanelNative::ScreenPanelNative(QWidget* parent) : QWidget(parent), ScreenHandler(this)
 {
     screen[0] = QImage(256, 192, QImage::Format_RGB32);
     screen[1] = QImage(256, 192, QImage::Format_RGB32);
@@ -907,17 +1153,12 @@ ScreenPanelNative::ScreenPanelNative(QWidget* parent) : QWidget(parent)
     screenTrans[0].reset();
     screenTrans[1].reset();
 
-    touching = false;
-
-    setAttribute(Qt::WA_AcceptTouchEvents);
-
-    OSD::Init(nullptr);
+    OSD::Init(false);
 }
 
 ScreenPanelNative::~ScreenPanelNative()
 {
-    OSD::DeInit(nullptr);
-    mouseTimer->stop();
+    OSD::DeInit();
 }
 
 void ScreenPanelNative::setupScreenLayout()
@@ -943,29 +1184,32 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
     // fill background
     painter.fillRect(event->rect(), QColor::fromRgb(0, 0, 0));
 
-    emuThread->FrontBufferLock.lock();
-    int frontbuf = emuThread->FrontBuffer;
-    if (!GPU::Framebuffer[frontbuf][0] || !GPU::Framebuffer[frontbuf][1])
+    if (emuThread->emuIsActive())
     {
+        emuThread->FrontBufferLock.lock();
+        int frontbuf = emuThread->FrontBuffer;
+        if (!GPU::Framebuffer[frontbuf][0] || !GPU::Framebuffer[frontbuf][1])
+        {
+            emuThread->FrontBufferLock.unlock();
+            return;
+        }
+
+        memcpy(screen[0].scanLine(0), GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
+        memcpy(screen[1].scanLine(0), GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
         emuThread->FrontBufferLock.unlock();
-        return;
+
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, Config::ScreenFilter != 0);
+
+        QRect screenrc(0, 0, 256, 192);
+
+        for (int i = 0; i < numScreens; i++)
+        {
+            painter.setTransform(screenTrans[i]);
+            painter.drawImage(screenrc, screen[screenKind[i]]);
+        }
     }
 
-    memcpy(screen[0].scanLine(0), GPU::Framebuffer[frontbuf][0], 256*192*4);
-    memcpy(screen[1].scanLine(0), GPU::Framebuffer[frontbuf][1], 256*192*4);
-    emuThread->FrontBufferLock.unlock();
-
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, Config::ScreenFilter!=0);
-
-    QRect screenrc(0, 0, 256, 192);
-
-    for (int i = 0; i < numScreens; i++)
-    {
-        painter.setTransform(screenTrans[i]);
-        painter.drawImage(screenrc, screen[screenKind[i]]);
-    }
-
-    OSD::Update(nullptr);
+    OSD::Update();
     OSD::DrawNative(painter);
 }
 
@@ -1013,29 +1257,102 @@ void ScreenPanelNative::onScreenLayoutChanged()
 }
 
 
-ScreenPanelGL::ScreenPanelGL(QWidget* parent) : QOpenGLWidget(parent)
+ScreenPanelGL::ScreenPanelGL(QWidget* parent) : QWidget(parent), ScreenHandler(this)
 {
-    touching = false;
-
-    setAttribute(Qt::WA_AcceptTouchEvents);
+    setAutoFillBackground(false);
+    setAttribute(Qt::WA_NativeWindow, true);
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAttribute(Qt::WA_PaintOnScreen, true);
+    setAttribute(Qt::WA_KeyCompression, false);
+    setFocusPolicy(Qt::StrongFocus);
+    setMinimumSize(screenGetMinSize());
 }
 
 ScreenPanelGL::~ScreenPanelGL()
+{}
+
+bool ScreenPanelGL::createContext()
 {
-    mouseTimer->stop();
+    std::optional<WindowInfo> windowInfo = getWindowInfo();
+    std::array<GL::Context::Version, 2> versionsToTry = {
+        GL::Context::Version{GL::Context::Profile::Core, 4, 3},
+        GL::Context::Version{GL::Context::Profile::Core, 3, 2}};
+    if (windowInfo.has_value())
+    {
+        glContext = GL::Context::Create(*getWindowInfo(), versionsToTry);
+        glContext->DoneCurrent();
+    }
 
-    makeCurrent();
+    return glContext != nullptr;
+}
 
-    OSD::DeInit(this);
+qreal ScreenPanelGL::devicePixelRatioFromScreen() const
+{
+    const QScreen* screen_for_ratio = window()->windowHandle()->screen();
+    if (!screen_for_ratio)
+        screen_for_ratio = QGuiApplication::primaryScreen();
 
-    glDeleteTextures(1, &screenTexture);
+    return screen_for_ratio ? screen_for_ratio->devicePixelRatio() : static_cast<qreal>(1);
+}
 
-    glDeleteVertexArrays(1, &screenVertexArray);
-    glDeleteBuffers(1, &screenVertexBuffer);
+int ScreenPanelGL::scaledWindowWidth() const
+{
+  return std::max(static_cast<int>(std::ceil(static_cast<qreal>(width()) * devicePixelRatioFromScreen())), 1);
+}
 
-    delete screenShader;
+int ScreenPanelGL::scaledWindowHeight() const
+{
+  return std::max(static_cast<int>(std::ceil(static_cast<qreal>(height()) * devicePixelRatioFromScreen())), 1);
+}
 
-    doneCurrent();
+std::optional<WindowInfo> ScreenPanelGL::getWindowInfo()
+{
+    WindowInfo wi;
+
+    // Windows and Apple are easy here since there's no display connection.
+    #if defined(_WIN32)
+    wi.type = WindowInfo::Type::Win32;
+    wi.window_handle = reinterpret_cast<void*>(winId());
+    #elif defined(__APPLE__)
+    wi.type = WindowInfo::Type::MacOS;
+    wi.window_handle = reinterpret_cast<void*>(winId());
+    #else
+    QPlatformNativeInterface* pni = QGuiApplication::platformNativeInterface();
+    const QString platform_name = QGuiApplication::platformName();
+    if (platform_name == QStringLiteral("xcb"))
+    {
+        wi.type = WindowInfo::Type::X11;
+        wi.display_connection = pni->nativeResourceForWindow("display", windowHandle());
+        wi.window_handle = reinterpret_cast<void*>(winId());
+    }
+    else if (platform_name == QStringLiteral("wayland"))
+    {
+        wi.type = WindowInfo::Type::Wayland;
+        QWindow* handle = windowHandle();
+        if (handle == nullptr)
+            return std::nullopt;
+
+        wi.display_connection = pni->nativeResourceForWindow("display", handle);
+        wi.window_handle = pni->nativeResourceForWindow("surface", handle);
+    }
+    else
+    {
+        qCritical() << "Unknown PNI platform " << platform_name;
+        return std::nullopt;
+    }
+    #endif
+
+    wi.surface_width = static_cast<u32>(scaledWindowWidth());
+    wi.surface_height = static_cast<u32>(scaledWindowHeight());
+    wi.surface_scale = static_cast<float>(devicePixelRatioFromScreen());
+
+    return wi;
+}
+
+
+QPaintEngine* ScreenPanelGL::paintEngine() const
+{
+  return nullptr;
 }
 
 void ScreenPanelGL::setupScreenLayout()
@@ -1044,163 +1361,15 @@ void ScreenPanelGL::setupScreenLayout()
     int h = height();
 
     screenSetupLayout(w, h);
-}
-
-void ScreenPanelGL::initializeGL()
-{
-    initializeOpenGLFunctions();
-
-    const GLubyte* renderer = glGetString(GL_RENDERER); // get renderer string
-    const GLubyte* version = glGetString(GL_VERSION); // version as a string
-    printf("OpenGL: renderer: %s\n", renderer);
-    printf("OpenGL: version: %s\n", version);
-
-    glClearColor(0, 0, 0, 1);
-
-    screenShader = new QOpenGLShaderProgram(this);
-    screenShader->addShaderFromSourceCode(QOpenGLShader::Vertex, kScreenVS);
-    screenShader->addShaderFromSourceCode(QOpenGLShader::Fragment, kScreenFS);
-
-    GLuint pid = screenShader->programId();
-    glBindAttribLocation(pid, 0, "vPosition");
-    glBindAttribLocation(pid, 1, "vTexcoord");
-    glBindFragDataLocation(pid, 0, "oColor");
-
-    screenShader->link();
-
-    screenShader->bind();
-    screenShader->setUniformValue("ScreenTex", (GLint)0);
-    screenShader->release();
-
-    // to prevent bleeding between both parts of the screen
-    // with bilinear filtering enabled
-    const int paddedHeight = 192*2+2;
-    const float padPixels = 1.f / paddedHeight;
-
-    const float vertices[] =
-    {
-        0.f,   0.f,    0.f, 0.f,
-        0.f,   192.f,  0.f, 0.5f - padPixels,
-        256.f, 192.f,  1.f, 0.5f - padPixels,
-        0.f,   0.f,    0.f, 0.f,
-        256.f, 192.f,  1.f, 0.5f - padPixels,
-        256.f, 0.f,    1.f, 0.f,
-
-        0.f,   0.f,    0.f, 0.5f + padPixels,
-        0.f,   192.f,  0.f, 1.f,
-        256.f, 192.f,  1.f, 1.f,
-        0.f,   0.f,    0.f, 0.5f + padPixels,
-        256.f, 192.f,  1.f, 1.f,
-        256.f, 0.f,    1.f, 0.5f + padPixels
-    };
-
-    glGenBuffers(1, &screenVertexBuffer);
-    glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glGenVertexArrays(1, &screenVertexArray);
-    glBindVertexArray(screenVertexArray);
-    glEnableVertexAttribArray(0); // position
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(0));
-    glEnableVertexAttribArray(1); // texcoord
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(2*4));
-
-    glGenTextures(1, &screenTexture);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, screenTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, paddedHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    // fill the padding
-    u8 zeroData[256*4*4];
-    memset(zeroData, 0, sizeof(zeroData));
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256, 2, GL_RGBA, GL_UNSIGNED_BYTE, zeroData);
-
-    OSD::Init(this);
-}
-
-void ScreenPanelGL::paintGL()
-{
-    int w = width();
-    int h = height();
-    float factor = devicePixelRatioF();
-
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glViewport(0, 0, w*factor, h*factor);
-
     if (emuThread)
-    {
-        screenShader->bind();
-
-        screenShader->setUniformValue("uScreenSize", (float)w, (float)h);
-        screenShader->setUniformValue("uScaleFactor", factor);
-
-        emuThread->FrontBufferLock.lock();
-        int frontbuf = emuThread->FrontBuffer;
-        glActiveTexture(GL_TEXTURE0);
-
-    #ifdef OGLRENDERER_ENABLED
-        if (GPU::Renderer != 0)
-        {
-            if (emuThread->FrontBufferSyncs[emuThread->FrontBuffer])
-                glWaitSync(emuThread->FrontBufferSyncs[emuThread->FrontBuffer], 0, GL_TIMEOUT_IGNORED);
-            // hardware-accelerated render
-            GPU::CurGLCompositor->BindOutputTexture(frontbuf);
-        }
-        else
-    #endif
-        {
-            // regular render
-            glBindTexture(GL_TEXTURE_2D, screenTexture);
-
-            if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
-            {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
-                                GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192+2, 256, 192, GL_RGBA,
-                                GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
-            }
-        }
-
-        GLint filter = Config::ScreenFilter ? GL_LINEAR : GL_NEAREST;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-
-        glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
-        glBindVertexArray(screenVertexArray);
-
-        GLint transloc = screenShader->uniformLocation("uTransform");
-
-        for (int i = 0; i < numScreens; i++)
-        {
-            glUniformMatrix2x3fv(transloc, 1, GL_TRUE, screenMatrix[i]);
-            glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2*3, 2*3);
-        }
-
-        screenShader->release();
-
-        if (emuThread->FrontBufferReverseSyncs[emuThread->FrontBuffer])
-            glDeleteSync(emuThread->FrontBufferReverseSyncs[emuThread->FrontBuffer]);
-        emuThread->FrontBufferReverseSyncs[emuThread->FrontBuffer] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        emuThread->FrontBufferLock.unlock();
-    }
-
-    OSD::Update(this);
-    OSD::DrawGL(this, w*factor, h*factor);
+        transferLayout(emuThread);
 }
 
 void ScreenPanelGL::resizeEvent(QResizeEvent* event)
 {
     setupScreenLayout();
 
-    QOpenGLWidget::resizeEvent(event);
-}
-
-void ScreenPanelGL::resizeGL(int w, int h)
-{
+    QWidget::resizeEvent(event);
 }
 
 void ScreenPanelGL::mousePressEvent(QMouseEvent* event)
@@ -1233,6 +1402,13 @@ bool ScreenPanelGL::event(QEvent* event)
         return true;
     }
     return QWidget::event(event);
+}
+
+void ScreenPanelGL::transferLayout(EmuThread* thread)
+{
+    std::optional<WindowInfo> windowInfo = getWindowInfo();
+    if (windowInfo.has_value())
+        thread->updateScreenSettings(Config::ScreenFilter, *windowInfo, numScreens, screenKind, &screenMatrix[0][0]);
 }
 
 void ScreenPanelGL::onScreenLayoutChanged()
@@ -1274,11 +1450,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     oldW = Config::WindowWidth;
     oldH = Config::WindowHeight;
-    oldMax = Config::WindowMaximized!=0;
+    oldMax = Config::WindowMaximized;
 
     setWindowTitle("melonDS " MELONDS_VERSION);
     setAttribute(Qt::WA_DeleteOnClose);
     setAcceptDrops(true);
+    setFocusPolicy(Qt::ClickFocus);
+
+    int inst = Platform::InstanceID();
 
     QMenuBar* menubar = new QMenuBar();
     {
@@ -1288,22 +1467,57 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         connect(actOpenROM, &QAction::triggered, this, &MainWindow::onOpenFile);
         actOpenROM->setShortcut(QKeySequence(QKeySequence::StandardKey::Open));
 
-        actOpenROMArchive = menu->addAction("Open ROM inside archive...");
+        /*actOpenROMArchive = menu->addAction("Open ROM inside archive...");
         connect(actOpenROMArchive, &QAction::triggered, this, &MainWindow::onOpenFileArchive);
-        actOpenROMArchive->setShortcut(QKeySequence(Qt::Key_O | Qt::CTRL | Qt::SHIFT));
+        actOpenROMArchive->setShortcut(QKeySequence(Qt::Key_O | Qt::CTRL | Qt::SHIFT));*/
 
         recentMenu = menu->addMenu("Open recent");
         for (int i = 0; i < 10; ++i)
         {
-            char* item = Config::RecentROMList[i];
-            if (strlen(item) > 0)
-                recentFileList.push_back(item);
+            std::string item = Config::RecentROMList[i];
+            if (!item.empty())
+                recentFileList.push_back(QString::fromStdString(item));
         }
         updateRecentFilesMenu();
 
         //actBootFirmware = menu->addAction("Launch DS menu");
         actBootFirmware = menu->addAction("Boot firmware");
         connect(actBootFirmware, &QAction::triggered, this, &MainWindow::onBootFirmware);
+
+        menu->addSeparator();
+
+        actCurrentCart = menu->addAction("DS slot: " + ROMManager::CartLabel());
+        actCurrentCart->setEnabled(false);
+
+        actInsertCart = menu->addAction("Insert cart...");
+        connect(actInsertCart, &QAction::triggered, this, &MainWindow::onInsertCart);
+
+        actEjectCart = menu->addAction("Eject cart");
+        connect(actEjectCart, &QAction::triggered, this, &MainWindow::onEjectCart);
+
+        menu->addSeparator();
+
+        actCurrentGBACart = menu->addAction("GBA slot: " + ROMManager::GBACartLabel());
+        actCurrentGBACart->setEnabled(false);
+
+        actInsertGBACart = menu->addAction("Insert ROM cart...");
+        connect(actInsertGBACart, &QAction::triggered, this, &MainWindow::onInsertGBACart);
+
+        {
+            QMenu* submenu = menu->addMenu("Insert add-on cart");
+
+            actInsertGBAAddon[0] = submenu->addAction("Memory expansion");
+            actInsertGBAAddon[0]->setData(QVariant(NDS::GBAAddon_RAMExpansion));
+            connect(actInsertGBAAddon[0], &QAction::triggered, this, &MainWindow::onInsertGBAAddon);
+        }
+
+        actEjectGBACart = menu->addAction("Eject cart");
+        connect(actEjectGBACart, &QAction::triggered, this, &MainWindow::onEjectGBACart);
+
+        menu->addSeparator();
+
+        actImportSavefile = menu->addAction("Import savefile");
+        connect(actImportSavefile, &QAction::triggered, this, &MainWindow::onImportSavefile);
 
         menu->addSeparator();
 
@@ -1344,9 +1558,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         actUndoStateLoad->setShortcut(QKeySequence(Qt::Key_F12));
         connect(actUndoStateLoad, &QAction::triggered, this, &MainWindow::onUndoStateLoad);
 
-        actImportSavefile = menu->addAction("Import savefile");
-        connect(actImportSavefile, &QAction::triggered, this, &MainWindow::onImportSavefile);
-
         menu->addSeparator();
 
         actQuit = menu->addAction("Quit");
@@ -1370,20 +1581,39 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
         menu->addSeparator();
 
+        actPowerManagement = menu->addAction("Power management");
+        connect(actPowerManagement, &QAction::triggered, this, &MainWindow::onOpenPowerManagement);
+
+        menu->addSeparator();
+
         actEnableCheats = menu->addAction("Enable cheats");
         actEnableCheats->setCheckable(true);
         connect(actEnableCheats, &QAction::triggered, this, &MainWindow::onEnableCheats);
 
-        actSetupCheats = menu->addAction("Setup cheat codes");
-        actSetupCheats->setMenuRole(QAction::NoRole);
-        connect(actSetupCheats, &QAction::triggered, this, &MainWindow::onSetupCheats);
+        //if (inst == 0)
+        {
+            actSetupCheats = menu->addAction("Setup cheat codes");
+            actSetupCheats->setMenuRole(QAction::NoRole);
+            connect(actSetupCheats, &QAction::triggered, this, &MainWindow::onSetupCheats);
 
-        menu->addSeparator();
-        actROMInfo = menu->addAction("ROM info");
-        connect(actROMInfo, &QAction::triggered, this, &MainWindow::onROMInfo);
+            menu->addSeparator();
+            actROMInfo = menu->addAction("ROM info");
+            connect(actROMInfo, &QAction::triggered, this, &MainWindow::onROMInfo);
 
-        actTitleManager = menu->addAction("Manage DSi titles");
-        connect(actTitleManager, &QAction::triggered, this, &MainWindow::onOpenTitleManager);
+            actRAMInfo = menu->addAction("RAM search");
+            connect(actRAMInfo, &QAction::triggered, this, &MainWindow::onRAMInfo);
+
+            actTitleManager = menu->addAction("Manage DSi titles");
+            connect(actTitleManager, &QAction::triggered, this, &MainWindow::onOpenTitleManager);
+        }
+
+        {
+            menu->addSeparator();
+            QMenu* submenu = menu->addMenu("Multiplayer");
+
+            actMPNewInstance = submenu->addAction("Launch new instance");
+            connect(actMPNewInstance, &QAction::triggered, this, &MainWindow::onMPNewInstance);
+        }
     }
     {
         QMenu* menu = menubar->addMenu("Config");
@@ -1392,7 +1622,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         connect(actEmuSettings, &QAction::triggered, this, &MainWindow::onOpenEmuSettings);
 
 #ifdef __APPLE__
-        QAction* actPreferences = menu->addAction("Preferences...");
+        actPreferences = menu->addAction("Preferences...");
         connect(actPreferences, &QAction::triggered, this, &MainWindow::onOpenEmuSettings);
         actPreferences->setMenuRole(QAction::PreferencesRole);
 #endif
@@ -1403,17 +1633,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         actVideoSettings = menu->addAction("Video settings");
         connect(actVideoSettings, &QAction::triggered, this, &MainWindow::onOpenVideoSettings);
 
+        actCameraSettings = menu->addAction("Camera settings");
+        connect(actCameraSettings, &QAction::triggered, this, &MainWindow::onOpenCameraSettings);
+
         actAudioSettings = menu->addAction("Audio settings");
         connect(actAudioSettings, &QAction::triggered, this, &MainWindow::onOpenAudioSettings);
+
+        actMPSettings = menu->addAction("Multiplayer settings");
+        connect(actMPSettings, &QAction::triggered, this, &MainWindow::onOpenMPSettings);
 
         actWifiSettings = menu->addAction("Wifi settings");
         connect(actWifiSettings, &QAction::triggered, this, &MainWindow::onOpenWifiSettings);
 
+        actFirmwareSettings = menu->addAction("Firmware settings");
+        connect(actFirmwareSettings, &QAction::triggered, this, &MainWindow::onOpenFirmwareSettings);
+
         actInterfaceSettings = menu->addAction("Interface settings");
         connect(actInterfaceSettings, &QAction::triggered, this, &MainWindow::onOpenInterfaceSettings);
 
-        actFirmwareSettings = menu->addAction("Firmware settings");
-        connect(actFirmwareSettings, &QAction::triggered, this, &MainWindow::onOpenFirmwareSettings);
+        actPathSettings = menu->addAction("Path settings");
+        connect(actPathSettings, &QAction::triggered, this, &MainWindow::onOpenPathSettings);
 
         {
             QMenu* submenu = menu->addMenu("Savestate settings");
@@ -1496,7 +1735,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
             const char* screensizing[] = {"Even", "Emphasize top", "Emphasize bottom", "Auto", "Top only", "Bottom only"};
 
-            for (int i = 0; i < 6; i++)
+            for (int i = 0; i < screenSizing_MAX; i++)
             {
                 actScreenSizing[i] = submenu->addAction(QString(screensizing[i]));
                 actScreenSizing[i]->setActionGroup(grpScreenSizing);
@@ -1515,34 +1754,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         {
             QMenu* submenu = menu->addMenu("Aspect ratio");
             grpScreenAspectTop = new QActionGroup(submenu);
-
-            const char* aspectRatiosTop[] = {"Top 4:3 (native)", "Top 16:9", "Top 21:9", "Top window"};
-
-            for (int i = 0; i < 4; i++)
-            {
-                actScreenAspectTop[i] = submenu->addAction(QString(aspectRatiosTop[i]));
-                actScreenAspectTop[i]->setActionGroup(grpScreenAspectTop);
-                actScreenAspectTop[i]->setData(QVariant(i));
-                actScreenAspectTop[i]->setCheckable(true);
-            }
-
-            connect(grpScreenAspectTop, &QActionGroup::triggered, this, &MainWindow::onChangeScreenAspectTop);
-
-            submenu->addSeparator();
-
             grpScreenAspectBot = new QActionGroup(submenu);
+            actScreenAspectTop = new QAction*[sizeof(aspectRatios) / sizeof(aspectRatios[0])];
+            actScreenAspectBot = new QAction*[sizeof(aspectRatios) / sizeof(aspectRatios[0])];
 
-            const char* aspectRatiosBot[] = {"Bottom 4:3 (native)", "Bottom 16:9", "Bottom 21:9", "Bottom window"};
-
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < 2; i++)
             {
-                actScreenAspectBot[i] = submenu->addAction(QString(aspectRatiosBot[i]));
-                actScreenAspectBot[i]->setActionGroup(grpScreenAspectBot);
-                actScreenAspectBot[i]->setData(QVariant(i));
-                actScreenAspectBot[i]->setCheckable(true);
-            }
+                QActionGroup* group = grpScreenAspectTop;
+                QAction** actions = actScreenAspectTop;
 
-            connect(grpScreenAspectBot, &QActionGroup::triggered, this, &MainWindow::onChangeScreenAspectBot);
+                if (i == 1)
+                {
+                    group = grpScreenAspectBot;
+                    submenu->addSeparator();
+                    actions = actScreenAspectBot;
+                }
+
+                for (int j = 0; j < sizeof(aspectRatios) / sizeof(aspectRatios[0]); j++)
+                {
+                    auto ratio = aspectRatios[j];
+                    QString label = QString("%1 %2").arg(i ? "Bottom" : "Top", ratio.label);
+                    actions[j] = submenu->addAction(label);
+                    actions[j]->setActionGroup(group);
+                    actions[j]->setData(QVariant(ratio.id));
+                    actions[j]->setCheckable(true);
+                }
+
+                connect(group, &QActionGroup::triggered, this, &MainWindow::onChangeScreenAspect);
+            }
         }
 
         actScreenFiltering = menu->addAction("Screen filtering");
@@ -1567,12 +1806,32 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     resize(Config::WindowWidth, Config::WindowHeight);
 
+    if (Config::FirmwareUsername == "Arisotura")
+        actMPNewInstance->setText("Fart");
+
+#ifdef Q_OS_MAC
+    QPoint screenCenter = screen()->availableGeometry().center();
+    QRect frameGeo = frameGeometry();
+    frameGeo.moveCenter(screenCenter);
+    move(frameGeo.topLeft());
+#endif
+
     if (oldMax)
         showMaximized();
     else
         show();
 
     createScreenPanel();
+
+    actEjectCart->setEnabled(false);
+    actEjectGBACart->setEnabled(false);
+
+    if (Config::ConsoleType == 1)
+    {
+        actInsertGBACart->setEnabled(false);
+        for (int i = 0; i < 1; i++)
+            actInsertGBAAddon[i]->setEnabled(false);
+    }
 
     for (int i = 0; i < 9; i++)
     {
@@ -1587,14 +1846,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     actStop->setEnabled(false);
     actFrameStep->setEnabled(false);
 
-    actSetupCheats->setEnabled(false);
-    actTitleManager->setEnabled(strlen(Config::DSiNANDPath) > 0);
+    actPowerManagement->setEnabled(false);
 
-    actEnableCheats->setChecked(Config::EnableCheats != 0);
+    actSetupCheats->setEnabled(false);
+    actTitleManager->setEnabled(!Config::DSiNANDPath.empty());
+
+    actEnableCheats->setChecked(Config::EnableCheats);
 
     actROMInfo->setEnabled(false);
+    actRAMInfo->setEnabled(false);
 
-    actSavestateSRAMReloc->setChecked(Config::SavestateRelocSRAM != 0);
+    actSavestateSRAMReloc->setChecked(Config::SavestateRelocSRAM);
 
     actScreenRotation[Config::ScreenRotation]->setChecked(true);
 
@@ -1609,75 +1871,88 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     actScreenLayout[Config::ScreenLayout]->setChecked(true);
     actScreenSizing[Config::ScreenSizing]->setChecked(true);
-    actIntegerScaling->setChecked(Config::IntegerScaling != 0);
+    actIntegerScaling->setChecked(Config::IntegerScaling);
 
-    actScreenSwap->setChecked(Config::ScreenSwap != 0);
+    actScreenSwap->setChecked(Config::ScreenSwap);
 
-    actScreenAspectTop[Config::ScreenAspectTop]->setChecked(true);
-    actScreenAspectBot[Config::ScreenAspectBot]->setChecked(true);
+    for (int i = 0; i < sizeof(aspectRatios) / sizeof(aspectRatios[0]); i++)
+    {
+        if (Config::ScreenAspectTop == aspectRatios[i].id)
+            actScreenAspectTop[i]->setChecked(true);
+        if (Config::ScreenAspectBot == aspectRatios[i].id)
+            actScreenAspectBot[i]->setChecked(true);
+    }
 
-    actScreenFiltering->setChecked(Config::ScreenFilter != 0);
-    actShowOSD->setChecked(Config::ShowOSD != 0);
+    actScreenFiltering->setChecked(Config::ScreenFilter);
+    actShowOSD->setChecked(Config::ShowOSD);
 
-    actLimitFramerate->setChecked(Config::LimitFPS != 0);
-    actAudioSync->setChecked(Config::AudioSync != 0);
+    actLimitFramerate->setChecked(Config::LimitFPS);
+    actAudioSync->setChecked(Config::AudioSync);
+
+    if (inst > 0)
+    {
+        actEmuSettings->setEnabled(false);
+        actVideoSettings->setEnabled(false);
+        actMPSettings->setEnabled(false);
+        actWifiSettings->setEnabled(false);
+        actInterfaceSettings->setEnabled(false);
+
+#ifdef __APPLE__
+        actPreferences->setEnabled(false);
+#endif // __APPLE__
+    }
 }
 
 MainWindow::~MainWindow()
 {
 }
 
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    if (hasOGL)
+    {
+        // we intentionally don't unpause here
+        emuThread->emuPause();
+        emuThread->deinitContext();
+    }
+
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::createScreenPanel()
 {
     hasOGL = (Config::ScreenUseGL != 0) || (Config::_3DRenderer != 0);
 
-    QTimer* mouseTimer;
-
     if (hasOGL)
     {
-        panelGL = new ScreenPanelGL(this);
+        ScreenPanelGL* panelGL = new ScreenPanelGL(this);
         panelGL->show();
 
         panel = panelGL;
-        panelGL->setMouseTracking(true);
-        mouseTimer = panelGL->setupMouseTimer();
-        connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) panelGL->setCursor(Qt::BlankCursor);});
+        panelWidget = panelGL;
 
-        if (!panelGL->isValid())
-            hasOGL = false;
-        else
-        {
-            QSurfaceFormat fmt = panelGL->format();
-            if (fmt.majorVersion() < 3 || (fmt.majorVersion() == 3 && fmt.minorVersion() < 2))
-                hasOGL = false;
-        }
-
-        if (!hasOGL)
-            delete panelGL;
+        panelGL->createContext();
     }
 
     if (!hasOGL)
     {
-        panelNative = new ScreenPanelNative(this);
+        ScreenPanelNative* panelNative = new ScreenPanelNative(this);
         panel = panelNative;
-        panel->show();
-
-        panelNative->setMouseTracking(true);
-        mouseTimer = panelNative->setupMouseTimer();
-        connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) panelNative->setCursor(Qt::BlankCursor);});
+        panelWidget = panelNative;
+        panelWidget->show();
     }
-    setCentralWidget(panel);
+    setCentralWidget(panelWidget);
 
-    connect(this, SIGNAL(screenLayoutChange()), panel, SLOT(onScreenLayoutChanged()));
+    connect(this, SIGNAL(screenLayoutChange()), panelWidget, SLOT(onScreenLayoutChanged()));
     emit screenLayoutChange();
 }
 
-QOpenGLContext* MainWindow::getOGLContext()
+GL::Context* MainWindow::getOGLContext()
 {
     if (!hasOGL) return nullptr;
 
-    QOpenGLWidget* glpanel = (QOpenGLWidget*)panel;
-    return glpanel->context();
+    ScreenPanelGL* glpanel = static_cast<ScreenPanelGL*>(panel);
+    return glpanel->getContext();
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -1741,9 +2016,9 @@ void MainWindow::dragEnterEvent(QDragEnterEvent* event)
     QStringList acceptedExts{".nds", ".srl", ".dsi", ".gba", ".rar",
                              ".zip", ".7z", ".tar", ".tar.gz", ".tar.xz", ".tar.bz2"};
 
-    for(const QString &ext : acceptedExts)
+    for (const QString &ext : acceptedExts)
     {
-        if(filename.endsWith(ext, Qt::CaseInsensitive))
+        if (filename.endsWith(ext, Qt::CaseInsensitive))
             event->acceptProposedAction();
     }
 }
@@ -1755,67 +2030,77 @@ void MainWindow::dropEvent(QDropEvent* event)
     QList<QUrl> urls = event->mimeData()->urls();
     if (urls.count() > 1) return; // not handling more than one file at once
 
+    QString filename = urls.at(0).toLocalFile();
+    QStringList arcexts{".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.xz", ".tar.bz2"};
+
     emuThread->emuPause();
 
-    QString filename = urls.at(0).toLocalFile();
-    QString ext = filename.right(3).toLower();
-
-    recentFileList.removeAll(filename);
-    recentFileList.prepend(filename);
-    updateRecentFilesMenu();
-
-    char _filename[1024];
-    strncpy(_filename, filename.toStdString().c_str(), 1023); _filename[1023] = '\0';
-
-    int slot; int res;
-    if (ext == "gba")
+    if (!verifySetup())
     {
-        slot = 1;
-        res = Frontend::LoadROM(_filename, Frontend::ROMSlot_GBA);
+        emuThread->emuUnpause();
+        return;
     }
-    else if(ext == "nds" || ext == "srl" || ext == "dsi")
-    {
-        slot = 0;
-        res = Frontend::LoadROM(_filename, Frontend::ROMSlot_NDS);
-    }
-    else
-    {
-        QByteArray romBuffer;
-        QString romFileName = pickAndExtractFileFromArchive(_filename, &romBuffer);
-        if(romFileName.isEmpty())
-        {
-           res = Frontend::Load_ROMLoadError;
-        }
-        else
-        {
-            slot = (romFileName.endsWith(".gba", Qt::CaseInsensitive) ? 1 : 0);
-            QString sramFileName = QFileInfo(_filename).absolutePath() + QDir::separator() + QFileInfo(romFileName).completeBaseName() + ".sav";
 
-            if(slot == 0)
-                strncpy(Frontend::NDSROMExtension, QFileInfo(romFileName).suffix().toStdString().c_str(), 4);
+    for (const QString &ext : arcexts)
+    {
+        if (filename.endsWith(ext, Qt::CaseInsensitive))
+        {
+            QString arcfile = pickFileFromArchive(filename);
+            if (arcfile.isEmpty())
+            {
+                emuThread->emuUnpause();
+                return;
+            }
 
-            res = Frontend::LoadROM((const u8*)romBuffer.constData(), romBuffer.size(),
-                                    _filename, romFileName.toStdString().c_str(), sramFileName.toStdString().c_str(),
-                                    slot);
+            filename += "|" + arcfile;
         }
     }
 
-    if (res != Frontend::Load_OK)
+    QStringList file = filename.split('|');
+
+    if (filename.endsWith(".gba", Qt::CaseInsensitive))
     {
-        QMessageBox::critical(this,
-                              "melonDS",
-                              loadErrorStr(res));
+        if (!ROMManager::LoadGBAROM(file))
+        {
+            // TODO: better error reporting?
+            QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+            emuThread->emuUnpause();
+            return;
+        }
+
         emuThread->emuUnpause();
-    }
-    else if (slot == 1)
-    {
-        // checkme
-        emuThread->emuUnpause();
+
+        updateCartInserted(true);
     }
     else
     {
+        if (!ROMManager::LoadROM(file, true))
+        {
+            // TODO: better error reporting?
+            QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+            emuThread->emuUnpause();
+            return;
+        }
+
+        recentFileList.removeAll(filename);
+        recentFileList.prepend(filename);
+        updateRecentFilesMenu();
+
+        NDS::Start();
         emuThread->emuRun();
+
+        updateCartInserted(false);
     }
+}
+
+void MainWindow::focusInEvent(QFocusEvent* event)
+{
+    audioMute();
+}
+
+void MainWindow::focusOutEvent(QFocusEvent* event)
+{
+    audioMute();
 }
 
 void MainWindow::onAppStateChanged(Qt::ApplicationState state)
@@ -1832,194 +2117,81 @@ void MainWindow::onAppStateChanged(Qt::ApplicationState state)
     }
 }
 
-QString MainWindow::loadErrorStr(int error)
+bool MainWindow::verifySetup()
 {
-    switch (error)
+    QString res = ROMManager::VerifySetup();
+    if (!res.isEmpty())
     {
-    case Frontend::Load_BIOS9Missing:
-        return "DS ARM9 BIOS was not found or could not be accessed. Check your emu settings.";
-    case Frontend::Load_BIOS9Bad:
-        return "DS ARM9 BIOS is not a valid BIOS dump.";
-
-    case Frontend::Load_BIOS7Missing:
-        return "DS ARM7 BIOS was not found or could not be accessed. Check your emu settings.";
-    case Frontend::Load_BIOS7Bad:
-        return "DS ARM7 BIOS is not a valid BIOS dump.";
-
-    case Frontend::Load_FirmwareMissing:
-        return "DS firmware was not found or could not be accessed. Check your emu settings.";
-    case Frontend::Load_FirmwareBad:
-        return "DS firmware is not a valid firmware dump.";
-    case Frontend::Load_FirmwareNotBootable:
-        return "DS firmware is not bootable.";
-
-    case Frontend::Load_DSiBIOS9Missing:
-        return "DSi ARM9 BIOS was not found or could not be accessed. Check your emu settings.";
-    case Frontend::Load_DSiBIOS9Bad:
-        return "DSi ARM9 BIOS is not a valid BIOS dump.";
-
-    case Frontend::Load_DSiBIOS7Missing:
-        return "DSi ARM7 BIOS was not found or could not be accessed. Check your emu settings.";
-    case Frontend::Load_DSiBIOS7Bad:
-        return "DSi ARM7 BIOS is not a valid BIOS dump.";
-
-    case Frontend::Load_DSiNANDMissing:
-        return "DSi NAND was not found or could not be accessed. Check your emu settings.";
-    case Frontend::Load_DSiNANDBad:
-        return "DSi NAND is not a valid NAND dump.";
-
-    case Frontend::Load_ROMLoadError:
-        return "Failed to load the ROM. Make sure the file is accessible and isn't used by another application.";
-
-    default: return "Unknown error during launch; smack Arisotura.";
+         QMessageBox::critical(this, "melonDS", res);
+         return false;
     }
+
+    return true;
 }
 
-void MainWindow::loadROM(QByteArray *romData, QString archiveFileName, QString romFileName)
+bool MainWindow::preloadROMs(QStringList file, QStringList gbafile, bool boot)
 {
-    recentFileList.removeAll(archiveFileName);
-    recentFileList.prepend(archiveFileName);
-    updateRecentFilesMenu();
-
-    // Strip entire archive name and get folder path
-    strncpy(Config::LastROMFolder, QFileInfo(archiveFileName).absolutePath().toStdString().c_str(), 1024);
-
-    QString sramFileName = QFileInfo(archiveFileName).absolutePath() + QDir::separator() + QFileInfo(romFileName).completeBaseName() + ".sav";
-
-    int slot; int res;
-    if (romFileName.endsWith("gba"))
+    if (!verifySetup())
     {
-        slot = 1;
-        res = Frontend::LoadROM((const u8*)romData->constData(), romData->size(),
-                                archiveFileName.toStdString().c_str(),
-                                romFileName.toStdString().c_str(), sramFileName.toStdString().c_str(),
-                                Frontend::ROMSlot_GBA);
-    }
-    else
-    {
-        strncpy(Frontend::NDSROMExtension, QFileInfo(romFileName).suffix().toStdString().c_str(), 4);
-        slot = 0;
-        res = Frontend::LoadROM((const u8*)romData->constData(), romData->size(),
-                                archiveFileName.toStdString().c_str(),
-                                romFileName.toStdString().c_str(), sramFileName.toStdString().c_str(),
-                                Frontend::ROMSlot_NDS);
+        return false;
     }
 
-    if (res != Frontend::Load_OK)
+    bool gbaloaded = false;
+    if (!gbafile.isEmpty())
     {
-        QMessageBox::critical(this,
-                              "melonDS",
-                              loadErrorStr(res));
-        emuThread->emuUnpause();
+        if (!ROMManager::LoadGBAROM(gbafile))
+        {
+            // TODO: better error reporting?
+            QMessageBox::critical(this, "melonDS", "Failed to load the GBA ROM.");
+            return false;
+        }
+
+        gbaloaded = true;
     }
-    else if (slot == 1)
+
+    bool ndsloaded = false;
+    if (!file.isEmpty())
     {
-        // checkme
-        emuThread->emuUnpause();
+        if (!ROMManager::LoadROM(file, true))
+        {
+            // TODO: better error reporting?
+            QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+            return false;
+        }
+        recentFileList.removeAll(file.join("|"));
+        recentFileList.prepend(file.join("|"));
+        updateRecentFilesMenu();
+        ndsloaded = true;
     }
-    else
+
+    if (boot)
     {
-        emuThread->emuRun();
+        if (ndsloaded)
+        {
+            NDS::Start();
+            emuThread->emuRun();
+        }
+        else
+        {
+            onBootFirmware();
+        }
     }
+
+    updateCartInserted(false);
+
+    if (gbaloaded)
+    {
+        updateCartInserted(true);
+    }
+
+    return true;
 }
 
-void MainWindow::loadROM(QString filename)
+QString MainWindow::pickFileFromArchive(QString archiveFileName)
 {
-    recentFileList.removeAll(filename);
-    recentFileList.prepend(filename);
-    updateRecentFilesMenu();
+    QVector<QString> archiveROMList = Archive::ListArchive(archiveFileName);
 
-    // TODO: validate the input file!!
-    // * check that it is a proper ROM
-    // * ensure the binary offsets are sane
-    // * etc
-
-    // this shit is stupid
-    char file[1024];
-    strncpy(file, filename.toStdString().c_str(), 1023); file[1023] = '\0';
-
-    int pos = strlen(file)-1;
-    while (file[pos] != '/' && file[pos] != '\\' && pos > 0) pos--;
-    strncpy(Config::LastROMFolder, file, pos);
-    Config::LastROMFolder[pos] = '\0';
-    char* ext = &file[strlen(file)-3];
-
-    int slot; int res;
-    if (!strcasecmp(ext, "gba"))
-    {
-        slot = 1;
-        res = Frontend::LoadROM(file, Frontend::ROMSlot_GBA);
-    }
-    else
-    {
-        slot = 0;
-        res = Frontend::LoadROM(file, Frontend::ROMSlot_NDS);
-    }
-
-    if (res != Frontend::Load_OK)
-    {
-        QMessageBox::critical(this,
-                              "melonDS",
-                              loadErrorStr(res));
-        emuThread->emuUnpause();
-    }
-    else if (slot == 1)
-    {
-        // checkme
-        emuThread->emuUnpause();
-    }
-    else
-    {
-        emuThread->emuRun();
-    }
-}
-
-void MainWindow::onOpenFile()
-{
-    emuThread->emuPause();
-
-    QString filename = QFileDialog::getOpenFileName(this,
-                                                    "Open ROM",
-                                                    Config::LastROMFolder,
-                                                    "DS ROMs (*.nds *.dsi *.srl);;GBA ROMs (*.gba *.zip);;Any file (*.*)");
-    if (filename.isEmpty())
-    {
-        emuThread->emuUnpause();
-        return;
-    }
-
-    loadROM(filename);
-}
-
-void MainWindow::onOpenFileArchive()
-{
-    emuThread->emuPause();
-
-    QString archiveFileName = QFileDialog::getOpenFileName(this,
-                                                    "Open ROM Archive",
-                                                    Config::LastROMFolder,
-                                                    "Archived ROMs (*.zip *.7z *.rar *.tar *.tar.gz *.tar.xz *.tar.bz2);;Any file (*.*)");
-    if (archiveFileName.isEmpty())
-    {
-        emuThread->emuUnpause();
-        return;
-    }
-
-    QByteArray romBuffer;
-    QString romFileName = pickAndExtractFileFromArchive(archiveFileName, &romBuffer);
-    if(!romFileName.isEmpty())
-    {
-        loadROM(&romBuffer, archiveFileName, romFileName);
-    }
-}
-
-QString MainWindow::pickAndExtractFileFromArchive(QString archiveFileName, QByteArray *romBuffer)
-{
-    printf("Finding list of ROMs...\n");
-    QVector<QString> archiveROMList = Archive::ListArchive(archiveFileName.toUtf8().constData());
-
-
-    QString romFileName; // file name inside archive
+    QString romFileName = ""; // file name inside archive
 
     if (archiveROMList.size() > 2)
     {
@@ -2027,50 +2199,153 @@ QString MainWindow::pickAndExtractFileFromArchive(QString archiveFileName, QByte
 
         bool ok;
         QString toLoad = QInputDialog::getItem(this, "melonDS",
-                                  "The archive was found to have multiple files. Select which ROM you want to load.", archiveROMList.toList(), 0, false, &ok);
-        if(!ok) // User clicked on cancel
+                                  "This archive contains multiple files. Select which ROM you want to load.", archiveROMList.toList(), 0, false, &ok);
+        if (!ok) // User clicked on cancel
             return QString();
 
-        printf("Extracting '%s'\n", toLoad.toUtf8().constData());
-        QVector<QString> extractResult = Archive::ExtractFileFromArchive(archiveFileName.toUtf8().constData(), toLoad.toUtf8().constData(), romBuffer);
-        if (extractResult[0] != QString("Err"))
-        {
-            romFileName = extractResult[0];
-        }
-        else
-        {
-            QMessageBox::critical(this, "melonDS", QString("There was an error while trying to extract the ROM from the archive: ") + extractResult[1]);
-        }
+        romFileName = toLoad;
     }
     else if (archiveROMList.size() == 2)
     {
-        printf("Extracting the only ROM in archive\n");
-        QVector<QString> extractResult = Archive::ExtractFileFromArchive(archiveFileName.toUtf8().constData(), archiveROMList.at(1).toUtf8().constData(), romBuffer);
-        if (extractResult[0] != QString("Err"))
-        {
-            romFileName = extractResult[0];
-        }
-        else
-        {
-            QMessageBox::critical(this, "melonDS", QString("There was an error while trying to extract the ROM from the archive: ") + extractResult[1]);
-        }
+        romFileName = archiveROMList.at(1);
     }
     else if ((archiveROMList.size() == 1) && (archiveROMList[0] == QString("OK")))
     {
-        QMessageBox::warning(this, "melonDS", "The archive is intact, but there are no files inside.");
+        QMessageBox::warning(this, "melonDS", "This archive is empty.");
     }
     else
     {
-        QMessageBox::critical(this, "melonDS", "The archive could not be read. It may be corrupt or you don't have the permissions.");
+        QMessageBox::critical(this, "melonDS", "This archive could not be read. It may be corrupt or you don't have the permissions.");
     }
 
     return romFileName;
 }
 
+QStringList MainWindow::pickROM(bool gba)
+{
+    QString console;
+    QStringList romexts;
+    QStringList arcexts{"*.zip", "*.7z", "*.rar", "*.tar", "*.tar.gz", "*.tar.xz", "*.tar.bz2"};
+    QStringList ret;
+
+    if (gba)
+    {
+        console = "GBA";
+        romexts.append("*.gba");
+    }
+    else
+    {
+        console = "DS";
+        romexts.append({"*.nds", "*.dsi", "*.ids", "*.srl"});
+    }
+
+    QString filter = romexts.join(' ') + " " + arcexts.join(' ');
+    filter = console + " ROMs (" + filter + ");;Any file (*.*)";
+
+    QString filename = QFileDialog::getOpenFileName(this,
+                                                    "Open "+console+" ROM",
+                                                    QString::fromStdString(Config::LastROMFolder),
+                                                    filter);
+    if (filename.isEmpty())
+        return ret;
+
+    int pos = filename.length() - 1;
+    while (filename[pos] != '/' && filename[pos] != '\\' && pos > 0) pos--;
+    QString path_dir = filename.left(pos);
+    QString path_file = filename.mid(pos+1);
+
+    Config::LastROMFolder = path_dir.toStdString();
+
+    bool isarc = false;
+    for (const auto& ext : arcexts)
+    {
+        int l = ext.length() - 1;
+        if (path_file.right(l).toLower() == ext.right(l))
+        {
+            isarc = true;
+            break;
+        }
+    }
+
+    if (isarc)
+    {
+        path_file = pickFileFromArchive(filename);
+        if (path_file.isEmpty())
+            return ret;
+
+        ret.append(filename);
+        ret.append(path_file);
+    }
+    else
+    {
+        ret.append(filename);
+    }
+
+    return ret;
+}
+
+void MainWindow::updateCartInserted(bool gba)
+{
+    bool inserted;
+    if (gba)
+    {
+        inserted = ROMManager::GBACartInserted() && (Config::ConsoleType == 0);
+        actCurrentGBACart->setText("GBA slot: " + ROMManager::GBACartLabel());
+        actEjectGBACart->setEnabled(inserted);
+    }
+    else
+    {
+        inserted = ROMManager::CartInserted();
+        actCurrentCart->setText("DS slot: " + ROMManager::CartLabel());
+        actEjectCart->setEnabled(inserted);
+        actImportSavefile->setEnabled(inserted);
+        actSetupCheats->setEnabled(inserted);
+        actROMInfo->setEnabled(inserted);
+        actRAMInfo->setEnabled(inserted);
+    }
+}
+
+void MainWindow::onOpenFile()
+{
+    emuThread->emuPause();
+
+    if (!verifySetup())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    QStringList file = pickROM(false);
+    if (file.isEmpty())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    if (!ROMManager::LoadROM(file, true))
+    {
+        // TODO: better error reporting?
+        QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+        emuThread->emuUnpause();
+        return;
+    }
+
+    QString filename = file.join('|');
+    recentFileList.removeAll(filename);
+    recentFileList.prepend(filename);
+    updateRecentFilesMenu();
+
+    NDS::Start();
+    emuThread->emuRun();
+
+    updateCartInserted(false);
+}
+
 void MainWindow::onClearRecentFiles()
 {
     recentFileList.clear();
-    memset(Config::RecentROMList, 0, 10 * 1024);
+    for (int i = 0; i < 10; i++)
+        Config::RecentROMList[i] = "";
     updateRecentFilesMenu();
 }
 
@@ -2078,8 +2353,10 @@ void MainWindow::updateRecentFilesMenu()
 {
     recentMenu->clear();
 
-    for(int i = 0; i < recentFileList.size(); ++i)
+    for (int i = 0; i < recentFileList.size(); ++i)
     {
+        if (i >= 10) break;
+
         QString item_full = recentFileList.at(i);
         QString item_display = item_full;
         int itemlen = item_full.length();
@@ -2106,16 +2383,18 @@ void MainWindow::updateRecentFilesMenu()
         actRecentFile_i->setData(item_full);
         connect(actRecentFile_i, &QAction::triggered, this, &MainWindow::onClickRecentFile);
 
-        if(i < 10)
-            strncpy(Config::RecentROMList[i], recentFileList.at(i).toStdString().c_str(), 1024);
+        Config::RecentROMList[i] = recentFileList.at(i).toStdString();
     }
+
+    while (recentFileList.size() > 10)
+        recentFileList.removeLast();
 
     recentMenu->addSeparator();
 
     QAction *actClearRecentList = recentMenu->addAction("Clear");
     connect(actClearRecentList, &QAction::triggered, this, &MainWindow::onClearRecentFiles);
 
-    if(recentFileList.empty())
+    if (recentFileList.empty())
         actClearRecentList->setEnabled(false);
 
     Config::Save();
@@ -2124,48 +2403,139 @@ void MainWindow::updateRecentFilesMenu()
 void MainWindow::onClickRecentFile()
 {
     QAction *act = (QAction *)sender();
-    QString fileName = act->data().toString();
+    QString filename = act->data().toString();
+    QStringList file = filename.split('|');
 
-    if (fileName.endsWith(".gba", Qt::CaseInsensitive) ||
-        fileName.endsWith(".nds", Qt::CaseInsensitive) ||
-        fileName.endsWith(".srl", Qt::CaseInsensitive) ||
-        fileName.endsWith(".dsi", Qt::CaseInsensitive))
+    emuThread->emuPause();
+
+    if (!verifySetup())
     {
-        emuThread->emuPause();
-        loadROM(fileName);
+        emuThread->emuUnpause();
+        return;
     }
-    else
+
+    if (!ROMManager::LoadROM(file, true))
     {
-        // Archives
-        QString archiveFileName = fileName;
-        QByteArray romBuffer;
-        QString romFileName = MainWindow::pickAndExtractFileFromArchive(archiveFileName, &romBuffer);
-        if(!romFileName.isEmpty())
-        {
-            emuThread->emuPause();
-            loadROM(&romBuffer, archiveFileName, romFileName);
-        }
+        // TODO: better error reporting?
+        QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+        emuThread->emuUnpause();
+        return;
     }
+
+    recentFileList.removeAll(filename);
+    recentFileList.prepend(filename);
+    updateRecentFilesMenu();
+
+    NDS::Start();
+    emuThread->emuRun();
+
+    updateCartInserted(false);
 }
 
 void MainWindow::onBootFirmware()
 {
-    // TODO: check the whole GBA cart shito
+    emuThread->emuPause();
+
+    if (!verifySetup())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    if (!ROMManager::LoadBIOS())
+{
+        // TODO: better error reporting?
+        QMessageBox::critical(this, "melonDS", "This firmware is not bootable.");
+        emuThread->emuUnpause();
+        return;
+    }
+
+    NDS::Start();
+    emuThread->emuRun();
+}
+
+void MainWindow::onInsertCart()
+{
+    emuThread->emuPause();
+
+    QStringList file = pickROM(false);
+    if (file.isEmpty())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    if (!ROMManager::LoadROM(file, false))
+    {
+        // TODO: better error reporting?
+        QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+        emuThread->emuUnpause();
+        return;
+    }
+
+    emuThread->emuUnpause();
+
+    updateCartInserted(false);
+}
+
+void MainWindow::onEjectCart()
+{
+    emuThread->emuPause();
+
+    ROMManager::EjectCart();
+
+    emuThread->emuUnpause();
+
+    updateCartInserted(false);
+}
+
+void MainWindow::onInsertGBACart()
+{
+    emuThread->emuPause();
+
+    QStringList file = pickROM(true);
+    if (file.isEmpty())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    if (!ROMManager::LoadGBAROM(file))
+    {
+        // TODO: better error reporting?
+        QMessageBox::critical(this, "melonDS", "Failed to load the ROM.");
+        emuThread->emuUnpause();
+        return;
+    }
+
+    emuThread->emuUnpause();
+
+    updateCartInserted(true);
+}
+
+void MainWindow::onInsertGBAAddon()
+{
+    QAction* act = (QAction*)sender();
+    int type = act->data().toInt();
 
     emuThread->emuPause();
 
-    int res = Frontend::LoadBIOS();
-    if (res != Frontend::Load_OK)
-    {
-        QMessageBox::critical(this,
-                              "melonDS",
-                              loadErrorStr(res));
-        emuThread->emuUnpause();
-    }
-    else
-    {
-        emuThread->emuRun();
-    }
+    ROMManager::LoadGBAAddon(type);
+
+    emuThread->emuUnpause();
+
+    updateCartInserted(true);
+}
+
+void MainWindow::onEjectGBACart()
+{
+    emuThread->emuPause();
+
+    ROMManager::EjectGBACart();
+
+    emuThread->emuUnpause();
+
+    updateCartInserted(true);
 }
 
 void MainWindow::onSaveState()
@@ -2174,17 +2544,17 @@ void MainWindow::onSaveState()
 
     emuThread->emuPause();
 
-    char filename[1024];
+    std::string filename;
     if (slot > 0)
     {
-        Frontend::GetSavestateName(slot, filename, 1024);
+        filename = ROMManager::GetSavestateName(slot);
     }
     else
     {
         // TODO: specific 'last directory' for savestate files?
         QString qfilename = QFileDialog::getSaveFileName(this,
                                                          "Save state",
-                                                         Config::LastROMFolder,
+                                                         QString::fromStdString(Config::LastROMFolder),
                                                          "melonDS savestates (*.mln);;Any file (*.*)");
         if (qfilename.isEmpty())
         {
@@ -2192,10 +2562,10 @@ void MainWindow::onSaveState()
             return;
         }
 
-        strncpy(filename, qfilename.toStdString().c_str(), 1023); filename[1023] = '\0';
+        filename = qfilename.toStdString();
     }
 
-    if (Frontend::SaveState(filename))
+    if (ROMManager::SaveState(filename))
     {
         char msg[64];
         if (slot > 0) sprintf(msg, "State saved to slot %d", slot);
@@ -2218,17 +2588,17 @@ void MainWindow::onLoadState()
 
     emuThread->emuPause();
 
-    char filename[1024];
+    std::string filename;
     if (slot > 0)
     {
-        Frontend::GetSavestateName(slot, filename, 1024);
+        filename = ROMManager::GetSavestateName(slot);
     }
     else
     {
         // TODO: specific 'last directory' for savestate files?
         QString qfilename = QFileDialog::getOpenFileName(this,
                                                          "Load state",
-                                                         Config::LastROMFolder,
+                                                         QString::fromStdString(Config::LastROMFolder),
                                                          "melonDS savestates (*.ml*);;Any file (*.*)");
         if (qfilename.isEmpty())
         {
@@ -2236,7 +2606,7 @@ void MainWindow::onLoadState()
             return;
         }
 
-        strncpy(filename, qfilename.toStdString().c_str(), 1023); filename[1023] = '\0';
+        filename = qfilename.toStdString();
     }
 
     if (!Platform::FileExists(filename))
@@ -2250,7 +2620,7 @@ void MainWindow::onLoadState()
         return;
     }
 
-    if (Frontend::LoadState(filename))
+    if (ROMManager::LoadState(filename))
     {
         char msg[64];
         if (slot > 0) sprintf(msg, "State loaded from slot %d", slot);
@@ -2270,7 +2640,7 @@ void MainWindow::onLoadState()
 void MainWindow::onUndoStateLoad()
 {
     emuThread->emuPause();
-    Frontend::UndoStateLoad();
+    ROMManager::UndoStateLoad();
     emuThread->emuUnpause();
 
     OSD::AddMessage(0, "State load undone");
@@ -2278,36 +2648,52 @@ void MainWindow::onUndoStateLoad()
 
 void MainWindow::onImportSavefile()
 {
-    if (!RunningSomething) return;
-
     emuThread->emuPause();
     QString path = QFileDialog::getOpenFileName(this,
                                             "Select savefile",
-                                            Config::LastROMFolder,
+                                            QString::fromStdString(Config::LastROMFolder),
                                             "Savefiles (*.sav *.bin *.dsv);;Any file (*.*)");
 
-    if (!path.isEmpty())
+    if (path.isEmpty())
+    {
+        emuThread->emuUnpause();
+        return;
+    }
+
+    FILE* f = Platform::OpenFile(path.toStdString(), "rb", true);
+    if (!f)
+    {
+        QMessageBox::critical(this, "melonDS", "Could not open the given savefile.");
+        emuThread->emuUnpause();
+        return;
+    }
+
+    if (RunningSomething)
     {
         if (QMessageBox::warning(this,
-                        "Emulation will be reset and data overwritten",
+                        "melonDS",
                         "The emulation will be reset and the current savefile overwritten.",
-                        QMessageBox::Ok, QMessageBox::Cancel) == QMessageBox::Ok)
+                        QMessageBox::Ok, QMessageBox::Cancel) != QMessageBox::Ok)
         {
-            int res = Frontend::Reset();
-            if (res != Frontend::Load_OK)
-            {
-                QMessageBox::critical(this, "melonDS", "Reset failed\n" + loadErrorStr(res));
-            }
-            else
-            {
-                int diff = Frontend::ImportSRAM(path.toStdString().c_str());
-                if (diff > 0)
-                    OSD::AddMessage(0, "Trimmed savefile");
-                else if (diff < 0)
-                    OSD::AddMessage(0, "Savefile shorter than SRAM");
-            }
+            emuThread->emuUnpause();
+            return;
         }
+
+        ROMManager::Reset();
     }
+
+    u32 len;
+    fseek(f, 0, SEEK_END);
+    len = (u32)ftell(f);
+
+    u8* data = new u8[len];
+    fseek(f, 0, SEEK_SET);
+    fread(data, len, 1, f);
+
+    NDS::LoadSave(data, len);
+    delete[] data;
+
+    fclose(f);
     emuThread->emuUnpause();
 }
 
@@ -2346,19 +2732,10 @@ void MainWindow::onReset()
 
     actUndoStateLoad->setEnabled(false);
 
-    int res = Frontend::Reset();
-    if (res != Frontend::Load_OK)
-    {
-        QMessageBox::critical(this,
-                              "melonDS",
-                              loadErrorStr(res));
-        emuThread->emuUnpause();
-    }
-    else
-    {
-        OSD::AddMessage(0, "Reset");
-        emuThread->emuRun();
-    }
+    ROMManager::Reset();
+
+    OSD::AddMessage(0, "Reset");
+    emuThread->emuRun();
 }
 
 void MainWindow::onStop()
@@ -2379,7 +2756,7 @@ void MainWindow::onFrameStep()
 void MainWindow::onEnableCheats(bool checked)
 {
     Config::EnableCheats = checked?1:0;
-    Frontend::EnableCheats(Config::EnableCheats != 0);
+    ROMManager::EnableCheats(Config::EnableCheats != 0);
 }
 
 void MainWindow::onSetupCheats()
@@ -2400,9 +2777,31 @@ void MainWindow::onROMInfo()
     ROMInfoDialog* dlg = ROMInfoDialog::openDlg(this);
 }
 
+void MainWindow::onRAMInfo()
+{
+    RAMInfoDialog* dlg = RAMInfoDialog::openDlg(this);
+}
+
 void MainWindow::onOpenTitleManager()
 {
     TitleManagerDialog* dlg = TitleManagerDialog::openDlg(this);
+}
+
+void MainWindow::onMPNewInstance()
+{
+    //QProcess::startDetached(QApplication::applicationFilePath());
+    QProcess newinst;
+    newinst.setProgram(QApplication::applicationFilePath());
+    newinst.setArguments(QApplication::arguments().mid(1, QApplication::arguments().length()-1));
+
+#ifdef __WIN32__
+    newinst.setCreateProcessArgumentsModifier([] (QProcess::CreateProcessArguments *args)
+    {
+        args->flags |= CREATE_NEW_CONSOLE;
+    });
+#endif
+
+    newinst.startDetached();
 }
 
 void MainWindow::onOpenEmuSettings()
@@ -2417,11 +2816,33 @@ void MainWindow::onEmuSettingsDialogFinished(int res)
 {
     emuThread->emuUnpause();
 
+    if (Config::ConsoleType == 1)
+    {
+        actInsertGBACart->setEnabled(false);
+        for (int i = 0; i < 1; i++)
+            actInsertGBAAddon[i]->setEnabled(false);
+        actEjectGBACart->setEnabled(false);
+    }
+    else
+    {
+        actInsertGBACart->setEnabled(true);
+        for (int i = 0; i < 1; i++)
+            actInsertGBAAddon[i]->setEnabled(true);
+        actEjectGBACart->setEnabled(ROMManager::GBACartInserted());
+    }
+
     if (EmuSettingsDialog::needsReset)
         onReset();
 
+    actCurrentGBACart->setText("GBA slot: " + ROMManager::GBACartLabel());
+
     if (!RunningSomething)
-        actTitleManager->setEnabled(strlen(Config::DSiNANDPath) > 0);
+        actTitleManager->setEnabled(!Config::DSiNANDPath.empty());
+}
+
+void MainWindow::onOpenPowerManagement()
+{
+    PowerManagementDialog* dlg = PowerManagementDialog::openDlg(this);
 }
 
 void MainWindow::onOpenInputConfig()
@@ -2443,6 +2864,27 @@ void MainWindow::onOpenVideoSettings()
     connect(dlg, &VideoSettingsDialog::updateVideoSettings, this, &MainWindow::onUpdateVideoSettings);
 }
 
+void MainWindow::onOpenCameraSettings()
+{
+    emuThread->emuPause();
+
+    camStarted[0] = camManager[0]->isStarted();
+    camStarted[1] = camManager[1]->isStarted();
+    if (camStarted[0]) camManager[0]->stop();
+    if (camStarted[1]) camManager[1]->stop();
+
+    CameraSettingsDialog* dlg = CameraSettingsDialog::openDlg(this);
+    connect(dlg, &CameraSettingsDialog::finished, this, &MainWindow::onCameraSettingsFinished);
+}
+
+void MainWindow::onCameraSettingsFinished(int res)
+{
+    if (camStarted[0]) camManager[0]->start();
+    if (camStarted[1]) camManager[1]->start();
+
+    emuThread->emuUnpause();
+}
+
 void MainWindow::onOpenAudioSettings()
 {
     AudioSettingsDialog* dlg = AudioSettingsDialog::openDlg(this);
@@ -2452,11 +2894,35 @@ void MainWindow::onOpenAudioSettings()
 
 void MainWindow::onOpenFirmwareSettings()
 {
+    emuThread->emuPause();
+
     FirmwareSettingsDialog* dlg = FirmwareSettingsDialog::openDlg(this);
     connect(dlg, &FirmwareSettingsDialog::finished, this, &MainWindow::onFirmwareSettingsFinished);
 }
 
-void MainWindow::onFirmwareSettingsFinished(int res) {}
+void MainWindow::onFirmwareSettingsFinished(int res)
+{
+    if (FirmwareSettingsDialog::needsReset)
+        onReset();
+
+    emuThread->emuUnpause();
+}
+
+void MainWindow::onOpenPathSettings()
+{
+    emuThread->emuPause();
+
+    PathSettingsDialog* dlg = PathSettingsDialog::openDlg(this);
+    connect(dlg, &PathSettingsDialog::finished, this, &MainWindow::onPathSettingsFinished);
+}
+
+void MainWindow::onPathSettingsFinished(int res)
+{
+    if (PathSettingsDialog::needsReset)
+        onReset();
+
+    emuThread->emuUnpause();
+}
 
 void MainWindow::onUpdateAudioSettings()
 {
@@ -2493,6 +2959,22 @@ void MainWindow::onAudioSettingsFinished(int res)
     micOpen();
 }
 
+void MainWindow::onOpenMPSettings()
+{
+    emuThread->emuPause();
+
+    MPSettingsDialog* dlg = MPSettingsDialog::openDlg(this);
+    connect(dlg, &MPSettingsDialog::finished, this, &MainWindow::onMPSettingsFinished);
+}
+
+void MainWindow::onMPSettingsFinished(int res)
+{
+    audioMute();
+    LocalMP::SetRecvTimeout(Config::MPRecvTimeout);
+
+    emuThread->emuUnpause();
+}
+
 void MainWindow::onOpenWifiSettings()
 {
     emuThread->emuPause();
@@ -2503,12 +2985,6 @@ void MainWindow::onOpenWifiSettings()
 
 void MainWindow::onWifiSettingsFinished(int res)
 {
-    if (Wifi::MPInited)
-    {
-        Platform::MP_DeInit();
-        Platform::MP_Init();
-    }
-
     Platform::LAN_DeInit();
     Platform::LAN_Init();
 
@@ -2528,10 +3004,7 @@ void MainWindow::onOpenInterfaceSettings()
 
 void MainWindow::onUpdateMouseTimer()
 {
-    if (hasOGL)
-        panelGL->mouseTimer->setInterval(Config::MouseHideSeconds*1000);
-    else
-        panelNative->mouseTimer->setInterval(Config::MouseHideSeconds*1000);
+    panel->mouseTimer->setInterval(Config::MouseHideSeconds*1000);
 }
 
 void MainWindow::onInterfaceSettingsFinished(int res)
@@ -2547,8 +3020,8 @@ void MainWindow::onChangeSavestateSRAMReloc(bool checked)
 void MainWindow::onChangeScreenSize()
 {
     int factor = ((QAction*)sender())->data().toInt();
-    QSize diff = size() - panel->size();
-    resize(dynamic_cast<ScreenHandler*>(panel)->screenGetMinSize(factor) + diff);
+    QSize diff = size() - panelWidget->size();
+    resize(panel->screenGetMinSize(factor) + diff);
 }
 
 void MainWindow::onChangeScreenRotation(QAction* act)
@@ -2579,6 +3052,22 @@ void MainWindow::onChangeScreenSwap(bool checked)
 {
     Config::ScreenSwap = checked?1:0;
 
+    // Swap between top and bottom screen when displaying one screen.
+    if (Config::ScreenSizing == screenSizing_TopOnly)
+    {
+        // Bottom Screen.
+        Config::ScreenSizing = screenSizing_BotOnly;
+        actScreenSizing[screenSizing_TopOnly]->setChecked(false);
+        actScreenSizing[Config::ScreenSizing]->setChecked(true);
+    }
+    else if (Config::ScreenSizing == screenSizing_BotOnly)
+    {
+        // Top Screen.
+        Config::ScreenSizing = screenSizing_TopOnly;
+        actScreenSizing[screenSizing_BotOnly]->setChecked(false);
+        actScreenSizing[Config::ScreenSizing]->setChecked(true);
+    }
+
     emit screenLayoutChange();
 }
 
@@ -2590,18 +3079,19 @@ void MainWindow::onChangeScreenSizing(QAction* act)
     emit screenLayoutChange();
 }
 
-void MainWindow::onChangeScreenAspectTop(QAction* act)
+void MainWindow::onChangeScreenAspect(QAction* act)
 {
     int aspect = act->data().toInt();
-    Config::ScreenAspectTop = aspect;
+    QActionGroup* group = act->actionGroup();
 
-    emit screenLayoutChange();
-}
-
-void MainWindow::onChangeScreenAspectBot(QAction* act)
-{
-    int aspect = act->data().toInt();
-    Config::ScreenAspectBot = aspect;
+    if (group == grpScreenAspectTop)
+    {
+        Config::ScreenAspectTop = aspect;
+    }
+    else
+    {
+        Config::ScreenAspectBot = aspect;
+    }
 
     emit screenLayoutChange();
 }
@@ -2616,13 +3106,14 @@ void MainWindow::onChangeIntegerScaling(bool checked)
 void MainWindow::onChangeScreenFiltering(bool checked)
 {
     Config::ScreenFilter = checked?1:0;
+
+    emit screenLayoutChange();
 }
 
 void MainWindow::onChangeShowOSD(bool checked)
 {
     Config::ShowOSD = checked?1:0;
 }
-
 void MainWindow::onChangeLimitFramerate(bool checked)
 {
     Config::LimitFPS = checked?1:0;
@@ -2639,8 +3130,7 @@ void MainWindow::onTitleUpdate(QString title)
     setWindowTitle(title);
 }
 
-void MainWindow::onFullscreenToggled()
-{
+void ToggleFullscreen(MainWindow* mainWindow) {
     if (!mainWindow->isFullScreen())
     {
         mainWindow->showFullScreen();
@@ -2654,41 +3144,31 @@ void MainWindow::onFullscreenToggled()
     }
 }
 
+void MainWindow::onFullscreenToggled()
+{
+    ToggleFullscreen(this);
+}
+
 void MainWindow::onEmuStart()
 {
-    // TODO: make savestates work in DSi mode!!
-    if (Config::ConsoleType == 1)
+    for (int i = 1; i < 9; i++)
     {
-        for (int i = 0; i < 9; i++)
-        {
-            actSaveState[i]->setEnabled(false);
-            actLoadState[i]->setEnabled(false);
-        }
-        actUndoStateLoad->setEnabled(false);
+        actSaveState[i]->setEnabled(true);
+        actLoadState[i]->setEnabled(ROMManager::SavestateExists(i));
     }
-    else
-    {
-        for (int i = 1; i < 9; i++)
-        {
-            actSaveState[i]->setEnabled(true);
-            actLoadState[i]->setEnabled(Frontend::SavestateExists(i));
-        }
-        actSaveState[0]->setEnabled(true);
-        actLoadState[0]->setEnabled(true);
-        actUndoStateLoad->setEnabled(false);
-    }
+    actSaveState[0]->setEnabled(true);
+    actLoadState[0]->setEnabled(true);
+    actUndoStateLoad->setEnabled(false);
 
     actPause->setEnabled(true);
     actPause->setChecked(false);
     actReset->setEnabled(true);
     actStop->setEnabled(true);
     actFrameStep->setEnabled(true);
-    actImportSavefile->setEnabled(true);
 
-    actSetupCheats->setEnabled(true);
+    actPowerManagement->setEnabled(true);
+
     actTitleManager->setEnabled(false);
-
-    actROMInfo->setEnabled(true);
 }
 
 void MainWindow::onEmuStop()
@@ -2701,17 +3181,15 @@ void MainWindow::onEmuStop()
         actLoadState[i]->setEnabled(false);
     }
     actUndoStateLoad->setEnabled(false);
-    actImportSavefile->setEnabled(false);
 
     actPause->setEnabled(false);
     actReset->setEnabled(false);
     actStop->setEnabled(false);
     actFrameStep->setEnabled(false);
 
-    actSetupCheats->setEnabled(false);
-    actTitleManager->setEnabled(strlen(Config::DSiNANDPath) > 0);
+    actPowerManagement->setEnabled(false);
 
-    actROMInfo->setEnabled(false);
+    actTitleManager->setEnabled(!Config::DSiNANDPath.empty());
 }
 
 void MainWindow::onUpdateVideoSettings(bool glchange)
@@ -2719,34 +3197,26 @@ void MainWindow::onUpdateVideoSettings(bool glchange)
     if (glchange)
     {
         emuThread->emuPause();
+        if (hasOGL) emuThread->deinitContext();
 
-        if (hasOGL)
-        {
-            emuThread->deinitOpenGL();
-            delete panelGL;
-        }
-        else
-        {
-            delete panelNative;
-        }
+        delete panel;
         createScreenPanel();
-        connect(emuThread, SIGNAL(windowUpdate()), panel, SLOT(repaint()));
-        if (hasOGL) emuThread->initOpenGL();
+        connect(emuThread, SIGNAL(windowUpdate()), panelWidget, SLOT(repaint()));
     }
 
     videoSettingsDirty = true;
 
     if (glchange)
+    {
+        if (hasOGL) emuThread->initContext();
         emuThread->emuUnpause();
+    }
 }
 
 
 void emuStop()
 {
     RunningSomething = false;
-
-    Frontend::UnloadROM(Frontend::ROMSlot_NDS);
-    Frontend::UnloadROM(Frontend::ROMSlot_GBA);
 
     emit emuThread->windowEmuStop();
 
@@ -2766,7 +3236,8 @@ bool MelonApplication::event(QEvent *event)
         QFileOpenEvent *openEvent = static_cast<QFileOpenEvent*>(event);
 
         emuThread->emuPause();
-        mainWindow->loadROM(openEvent->file());
+        if (!mainWindow->preloadROMs(openEvent->file().split("|"), {}, true))
+            emuThread->emuUnpause();
     }
 
     return QApplication::event(event);
@@ -2774,14 +3245,22 @@ bool MelonApplication::event(QEvent *event)
 
 int main(int argc, char** argv)
 {
-    srand(time(NULL));
+    srand(time(nullptr));
+
+    qputenv("QT_SCALE_FACTOR", "1");
 
     printf("melonDS " MELONDS_VERSION "\n");
     printf(MELONDS_URL "\n");
 
+    // easter egg - not worth checking other cases for something so dumb
+    if (argc != 0 && (!strcasecmp(argv[0], "derpDS") || !strcasecmp(argv[0], "./derpDS")))
+        printf("did you just call me a derp???\n");
+    
     Platform::Init(argc, argv);
 
     MelonApplication melon(argc, argv);
+
+    CLI::CommandLineOptions* options = CLI::ManageArgs(melon);
 
     // http://stackoverflow.com/questions/14543333/joystick-wont-work-using-sdl
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -2790,9 +3269,17 @@ int main(int argc, char** argv)
     {
         printf("SDL couldn't init rumble\n");
     }
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK) < 0)
+    if (SDL_Init(SDL_INIT_JOYSTICK) < 0)
     {
-        QMessageBox::critical(NULL, "melonDS", "SDL shat itself :(");
+        printf("SDL couldn't init joystick\n");
+    }
+    if (SDL_Init(SDL_INIT_AUDIO) < 0)
+    {
+        const char* err = SDL_GetError();
+        QString errorStr = "Failed to initialize SDL. This could indicate an issue with your audio driver.\n\nThe error was: ";
+        errorStr += err;
+
+        QMessageBox::critical(NULL, "melonDS", errorStr);
         return 1;
     }
 
@@ -2817,19 +3304,12 @@ int main(int argc, char** argv)
     SANITIZE(Config::ScreenRotation, 0, 3);
     SANITIZE(Config::ScreenGap, 0, 500);
     SANITIZE(Config::ScreenLayout, 0, 3);
-    SANITIZE(Config::ScreenSizing, 0, 5);
+    SANITIZE(Config::ScreenSizing, 0, (int)screenSizing_MAX);
     SANITIZE(Config::ScreenAspectTop, 0, 4);
     SANITIZE(Config::ScreenAspectBot, 0, 4);
 #undef SANITIZE
 
-    QSurfaceFormat format;
-    format.setDepthBufferSize(24);
-    format.setStencilBufferSize(8);
-    format.setVersion(3, 2);
-    format.setProfile(QSurfaceFormat::CoreProfile);
-    format.setSwapInterval(0);
-    QSurfaceFormat::setDefaultFormat(format);
-
+    audioMuted = false;
     audioSync = SDL_CreateCond();
     audioSyncLock = SDL_CreateMutex();
 
@@ -2855,13 +3335,18 @@ int main(int argc, char** argv)
 
     micDevice = 0;
 
-
     memset(micExtBuffer, 0, sizeof(micExtBuffer));
     micExtBufferWritePos = 0;
     micWavBuffer = nullptr;
 
-    Frontend::Init_ROM();
-    Frontend::EnableCheats(Config::EnableCheats != 0);
+    camStarted[0] = false;
+    camStarted[1] = false;
+    camManager[0] = new CameraManager(0, 640, 480, true);
+    camManager[1] = new CameraManager(1, 640, 480, true);
+    camManager[0]->setXFlip(Config::Camera[0].XFlip);
+    camManager[1]->setXFlip(Config::Camera[1].XFlip);
+
+    ROMManager::EnableCheats(Config::EnableCheats != 0);
 
     Frontend::Init_Audio(audioFreq);
 
@@ -2879,39 +3364,18 @@ int main(int argc, char** argv)
     Input::OpenJoystick();
 
     mainWindow = new MainWindow();
+    if (options->fullscreen)
+        ToggleFullscreen(mainWindow);
 
     emuThread = new EmuThread();
     emuThread->start();
     emuThread->emuPause();
 
+    audioMute();
+
     QObject::connect(&melon, &QApplication::applicationStateChanged, mainWindow, &MainWindow::onAppStateChanged);
 
-    if (argc > 1)
-    {
-        char* file = argv[1];
-        char* ext = &file[strlen(file)-3];
-
-        if (!strcasecmp(ext, "nds") || !strcasecmp(ext, "srl") || !strcasecmp(ext, "dsi"))
-        {
-            int res = Frontend::LoadROM(file, Frontend::ROMSlot_NDS);
-
-            if (res == Frontend::Load_OK)
-            {
-                if (argc > 2)
-                {
-                    file = argv[2];
-                    ext = &file[strlen(file)-3];
-
-                    if (!strcasecmp(ext, "gba"))
-                    {
-                        Frontend::LoadROM(file, Frontend::ROMSlot_GBA);
-                    }
-                }
-
-                emuThread->emuRun();
-            }
-        }
-    }
+    mainWindow->preloadROMs(options->dsRomPath, options->gbaRomPath, options->boot);
 
     int ret = melon.exec();
 
@@ -2921,8 +3385,6 @@ int main(int argc, char** argv)
 
     Input::CloseJoystick();
 
-    Frontend::DeInit_ROM();
-
     if (audioDevice) SDL_CloseAudioDevice(audioDevice);
     micClose();
 
@@ -2930,6 +3392,9 @@ int main(int argc, char** argv)
     SDL_DestroyMutex(audioSyncLock);
 
     if (micWavBuffer) delete[] micWavBuffer;
+
+    delete camManager[0];
+    delete camManager[1];
 
     Config::Save();
 
@@ -2946,7 +3411,7 @@ int CALLBACK WinMain(HINSTANCE hinst, HINSTANCE hprev, LPSTR cmdline, int cmdsho
 {
     int argc = 0;
     wchar_t** argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
-    char* nullarg = "";
+    char nullarg[] = {'\0'};
 
     char** argv = new char*[argc];
     for (int i = 0; i < argc; i++)
@@ -2961,7 +3426,8 @@ int CALLBACK WinMain(HINSTANCE hinst, HINSTANCE hprev, LPSTR cmdline, int cmdsho
 
     if (argv_w) LocalFree(argv_w);
 
-    /*if (AttachConsole(ATTACH_PARENT_PROCESS))
+    //if (AttachConsole(ATTACH_PARENT_PROCESS))
+    /*if (AllocConsole())
     {
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);

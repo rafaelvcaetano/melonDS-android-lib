@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -28,11 +28,20 @@ void SetupDirectBoot(bool dsi);
 
 u32 FixFirmwareLength(u32 originalLength);
 
+u32 GetFirmwareLength();
 u8 GetConsoleType();
 u8 GetWifiVersion();
 u8 GetNWifiVersion();
 u8 GetRFVersion();
 u8* GetWifiMAC();
+
+}
+
+namespace SPI_Powerman
+{
+
+bool GetBatteryLevelOkay();
+void SetBatteryLevelOkay(bool okay);
 
 }
 

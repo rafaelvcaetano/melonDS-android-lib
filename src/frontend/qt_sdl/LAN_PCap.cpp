@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -25,7 +25,7 @@
 #include <pcap/pcap.h>
 #include "../Wifi.h"
 #include "LAN_PCap.h"
-#include "PlatformConfig.h"
+#include "Config.h"
 
 #ifdef __WIN32__
 	#include <iphlpapi.h>
@@ -114,6 +114,12 @@ bool TryLoadPCap(void* lib)
 
 bool Init(bool open_adapter)
 {
+    PCapAdapter = NULL;
+    PacketLen = 0;
+    RXNum = 0;
+
+    NumAdapters = 0;
+
     // TODO: how to deal with cases where an adapter is unplugged or changes config??
     if (!PCapLib)
     {
@@ -141,12 +147,6 @@ bool Init(bool open_adapter)
             return false;
         }
     }
-
-    PCapAdapter = NULL;
-    PacketLen = 0;
-    RXNum = 0;
-
-    NumAdapters = 0;
 
     char errbuf[PCAP_ERRBUF_SIZE];
     int ret;
@@ -318,7 +318,7 @@ bool Init(bool open_adapter)
     PCapAdapterData = &Adapters[0];
     for (int i = 0; i < NumAdapters; i++)
     {
-        if (!strncmp(Adapters[i].DeviceName, Config::LANDevice, 128))
+        if (!strncmp(Adapters[i].DeviceName, Config::LANDevice.c_str(), 128))
             PCapAdapterData = &Adapters[i];
     }
 

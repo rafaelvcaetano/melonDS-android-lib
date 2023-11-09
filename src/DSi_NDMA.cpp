@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -63,7 +63,31 @@ void DSi_NDMA::Reset()
 
 void DSi_NDMA::DoSavestate(Savestate* file)
 {
-    // TODO!
+    char magic[5] = "NDMx";
+    magic[3] = '0' + Num + (CPU*4);
+    file->Section(magic);
+
+    file->Var32(&SrcAddr);
+    file->Var32(&DstAddr);
+    file->Var32(&TotalLength);
+    file->Var32(&BlockLength);
+    file->Var32(&SubblockTimer);
+    file->Var32(&FillData);
+    file->Var32(&Cnt);
+
+    file->Var32(&StartMode);
+    file->Var32(&CurSrcAddr);
+    file->Var32(&CurDstAddr);
+    file->Var32(&SubblockLength);
+    file->Var32(&RemCount);
+    file->Var32(&IterCount);
+    file->Var32(&TotalRemCount);
+    file->Var32(&SrcAddrInc);
+    file->Var32(&DstAddrInc);
+
+    file->Var32(&Running);
+    file->Bool32(&InProgress);
+    file->Bool32(&IsGXFIFODMA);
 }
 
 void DSi_NDMA::WriteCnt(u32 val)
@@ -99,10 +123,17 @@ void DSi_NDMA::WriteCnt(u32 val)
 
         if ((StartMode & 0x1F) == 0x10)
             Start();
+        else if (StartMode == 0x0A)
+            GPU3D::CheckFIFODMA();
 
-        if (StartMode != 0x10 && StartMode != 0x30 &&
-            StartMode != 0x04 && StartMode != 0x06 && StartMode != 0x07 && StartMode != 0x08 && StartMode != 0x09 && StartMode != 0x0B &&
-            StartMode != 0x24 && StartMode != 0x26 && StartMode != 0x28 && StartMode != 0x29 && StartMode != 0x2A && StartMode != 0x2B)
+        // TODO: unsupported start modes:
+        // * timers (00-03)
+        // * camera (ARM9 0B)
+        // * microphone (ARM7 0C)
+        // * NDS-wifi?? (ARM7 07, likely not working)
+
+        if (StartMode <= 0x03 || StartMode == 0x05 || (StartMode >= 0x0C && StartMode <= 0x0F) ||
+            (StartMode >= 0x20 && StartMode <= 0x23) || StartMode == 0x25 || StartMode == 0x27 || (StartMode >= 0x2C && StartMode <= 0x2F))
             printf("UNIMPLEMENTED ARM%d NDMA%d START MODE %02X, %08X->%08X LEN=%d BLK=%d CNT=%08X\n",
                    CPU?7:9, Num, StartMode, SrcAddr, DstAddr, TotalLength, BlockLength, Cnt);
     }
@@ -119,8 +150,12 @@ void DSi_NDMA::Start()
             RemCount = 0x1000000;
     }
 
-    // TODO: how does GXFIFO DMA work with all the block shito?
-    IterCount = RemCount;
+    // CHECKME: this is assumed to work the same as the old DMA version
+    // also not really certain how this interacts with the block subdivision system here
+    if (StartMode == 0x0A && RemCount > 112)
+        IterCount = 112;
+    else
+        IterCount = RemCount;
 
     if (((StartMode & 0x1F) != 0x10) && !(Cnt & (1<<29)))
     {
@@ -222,8 +257,8 @@ void DSi_NDMA::Run9()
             Running = 0;
             NDS::ResumeCPU(0, 1<<(Num+4));
 
-            //if (StartMode == 0x07)
-            //    GPU3D::CheckFIFODMA();
+            if (StartMode == 0x0A)
+                GPU3D::CheckFIFODMA();
         }
 
         return;

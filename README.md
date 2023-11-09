@@ -14,12 +14,7 @@ The goal is to do things right and fast, akin to blargSNES (but hopefully better
 
 ## How to use
 
-melonDS requires BIOS/firmware copies from a DS. Files required:
- * bios7.bin, 16KB: ARM7 BIOS
- * bios9.bin, 4KB: ARM9 BIOS
- * firmware.bin, 128/256/512KB: firmware
-
-Firmware boot requires a firmware dump from an original DS or DS Lite.
+Firmware boot (not direct boot) requires a BIOS/firmware dump from an original DS or DS Lite.
 DS firmwares dumped from a DSi or 3DS aren't bootable and only contain configuration data, thus they are only suitable when booting games directly.
 
 ### Possible firmware sizes
@@ -34,82 +29,87 @@ As for the rest, the interface should be pretty straightforward. If you have a q
 
 ## How to build
 
-### Linux:
+### Linux
+1. Install dependencies:
+   * Ubuntu 22.04: `sudo apt install cmake extra-cmake-modules libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev qtbase5-dev qtbase5-private-dev qtmultimedia5-dev libslirp-dev libarchive-dev`
+   * Older Ubuntu: `sudo apt install cmake extra-cmake-modules libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev qt5-default qtbase5-private-dev qtmultimedia5-dev libslirp-dev libarchive-dev`
+   * Arch Linux: `sudo pacman -S base-devel cmake extra-cmake-modules git libpcap sdl2 qt5-base qt5-multimedia libslirp libarchive`
+3. Download the melonDS repository and prepare:
+   ```bash
+   git clone https://github.com/melonDS-emu/melonDS
+   cd melonDS
+   ```
 
-1. Install dependencies: `sudo apt install cmake libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev qt5-default libslirp-dev libarchive-dev libepoxy-dev`
-2. Download the melonDS repository and prepare:
-  ```bash
-  git clone https://github.com/Arisotura/melonDS
-  cd melonDS
-  mkdir build && cd build
-  ```
 3. Compile:
-  ```bash
-  cmake ..
-  make -j$(nproc --all)
-  ```
+   ```bash
+   cmake -B build
+   cmake --build build -j$(nproc --all)
+   ```
 
-### Windows:
-
+### Windows
 1. Install [MSYS2](https://www.msys2.org/)
 2. Open the **MSYS2 MinGW 64-bit** terminal
 3. Update the packages using `pacman -Syu` and reopen the terminal if it asks you to
-4. Download the melonDS repository and prepare:
-  ```bash
-  git clone https://github.com/Arisotura/melonDS
-  cd melonDS
-  mkdir build && cd build
-  ```
+4. Install git to clone the repository
+   ```bash
+   pacman -S git
+   ```
+5. Download the melonDS repository and prepare:
+   ```bash
+   git clone https://github.com/melonDS-emu/melonDS
+   cd melonDS
+   ```
 #### Dynamic builds (with DLLs)
-5. Install dependencies: `pacman -S git make mingw-w64-x86_64-{cmake,mesa,SDL2,toolchain,qt5,libslirp,libarchive,libepoxy}`
+5. Install dependencies: `pacman -S make mingw-w64-x86_64-{cmake,mesa,SDL2,toolchain,qt5-base,qt5-svg,qt5-multimedia,libslirp,libarchive}`
 6. Compile:
    ```bash
-   cmake .. -G "MSYS Makefiles"
-   make -j$(nproc --all)
+   cmake -B build -G "MSYS Makefiles"
+   cmake --build build -j$(nproc --all)
+   cd build
    ../tools/msys-dist.sh
    ```
 If everything went well, melonDS and the libraries it needs should now be in the `dist` folder.
 
 #### Static builds (without DLLs, standalone executable)
-5. Install dependencies: `pacman -S git make mingw-w64-x86_64-{cmake,mesa,SDL2,toolchain,qt5-static,libslirp,libarchive,libepoxy}`
+5. Install dependencies: `pacman -S make mingw-w64-x86_64-{cmake,mesa,SDL2,toolchain,qt5-static,libslirp,libarchive}`
 6. Compile:
    ```bash
-   cmake .. -G 'MSYS Makefiles' -DBUILD_STATIC=ON -DQT5_STATIC_DIR=/mingw64/qt5-static
-   make -j$(nproc --all)
-   mkdir dist && cp melonDS.exe dist
+   cmake -B build -G 'MSYS Makefiles' -DBUILD_STATIC=ON -DCMAKE_PREFIX_PATH=/mingw64/qt5-static
+   cmake --build build -j$(nproc --all)
    ```
-If everything went well, melonDS should now be in the `dist` folder.
+If everything went well, melonDS should now be in the `build` folder.
 
-### macOS:
+### macOS
 1. Install the [Homebrew Package Manager](https://brew.sh)
-2. Install dependencies: `brew install git pkg-config cmake sdl2 qt@6 libslirp libarchive libepoxy`
+2. Install dependencies: `brew install git pkg-config cmake sdl2 qt@6 libslirp libarchive`
 3. Download the melonDS repository and prepare:
-  ```zsh
-  git clone https://github.com/Arisotura/melonDS
-  cd melonDS
-  mkdir build && cd build
-  ```
+   ```zsh
+   git clone https://github.com/melonDS-emu/melonDS
+   cd melonDS
+   ```
 4. Compile:
    ```zsh
-   cmake .. -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix libarchive)" -DUSE_QT6=ON -DMACOS_BUNDLE_LIBS=ON
-   make -j$(sysctl -n hw.logicalcpu)
+   cmake -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix libarchive)" -DUSE_QT6=ON
+   cmake --build build -j$(sysctl -n hw.logicalcpu)
    ```
-If everything went well, melonDS.app should now be in the current directory.
+If everything went well, melonDS.app should now be in the `build` directory.
 
-   
+#### Self-contained app bundle
+If you want an app bundle that can be distributed to other computers without needing to install dependencies through Homebrew, you can additionally run `
+../tools/mac-bundle.rb melonDS.app` after the build is completed, or add `-DMACOS_BUNDLE_LIBS=ON` to the first CMake command.
+
 ## TODO LIST
 
- * DSi emulation
+ * better DSi emulation
+ * better OpenGL rendering
+ * netplay
  * the impossible quest of pixel-perfect 3D graphics
- * improve libui and the emulator UI
  * support for rendering screens to separate windows
  * emulating some fancy addons
- * other non-core shit (debugger, graphics viewers, cheat crapo, etc)
+ * other non-core shit (debugger, graphics viewers, etc)
 
-### TODO LIST FOR LATER
+### TODO LIST FOR LATER (low priority)
 
- * better wifi
- * maybe emulate flashcarts or other fancy hardware
  * big-endian compatibility (Wii, etc)
  * LCD refresh time (used by some games for blending effects)
  * any feature you can eventually ask for that isn't outright stupid

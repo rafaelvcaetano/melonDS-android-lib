@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -20,6 +20,7 @@
 #define DSI_AES_H
 
 #include "types.h"
+#include "Savestate.h"
 
 namespace DSi_AES
 {
@@ -29,6 +30,8 @@ extern u32 Cnt;
 bool Init();
 void DeInit();
 void Reset();
+
+void DoSavestate(Savestate* file);
 
 u32 ReadCnt();
 void WriteCnt(u32 val);

@@ -11,15 +11,18 @@
 #include "../GBACart.h"
 #include "../SPU.h"
 #include "../Platform.h"
-#include "../Config.h"
 #include "../AREngine.h"
-#include "../DSi.h"
 #include "../FileSavestate.h"
+#include "../DSi_I2C.h"
+#include "Config.h"
 #include "MemorySavestate.h"
-#include "SharedConfig.h"
-#include "PlatformConfig.h"
 #include "FrontendUtil.h"
 #include "RewindManager.h"
+#include "ROMManager.h"
+#include "AndroidCameraHandler.h"
+#include "LocalMultiplayer.h"
+#include "retroachievements/RetroAchievements.h"
+#include "retroachievements/RACallback.h"
 #include <android/asset_manager.h>
 #include <cstring>
 
@@ -35,13 +38,14 @@ AndroidARCodeFile *arCodeFile;
 namespace MelonDSAndroid
 {
     u32* textureBuffer;
-    char* internalFilesDir;
-    int volume;
-    int audioLatency;
-    int micInputType;
     int frame = 0;
+    int actualMicSource = 0;
+    RetroAchievements::RACallback* retroAchievementsCallback;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
+    AndroidCameraHandler* cameraHandler;
+    std::string internalFilesDir;
+    EmulatorConfiguration currentConfiguration;
 
     // Variables used to keep the current state so that emulation can be reset
     char* currentRomPath = NULL;
@@ -49,84 +53,97 @@ namespace MelonDSAndroid
     char* currentGbaRomPath = NULL;
     char* currentGbaSramPath = NULL;
     bool currentLoadGbaRom;
-    bool currentLoadDirect;
     RunMode currentRunMode;
 
-    void setupAudioOutputStream();
+    void setupAudioOutputStream(int audioLatency, int volume);
     void cleanupAudioOutputStream();
     void setupMicInputStream();
     void resetAudioOutputStream();
     void copyString(char** dest, const char* source);
 
-    void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler, u32* textureBufferPointer) {
-        copyString(&internalFilesDir, emulatorConfiguration.internalFilesDir);
-        assetManager = androidAssetManager;
-        fileHandler = androidFileHandler;
-        textureBuffer = textureBufferPointer;
+    /**
+     * Used to set the emulator's initial configuration, before boot. To update the configuration during runtime, use @updateEmulatorConfiguration.
+     *
+     * @param emulatorConfiguration The emulator configuration during the next emulator run
+     */
+    void setConfiguration(EmulatorConfiguration emulatorConfiguration) {
+        currentConfiguration = emulatorConfiguration;
+        internalFilesDir = emulatorConfiguration.internalFilesDir;
+        actualMicSource = emulatorConfiguration.micSource;
 
-        audioLatency = emulatorConfiguration.audioLatency;
-        volume = emulatorConfiguration.volume;
-        micInputType = emulatorConfiguration.micSource;
+        Config::BIOS7Path = emulatorConfiguration.dsBios7Path ?: "";
+        Config::BIOS9Path = emulatorConfiguration.dsBios9Path ?: "";
+        Config::FirmwarePath = emulatorConfiguration.dsFirmwarePath ?: "";
 
-        if (emulatorConfiguration.soundEnabled) {
-            setupAudioOutputStream();
-        }
-
-        if (micInputType == 2) {
-            setupMicInputStream();
-        }
+        Config::DSiBIOS7Path = emulatorConfiguration.dsiBios7Path ?: "";
+        Config::DSiBIOS9Path = emulatorConfiguration.dsiBios9Path ?: "";
+        Config::DSiFirmwarePath = emulatorConfiguration.dsiFirmwarePath ?: "";
+        Config::DSiNANDPath = emulatorConfiguration.dsiNandPath ?: "";
 
         // Internal BIOS and Firmware can only be used for DS
         if (emulatorConfiguration.userInternalFirmwareAndBios) {
-            memcpy(Config::FirmwareUsername, emulatorConfiguration.firmwareConfiguration.username, sizeof(emulatorConfiguration.firmwareConfiguration.username));
-            memcpy(Config::FirmwareMessage, emulatorConfiguration.firmwareConfiguration.message, sizeof(emulatorConfiguration.firmwareConfiguration.message));
+            Config::FirmwareUsername = emulatorConfiguration.firmwareConfiguration.username;
+            Config::FirmwareUsername =emulatorConfiguration.firmwareConfiguration.username;
+            Config::FirmwareMessage = emulatorConfiguration.firmwareConfiguration.message;
             Config::FirmwareLanguage = emulatorConfiguration.firmwareConfiguration.language;
             Config::FirmwareBirthdayMonth = emulatorConfiguration.firmwareConfiguration.birthdayMonth;
             Config::FirmwareBirthdayDay = emulatorConfiguration.firmwareConfiguration.birthdayDay;
             Config::FirmwareFavouriteColour = emulatorConfiguration.firmwareConfiguration.favouriteColour;
-            memcpy(Config::InternalMacAddress, emulatorConfiguration.firmwareConfiguration.macAddress, sizeof(emulatorConfiguration.firmwareConfiguration.macAddress));
+            Config::FirmwareMAC = emulatorConfiguration.firmwareConfiguration.macAddress;
+            Config::DSBatteryLevelOkay = true;
             Config::ConsoleType = 0;
-            Config::ExternalBIOSEnable = 0;
-            NDS::SetConsoleType(0);
+            Config::ExternalBIOSEnable = false;
         } else {
-            // DS BIOS files are always required
-            strcpy(Config::BIOS7Path, emulatorConfiguration.dsBios7Path);
-            strcpy(Config::BIOS9Path, emulatorConfiguration.dsBios9Path);
-            Config::ExternalBIOSEnable = 1;
+            Config::ExternalBIOSEnable = true;
+            Config::DirectBoot = !emulatorConfiguration.showBootScreen;
 
             if (emulatorConfiguration.consoleType == 0) {
-                strcpy(Config::FirmwarePath, emulatorConfiguration.dsFirmwarePath);
+                Config::DSBatteryLevelOkay = true;
                 Config::ConsoleType = 0;
-                NDS::SetConsoleType(0);
             } else {
-                strcpy(Config::DSiBIOS7Path, emulatorConfiguration.dsiBios7Path);
-                strcpy(Config::DSiBIOS9Path, emulatorConfiguration.dsiBios9Path);
-                strcpy(Config::DSiFirmwarePath, emulatorConfiguration.dsiFirmwarePath);
-                strcpy(Config::DSiNANDPath, emulatorConfiguration.dsiNandPath);
+                Config::DSiBatteryLevel = DSi_BPTWL::batteryLevel_Full;
+                Config::DSiBatteryCharging = true;
                 Config::ConsoleType = 1;
-                NDS::SetConsoleType(1);
             }
         }
 
 #ifdef JIT_ENABLED
-        Config::JIT_Enable = emulatorConfiguration.useJit ? 1 : 0;
+        Config::JIT_Enable = emulatorConfiguration.useJit;
 #endif
 
         Config::AudioBitrate = emulatorConfiguration.audioBitrate;
         Config::FirmwareOverrideSettings = false;
-        Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress ? 1 : 0;
-        Config::SocketBindAnyAddr = 1;
+        Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress;
+        Config::SocketBindAnyAddr = true;
+        Config::DLDIEnable = false;
+        Config::DSiSDEnable = false;
 
         Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
         Config::RewindCaptureSpacingSeconds = emulatorConfiguration.rewindCaptureSpacingSeconds;
         Config::RewindLengthSeconds = emulatorConfiguration.rewindLengthSeconds;
-        // Use 10MB per savestate
-        RewindManager::SetRewindBufferSizes(1024 * 1024 * 10, 256 * 384 * 4);
+        // Use 20MB per savestate
+        RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
+    }
+
+    void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance) {
+        assetManager = androidAssetManager;
+        cameraHandler = androidCameraHandler;
+        retroAchievementsCallback = raCallback;
+        textureBuffer = textureBufferPointer;
+        LocalMultiplayer::SetIsMasterInstance(isMasterInstance);
+
+        if (currentConfiguration.soundEnabled) {
+            setupAudioOutputStream(currentConfiguration.audioLatency, currentConfiguration.volume);
+        }
+
+        if (currentConfiguration.micSource == 2) {
+            setupMicInputStream();
+        }
 
         NDS::Init();
         GPU::InitRenderer(0);
-        GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
-        SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
+        GPU::SetRenderSettings(0, currentConfiguration.renderSettings);
+        SPU::SetInterpolation(currentConfiguration.audioInterpolation);
     }
 
     void setCodeList(std::list<Cheat> cheats)
@@ -154,11 +171,29 @@ namespace MelonDSAndroid
         arCodeFile->updateCodeList(codeList);
     }
 
-    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
-        int oldMicSource = micInputType;
-        int oldVolume = volume;
-        int oldAudioLatency = audioLatency;
+    void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::string* richPresenceScript)
+    {
+        RetroAchievements::LoadAchievements(achievements);
+        if (richPresenceScript != nullptr)
+            RetroAchievements::SetupRichPresence(*richPresenceScript);
+    }
 
+    void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements)
+    {
+        RetroAchievements::UnloadAchievements(achievements);
+    }
+
+    std::string getRichPresenceStatus()
+    {
+        return RetroAchievements::GetRichPresenceStatus();
+    }
+
+    /**
+     * Used to update the emulator's configuration during runtime. Will only update the configurations that can actually change during runtime without causing issues,
+     *
+     * @param emulatorConfiguration The new emulator configuration
+     */
+    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
         Config::AudioBitrate = emulatorConfiguration.audioBitrate;
         GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
         SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
@@ -172,23 +207,22 @@ namespace MelonDSAndroid
             RewindManager::Reset();
         }
 
-        audioLatency = emulatorConfiguration.audioLatency;
-        volume = emulatorConfiguration.volume;
-        micInputType = emulatorConfiguration.micSource;
-
-        if (emulatorConfiguration.soundEnabled && volume > 0) {
+        if (emulatorConfiguration.soundEnabled && currentConfiguration.volume > 0) {
             if (audioStream == NULL) {
-                setupAudioOutputStream();
-            } else if (oldAudioLatency != audioLatency || oldVolume != volume) {
+                setupAudioOutputStream(emulatorConfiguration.audioLatency, emulatorConfiguration.volume);
+            } else if (currentConfiguration.audioLatency != emulatorConfiguration.audioLatency || currentConfiguration.volume != emulatorConfiguration.volume) {
                 // Recreate audio stream with new settings
                 cleanupAudioOutputStream();
-                setupAudioOutputStream();
+                setupAudioOutputStream(emulatorConfiguration.audioLatency, emulatorConfiguration.volume);
             }
         } else if (audioStream != NULL) {
             cleanupAudioOutputStream();
         }
 
-        if (oldMicSource == 2 && micInputType != 2) {
+        int oldMicSource = actualMicSource;
+        actualMicSource = emulatorConfiguration.micSource;
+
+        if (oldMicSource == 2 && emulatorConfiguration.micSource != 2) {
             // No longer using device mic. Destroy stream
             if (micInputStream != NULL) {
                 micInputStream->requestStop();
@@ -198,41 +232,36 @@ namespace MelonDSAndroid
                 micInputStream = NULL;
                 micInputCallback = NULL;
             }
-        } else if (oldMicSource != 2 && micInputType == 2) {
+        } else if (oldMicSource != 2 && emulatorConfiguration.micSource == 2) {
             // Now using device mic. Setup stream
             setupMicInputStream();
         }
+
+        currentConfiguration = emulatorConfiguration;
     }
 
-    int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram)
+    int loadRom(char* romPath, char* sramPath, bool loadGbaRom, char* gbaRom, char* gbaSram)
     {
         copyString(&currentRomPath, romPath);
         copyString(&currentSramPath, sramPath);
         copyString(&currentGbaRomPath, gbaRom);
         copyString(&currentGbaSramPath, gbaSram);
-        currentLoadDirect = loadDirect;
         currentLoadGbaRom = loadGbaRom;
         currentRunMode = ROM;
 
-        if (NDS::ConsoleType == 1)
-        {
-            DSi::CloseDSiNAND();
-            if (Frontend::SetupDSiNAND() != Frontend::Load_OK)
-            {
-                return 3;
-            }
-        }
-
-        bool loaded = NDS::LoadROM(romPath, sramPath, loadDirect);
+        bool loaded = ROMManager::LoadROM(romPath, sramPath, true);
         if (!loaded)
             return 2;
 
         // Slot 2 is not supported in DSi
         if (loadGbaRom && NDS::ConsoleType == 0)
         {
-            if (!NDS::LoadGBAROM(gbaRom, gbaSram))
+            if (!ROMManager::LoadGBAROM(gbaRom, gbaSram))
                 return 1;
         }
+
+        RetroAchievements::Init(retroAchievementsCallback);
+        NDS::Start();
 
         return 0;
     }
@@ -240,7 +269,22 @@ namespace MelonDSAndroid
     int bootFirmware()
     {
         currentRunMode = FIRMWARE;
-        return Frontend::LoadBIOS();
+        ROMManager::SetupResult result = ROMManager::VerifySetup();
+        if (result != ROMManager::SUCCESS)
+        {
+            return result;
+        }
+
+        bool successful = ROMManager::LoadBIOS();
+        if (successful)
+        {
+            NDS::Start();
+            return ROMManager::SUCCESS;
+        }
+        else
+        {
+            return ROMManager::FIRMWARE_NOT_BOOTABLE;
+        }
     }
 
     void start()
@@ -257,6 +301,13 @@ namespace MelonDSAndroid
     u32 loop()
     {
         u32 nLines = NDS::RunFrame();
+        RetroAchievements::FrameUpdate();
+
+        if (ROMManager::NDSSave)
+            ROMManager::NDSSave->CheckFlush();
+
+        if (ROMManager::GBASave)
+            ROMManager::GBASave->CheckFlush();
 
         int frontbuf = GPU::FrontBuffer;
         if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
@@ -295,7 +346,9 @@ namespace MelonDSAndroid
     {
         frame = 0;
         if (currentRunMode == ROM) {
-            int result = loadRom(currentRomPath, currentSramPath, currentLoadDirect, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
+            RetroAchievements::Reset();
+            NDS::Reset();
+            int result = loadRom(currentRomPath, currentSramPath, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
             if (result != 2 && arCodeFile != NULL) {
                 AREngine::SetCodeFile(arCodeFile);
             }
@@ -311,7 +364,7 @@ namespace MelonDSAndroid
 
     void updateMic()
     {
-        switch (micInputType)
+        switch (actualMicSource)
         {
             case 0: // no mic
                 Frontend::Mic_FeedSilence();
@@ -335,19 +388,23 @@ namespace MelonDSAndroid
         }
         else
         {
-            NDS::DoSavestate(savestate);
+            bool result = NDS::DoSavestate(savestate);
+            if (result)
+                result = RetroAchievements::DoSavestate(savestate);
+
             delete savestate;
-            return true;
+            return result;
         }
     }
 
     bool loadState(const char* path)
     {
         bool success = true;
-        char* backupPath = joinPaths(internalFilesDir, "backup.mln");
+        char* backupPath = joinPaths(currentConfiguration.internalFilesDir, "backup.mln");
 
         FileSavestate* backup = new FileSavestate(backupPath, true);
         NDS::DoSavestate(backup);
+        RetroAchievements::DoSavestate(backup);
         delete backup;
 
         FileSavestate* savestate = new FileSavestate(path, false);
@@ -360,6 +417,7 @@ namespace MelonDSAndroid
         }
 
         NDS::DoSavestate(savestate);
+        RetroAchievements::DoSavestate(savestate);
         delete savestate;
 
         // Delete backup file
@@ -380,21 +438,26 @@ namespace MelonDSAndroid
         }
         else
         {
-            NDS::DoSavestate(savestate);
-            memcpy(rewindSaveState.screenshot, textureBuffer, 256 * 384 * 4);
+            bool success = NDS::DoSavestate(savestate);
+            if (success)
+                success = RetroAchievements::DoSavestate(savestate);
+
+            if (success)
+                memcpy(rewindSaveState.screenshot, textureBuffer, 256 * 384 * 4);
 
             delete savestate;
-            return true;
+            return success;
         }
     }
 
     bool loadRewindState(RewindManager::RewindSaveState rewindSaveState)
     {
         bool success = true;
-        char* backupPath = joinPaths(internalFilesDir, "backup.mln");
+        char* backupPath = joinPaths(currentConfiguration.internalFilesDir, "backup.mln");
 
         FileSavestate* backup = new FileSavestate(backupPath, true);
         NDS::DoSavestate(backup);
+        RetroAchievements::DoSavestate(backup);
         delete backup;
 
         Savestate* savestate = new MemorySavestate(rewindSaveState.buffer, false);
@@ -407,6 +470,7 @@ namespace MelonDSAndroid
         }
 
         NDS::DoSavestate(savestate);
+        RetroAchievements::DoSavestate(savestate);
         delete savestate;
 
         // Delete backup file
@@ -430,15 +494,14 @@ namespace MelonDSAndroid
 
     void cleanup()
     {
-        GBACart::Eject();
+        RetroAchievements::DeInit();
+        ROMManager::EjectCart();
+        ROMManager::EjectGBACart();
+        //GBACart::EjectCart();
+        NDS::Stop();
         GPU::DeInitRenderer();
         NDS::DeInit();
         RewindManager::Reset();
-
-        if (internalFilesDir) {
-            free(internalFilesDir);
-            internalFilesDir = NULL;
-        }
 
         free(currentRomPath);
         free(currentSramPath);
@@ -466,13 +529,11 @@ namespace MelonDSAndroid
             arCodeFile = NULL;
         }
 
-        fileHandler = NULL;
         assetManager = NULL;
-
         textureBuffer = NULL;
     }
 
-    void setupAudioOutputStream()
+    void setupAudioOutputStream(int audioLatency, int volume)
     {
         oboe::PerformanceMode performanceMode;
         switch (audioLatency) {
@@ -546,7 +607,7 @@ namespace MelonDSAndroid
 
         oboe::Result micResult = micStreamBuilder.openStream(&micInputStream);
         if (micResult != oboe::Result::OK) {
-            micInputType = 1;
+            actualMicSource = 1;
             fprintf(stderr, "Failed to init mic audio stream");
             delete micInputCallback;
             micInputCallback = NULL;
@@ -558,7 +619,7 @@ namespace MelonDSAndroid
     void resetAudioOutputStream()
     {
         cleanupAudioOutputStream();
-        setupAudioOutputStream();
+        setupAudioOutputStream(currentConfiguration.audioLatency, currentConfiguration.volume);
         if (audioStream != NULL) {
             audioStream->requestStart();
         }
@@ -566,13 +627,27 @@ namespace MelonDSAndroid
 
     void copyString(char** dest, const char* source)
     {
-        if (source == NULL) {
-            *dest = NULL;
+        if (source == nullptr)
+        {
+            if (*dest != nullptr)
+            {
+                free(*dest);
+                *dest = nullptr;
+            }
+
             return;
         }
 
         int length = strlen(source);
-        *dest = (char*) malloc(length + 1);
+        if (*dest == nullptr)
+        {
+            *dest = (char*) malloc(length + 1);
+        }
+        else
+        {
+            *dest = (char*) realloc(*dest, length + 1);
+        }
+
         strcpy(*dest, source);
     }
 }

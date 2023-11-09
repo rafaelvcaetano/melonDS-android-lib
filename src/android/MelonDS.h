@@ -3,7 +3,10 @@
 
 #include <list>
 #include "AndroidFileHandler.h"
+#include "AndroidCameraHandler.h"
 #include "RewindManager.h"
+#include "retroachievements/RAAchievement.h"
+#include "retroachievements/RACallback.h"
 #include "../types.h"
 #include "../GPU.h"
 #include <android/asset_manager.h>
@@ -17,7 +20,7 @@ namespace MelonDSAndroid {
         int favouriteColour;
         char message[27];
         bool randomizeMacAddress;
-        u8 macAddress[6];
+        char macAddress[18];
     } FirmwareConfiguration;
 
     typedef struct {
@@ -31,6 +34,7 @@ namespace MelonDSAndroid {
         char* dsiNandPath;
         char* internalFilesDir;
         float fastForwardSpeedMultiplier;
+        bool showBootScreen;
         bool useJit;
         int consoleType;
         bool soundEnabled;
@@ -64,9 +68,15 @@ namespace MelonDSAndroid {
 
     extern AAssetManager* assetManager;
     extern AndroidFileHandler* fileHandler;
+    extern AndroidCameraHandler* cameraHandler;
+    extern std::string internalFilesDir;
 
-    extern void setup(EmulatorConfiguration emulatorConfiguration, AAssetManager* androidAssetManager, AndroidFileHandler* androidFileHandler, u32* textureBufferPointer);
+    extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
+    extern void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance);
     extern void setCodeList(std::list<Cheat> cheats);
+    extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::string* richPresenceScript);
+    extern void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
+    extern std::string getRichPresenceStatus();
     extern void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration);
 
     /**
@@ -74,14 +84,13 @@ namespace MelonDSAndroid {
      *
      * @param romPath The path to the NDS rom
      * @param sramPath The path to the rom's SRAM file
-     * @param loadDirect If the game should be booted directly
      * @param loadGbaRom If a GBA ROM must also be loaded
      * @param gbaRom The path to the GBA ROM
      * @param gbaSram The path to the GBA rom's SRAM file
      * @return The load result. 0 if everything was loaded successfully, 1 if the NDS ROM was loaded but the GBA ROM
      * failed to load, 2 if the NDS ROM failed to load
      */
-    extern int loadRom(char* romPath, char* sramPath, bool loadDirect, bool loadGbaRom, char* gbaRom, char* gbaSram);
+    extern int loadRom(char* romPath, char* sramPath, bool loadGbaRom, char* gbaRom, char* gbaSram);
     extern int bootFirmware();
     extern void start();
     extern u32 loop();

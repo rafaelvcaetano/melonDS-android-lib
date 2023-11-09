@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -91,7 +91,7 @@ void DeInit()
 void Reset()
 {
     // random starting point for the counter
-    USCounter = 0x428888017ULL;
+    USCounter = 0x428888000ULL;
     SeqNo = 0x0120;
 
     BeaconDue = false;
@@ -114,18 +114,6 @@ bool MACIsBroadcast(u8* a)
     return (*(u32*)&a[0] == 0xFFFFFFFF) && (*(u16*)&a[4] == 0xFFFF);
 }
 
-
-void USTimer()
-{
-    USCounter++;
-
-    u32 chk = (u32)USCounter;
-    if (!(chk & 0x1FFFF))
-    {
-        // send beacon every 128ms
-        BeaconDue = true;
-    }
-}
 
 void MSTimer()
 {

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -23,11 +23,15 @@
 #include "types.h"
 #include "Platform.h"
 #include "Config.h"
-#include "PlatformConfig.h"
 
 #include "VideoSettingsDialog.h"
 #include "ui_VideoSettingsDialog.h"
 
+
+inline bool UsesGL()
+{
+    return (Config::ScreenUseGL != 0) || (Config::_3DRenderer != 0);
+}
 
 VideoSettingsDialog* VideoSettingsDialog::currentDlg = nullptr;
 
@@ -74,6 +78,7 @@ VideoSettingsDialog::VideoSettingsDialog(QWidget* parent) : QDialog(parent), ui(
 
     if (!Config::ScreenVSync)
         ui->sbVSyncInterval->setEnabled(false);
+    setVsyncControlEnable(UsesGL());
 
     if (Config::_3DRenderer == 0)
     {
@@ -89,14 +94,6 @@ VideoSettingsDialog::VideoSettingsDialog(QWidget* parent) : QDialog(parent), ui(
         ui->cbxGLResolution->setEnabled(true);
         ui->cbBetterPolygons->setEnabled(true);
     }
-
-    // sorry
-    ui->cbVSync->hide();
-    ui->cbVSync->setEnabled(false);
-    ui->sbVSyncInterval->hide();
-    ui->sbVSyncInterval->setEnabled(false);
-    ui->label_2->hide();
-    ui->groupBox->layout()->addItem(new QSpacerItem(1, 1, QSizePolicy::Minimum, QSizePolicy::Expanding));
 }
 
 VideoSettingsDialog::~VideoSettingsDialog()
@@ -113,7 +110,7 @@ void VideoSettingsDialog::on_VideoSettingsDialog_accepted()
 
 void VideoSettingsDialog::on_VideoSettingsDialog_rejected()
 {
-    bool old_gl = (Config::ScreenUseGL != 0) || (Config::_3DRenderer != 0);
+    bool old_gl = UsesGL();
 
     Config::_3DRenderer = oldRenderer;
     Config::ScreenUseGL = oldGLDisplay;
@@ -123,10 +120,15 @@ void VideoSettingsDialog::on_VideoSettingsDialog_rejected()
     Config::GL_ScaleFactor = oldGLScale;
     Config::GL_BetterPolygons = oldGLBetterPolygons;
 
-    bool new_gl = (Config::ScreenUseGL != 0) || (Config::_3DRenderer != 0);
-    emit updateVideoSettings(old_gl != new_gl);
+    emit updateVideoSettings(old_gl != UsesGL());
 
     closeDlg();
+}
+
+void VideoSettingsDialog::setVsyncControlEnable(bool hasOGL)
+{
+    ui->cbVSync->setEnabled(hasOGL);
+    ui->sbVSyncInterval->setEnabled(hasOGL);
 }
 
 void VideoSettingsDialog::onChange3DRenderer(int renderer)
@@ -150,8 +152,7 @@ void VideoSettingsDialog::onChange3DRenderer(int renderer)
         ui->cbBetterPolygons->setEnabled(true);
     }
 
-    bool new_gl = (Config::ScreenUseGL != 0) || (Config::_3DRenderer != 0);
-    emit updateVideoSettings(old_gl != new_gl);
+    emit updateVideoSettings(old_gl != UsesGL());
 }
 
 void VideoSettingsDialog::on_cbGLDisplay_stateChanged(int state)
@@ -160,8 +161,9 @@ void VideoSettingsDialog::on_cbGLDisplay_stateChanged(int state)
 
     Config::ScreenUseGL = (state != 0);
 
-    bool new_gl = (Config::ScreenUseGL != 0) || (Config::_3DRenderer != 0);
-    emit updateVideoSettings(old_gl != new_gl);
+    setVsyncControlEnable(UsesGL());
+
+    emit updateVideoSettings(old_gl != UsesGL());
 }
 
 void VideoSettingsDialog::on_cbVSync_stateChanged(int state)
@@ -169,11 +171,13 @@ void VideoSettingsDialog::on_cbVSync_stateChanged(int state)
     bool vsync = (state != 0);
     ui->sbVSyncInterval->setEnabled(vsync);
     Config::ScreenVSync = vsync;
+    emit updateVideoSettings(false);
 }
 
 void VideoSettingsDialog::on_sbVSyncInterval_valueChanged(int val)
 {
     Config::ScreenVSyncInterval = val;
+    emit updateVideoSettings(false);
 }
 
 void VideoSettingsDialog::on_cbSoftwareThreaded_stateChanged(int state)
@@ -189,6 +193,8 @@ void VideoSettingsDialog::on_cbxGLResolution_currentIndexChanged(int idx)
     if (ui->cbxGLResolution->count() < 16) return;
 
     Config::GL_ScaleFactor = idx+1;
+
+    setVsyncControlEnable(UsesGL());
 
     emit updateVideoSettings(false);
 }

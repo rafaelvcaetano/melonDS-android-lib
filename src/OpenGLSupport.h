@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -22,10 +22,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <epoxy/gl.h>
-
-
 #include "Platform.h"
+#include "PlatformOGL.h"
 
 
 namespace OpenGL

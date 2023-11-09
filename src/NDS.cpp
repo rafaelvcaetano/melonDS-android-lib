@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -19,7 +19,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
-#include "Config.h"
 #include "NDS.h"
 #include "ARM.h"
 #include "NDSCart.h"
@@ -33,7 +32,6 @@
 #include "Wifi.h"
 #include "AREngine.h"
 #include "Platform.h"
-#include "NDSCart_SRAMManager.h"
 #include "FreeBIOS.h"
 
 #ifdef JIT_ENABLED
@@ -43,6 +41,9 @@
 
 #include "DSi.h"
 #include "DSi_SPI_TSC.h"
+#include "DSi_NWifi.h"
+#include "DSi_Camera.h"
+#include "DSi_DSP.h"
 
 
 namespace NDS
@@ -79,6 +80,10 @@ u32 ARM7Regions[0x20000];
 
 ARMv5* ARM9;
 ARMv4* ARM7;
+
+#ifdef JIT_ENABLED
+bool EnableJIT;
+#endif
 
 u32 NumFrames;
 u32 NumLagFrames;
@@ -171,6 +176,7 @@ bool RunningGame;
 void DivDone(u32 param);
 void SqrtDone(u32 param);
 void RunTimer(u32 tid, s32 cycles);
+void UpdateWifiTimings();
 void SetWifiWaitCnt(u16 val);
 void SetGBASlotTimings();
 
@@ -197,7 +203,6 @@ bool Init()
     DMAs[6] = new DMA(1, 2);
     DMAs[7] = new DMA(1, 3);
 
-    if (!NDSCart_SRAMManager::Init()) return false;
     if (!NDSCart::Init()) return false;
     if (!GBACart::Init()) return false;
     if (!GPU::Init()) return false;
@@ -225,7 +230,6 @@ void DeInit()
     for (int i = 0; i < 8; i++)
         delete DMAs[i];
 
-    NDSCart_SRAMManager::DeInit();
     NDSCart::DeInit();
     GBACart::DeInit();
     GPU::DeInit();
@@ -350,7 +354,28 @@ void InitTimings()
     // handled later: GBA slot, wifi
 }
 
-void SetupDirectBoot()
+bool NeedsDirectBoot()
+{
+    if (ConsoleType == 1)
+    {
+        // for now, DSi mode requires original BIOS/NAND
+        return false;
+    }
+    else
+    {
+        // internal BIOS does not support direct boot
+        if (!Platform::GetConfigBool(Platform::ExternalBIOSEnable))
+            return true;
+
+        // DSi/3DS firmwares aren't bootable
+        if (SPI_Firmware::GetFirmwareLength() == 0x20000)
+            return true;
+
+        return false;
+    }
+}
+
+void SetupDirectBoot(std::string romname)
 {
     if (ConsoleType == 1)
     {
@@ -359,6 +384,30 @@ void SetupDirectBoot()
     else
     {
         MapSharedWRAM(3);
+
+        // setup main RAM data
+
+        for (u32 i = 0; i < 0x170; i+=4)
+        {
+            u32 tmp = *(u32*)&NDSCart::CartROM[i];
+            ARM9Write32(0x027FFE00+i, tmp);
+        }
+
+        ARM9Write32(0x027FF800, NDSCart::CartID);
+        ARM9Write32(0x027FF804, NDSCart::CartID);
+        ARM9Write16(0x027FF808, NDSCart::Header.HeaderCRC16);
+        ARM9Write16(0x027FF80A, NDSCart::Header.SecureAreaCRC16);
+
+        ARM9Write16(0x027FF850, 0x5835);
+
+        ARM9Write32(0x027FFC00, NDSCart::CartID);
+        ARM9Write32(0x027FFC04, NDSCart::CartID);
+        ARM9Write16(0x027FFC08, NDSCart::Header.HeaderCRC16);
+        ARM9Write16(0x027FFC0A, NDSCart::Header.SecureAreaCRC16);
+
+        ARM9Write16(0x027FFC10, 0x5835);
+        ARM9Write16(0x027FFC30, 0xFFFF);
+        ARM9Write16(0x027FFC40, 0x0001);
 
         u32 arm9start = 0;
 
@@ -389,36 +438,37 @@ void SetupDirectBoot()
             ARM7Write32(NDSCart::Header.ARM7RAMAddress+i, tmp);
         }
 
-        for (u32 i = 0; i < 0x170; i+=4)
-        {
-            u32 tmp = *(u32*)&NDSCart::CartROM[i];
-            ARM9Write32(0x027FFE00+i, tmp);
-        }
-
-        ARM9Write32(0x027FF800, NDSCart::CartID);
-        ARM9Write32(0x027FF804, NDSCart::CartID);
-        ARM9Write16(0x027FF808, NDSCart::Header.HeaderCRC16);
-        ARM9Write16(0x027FF80A, NDSCart::Header.SecureAreaCRC16);
-
-        ARM9Write16(0x027FF850, 0x5835);
-
-        ARM9Write32(0x027FFC00, NDSCart::CartID);
-        ARM9Write32(0x027FFC04, NDSCart::CartID);
-        ARM9Write16(0x027FFC08, NDSCart::Header.HeaderCRC16);
-        ARM9Write16(0x027FFC0A, NDSCart::Header.SecureAreaCRC16);
-
-        ARM9Write16(0x027FFC10, 0x5835);
-        ARM9Write16(0x027FFC30, 0xFFFF);
-        ARM9Write16(0x027FFC40, 0x0001);
-
         ARM7BIOSProt = 0x1204;
 
         SPI_Firmware::SetupDirectBoot(false);
+
+        ARM9->CP15Write(0x100, 0x00012078);
+        ARM9->CP15Write(0x200, 0x00000042);
+        ARM9->CP15Write(0x201, 0x00000042);
+        ARM9->CP15Write(0x300, 0x00000002);
+        ARM9->CP15Write(0x502, 0x15111011);
+        ARM9->CP15Write(0x503, 0x05100011);
+        ARM9->CP15Write(0x600, 0x04000033);
+        ARM9->CP15Write(0x601, 0x04000033);
+        ARM9->CP15Write(0x610, 0x0200002B);
+        ARM9->CP15Write(0x611, 0x0200002B);
+        ARM9->CP15Write(0x620, 0x00000000);
+        ARM9->CP15Write(0x621, 0x00000000);
+        ARM9->CP15Write(0x630, 0x08000035);
+        ARM9->CP15Write(0x631, 0x08000035);
+        ARM9->CP15Write(0x640, 0x0300001B);
+        ARM9->CP15Write(0x641, 0x0300001B);
+        ARM9->CP15Write(0x650, 0x00000000);
+        ARM9->CP15Write(0x651, 0x00000000);
+        ARM9->CP15Write(0x660, 0xFFFF001D);
+        ARM9->CP15Write(0x661, 0xFFFF001D);
+        ARM9->CP15Write(0x670, 0x027FF017);
+        ARM9->CP15Write(0x671, 0x027FF017);
+        ARM9->CP15Write(0x910, 0x0300000A);
+        ARM9->CP15Write(0x911, 0x00000020);
     }
 
-    ARM9->CP15Write(0x910, 0x0300000A);
-    ARM9->CP15Write(0x911, 0x00000020);
-    ARM9->CP15Write(0x100, ARM9->CP15Read(0x100) | 0x00050000);
+    NDSCart::SetupDirectBoot(romname);
 
     ARM9->R[12] = NDSCart::Header.ARM9EntryAddress;
     ARM9->R[13] = 0x03002F7C;
@@ -456,6 +506,10 @@ void Reset()
     FILE* f;
     u32 i;
 
+#ifdef JIT_ENABLED
+    EnableJIT = Platform::GetConfigBool(Platform::JIT_Enable);
+#endif
+
     RunningGame = false;
     LastSysClockCycles = 0;
 
@@ -465,9 +519,9 @@ void Reset()
     // DS BIOSes are always loaded, even in DSi mode
     // we need them for DS-compatible mode
 
-    if (Config::ExternalBIOSEnable)
+    if (Platform::GetConfigBool(Platform::ExternalBIOSEnable))
     {
-        f = Platform::OpenLocalFile(Config::BIOS9Path, "rb");
+        f = Platform::OpenLocalFile(Platform::GetConfigString(Platform::BIOS9Path), "rb");
         if (!f)
         {
             printf("ARM9 BIOS not found\n");
@@ -484,7 +538,7 @@ void Reset()
             fclose(f);
         }
 
-        f = Platform::OpenLocalFile(Config::BIOS7Path, "rb");
+        f = Platform::OpenLocalFile(Platform::GetConfigString(Platform::BIOS7Path), "rb");
         if (!f)
         {
             printf("ARM7 BIOS not found\n");
@@ -514,7 +568,6 @@ void Reset()
     if (ConsoleType == 1)
     {
         DSi::LoadBIOS();
-        DSi::LoadNAND();
 
         ARM9ClockShift = 2;
         MainRAMMask = 0xFFFFFF;
@@ -605,6 +658,8 @@ void Reset()
     RTC::Reset();
     Wifi::Reset();
 
+    // TODO: move the SOUNDBIAS/degrade logic to SPU?
+
     // The SOUNDBIAS register does nothing on DSi
     SPU::SetApplyBias(ConsoleType == 0);
 
@@ -617,14 +672,20 @@ void Reset()
         degradeAudio = false;
     }
 
-    if (Config::AudioBitrate == 1) // Always 10-bit
+    int bitrate = Platform::GetConfigInt(Platform::AudioBitrate);
+    if (bitrate == 1) // Always 10-bit
         degradeAudio = true;
-    else if (Config::AudioBitrate == 2) // Always 16-bit
+    else if (bitrate == 2) // Always 16-bit
         degradeAudio = false;
 
     SPU::SetDegrade10Bit(degradeAudio);
 
     AREngine::Reset();
+}
+
+void Start()
+{
+    Running = true;
 }
 
 void Stop()
@@ -634,6 +695,9 @@ void Stop()
     Platform::StopEmu();
     GPU::Stop();
     SPU::Stop();
+
+    if (ConsoleType == 1)
+        DSi::Stop();
 }
 
 bool DoSavestate_Scheduler(Savestate* file)
@@ -661,7 +725,14 @@ bool DoSavestate_Scheduler(Savestate* file)
         DivDone,
         SqrtDone,
 
-        NULL
+        DSi_SDHost::FinishRX,
+        DSi_SDHost::FinishTX,
+        DSi_NWifi::MSTimer,
+        DSi_CamModule::IRQ,
+        DSi_CamModule::TransferScanline,
+        DSi_DSP::DSPCatchUpU32,
+
+        nullptr
     };
 
     int len = Event_MAX;
@@ -671,7 +742,7 @@ bool DoSavestate_Scheduler(Savestate* file)
         {
             SchedEvent* evt = &SchedList[i];
 
-            u32 funcid = -1;
+            u32 funcid = 0xFFFFFFFF;
             if (evt->Func)
             {
                 for (int j = 0; eventfuncs[j]; j++)
@@ -718,7 +789,7 @@ bool DoSavestate_Scheduler(Savestate* file)
                 evt->Func = eventfuncs[funcid];
             }
             else
-                evt->Func = NULL;
+                evt->Func = nullptr;
 
             file->Var64(&evt->Timestamp);
             file->Var32(&evt->Param);
@@ -732,14 +803,25 @@ bool DoSavestate(Savestate* file)
 {
     file->Section("NDSG");
 
-    // TODO:
-    // * do something for bool's (sizeof=1)
-    // * do something for 'loading DSi-mode savestate in DS mode' and vice-versa
-    // * add IE2/IF2 there
+    if (file->Saving)
+    {
+        u32 console = ConsoleType;
+        file->Var32(&console);
+    }
+    else
+    {
+        u32 console;
+        file->Var32(&console);
+        if (console != ConsoleType)
+            return false;
+    }
 
-    file->VarArray(MainRAM, 0x400000);
-    file->VarArray(SharedWRAM, 0x8000);
+    file->VarArray(MainRAM, MainRAMMaxSize);
+    file->VarArray(SharedWRAM, SharedWRAMSize);
     file->VarArray(ARM7WRAM, ARM7WRAMSize);
+
+    //file->VarArray(ARM9BIOS, 0x1000);
+    //file->VarArray(ARM7BIOS, 0x4000);
 
     file->VarArray(ExMemCnt, 2*sizeof(u16));
     file->VarArray(ROMSeed0, 2*8);
@@ -750,6 +832,8 @@ bool DoSavestate(Savestate* file)
     file->VarArray(IME, 2*sizeof(u32));
     file->VarArray(IE, 2*sizeof(u32));
     file->VarArray(IF, 2*sizeof(u32));
+    file->Var32(&IE2);
+    file->Var32(&IF2);
 
     file->Var8(&PostFlag9);
     file->Var8(&PostFlag7);
@@ -794,11 +878,8 @@ bool DoSavestate(Savestate* file)
     file->Var64(&LastSysClockCycles);
     file->Var64(&FrameStartTimestamp);
     file->Var32(&NumFrames);
-    if (file->IsAtleastVersion(7, 1))
-    {
-        file->Var32(&NumLagFrames);
-        file->Bool32(&LagFrameFlag);
-    }
+    file->Var32(&NumLagFrames);
+    file->Bool32(&LagFrameFlag);
 
     // TODO: save KeyInput????
     file->Var16(&KeyCnt);
@@ -817,9 +898,7 @@ bool DoSavestate(Savestate* file)
         InitTimings();
         SetGBASlotTimings();
 
-        u16 tmp = WifiWaitCnt;
-        WifiWaitCnt = 0xFFFF;
-        SetWifiWaitCnt(tmp); // force timing table update
+        UpdateWifiTimings();
     }
 
     for (int i = 0; i < 8; i++)
@@ -829,16 +908,23 @@ bool DoSavestate(Savestate* file)
     ARM7->DoSavestate(file);
 
     NDSCart::DoSavestate(file);
-    GBACart::DoSavestate(file);
+    if (ConsoleType == 0)
+        GBACart::DoSavestate(file);
     GPU::DoSavestate(file);
     SPU::DoSavestate(file);
     SPI::DoSavestate(file);
     RTC::DoSavestate(file);
     Wifi::DoSavestate(file);
 
+    if (ConsoleType == 1)
+        DSi::DoSavestate(file);
+
     if (!file->Saving)
     {
         GPU::SetPowerCnt(PowerControl9);
+
+        SPU::SetPowerCnt(PowerControl7 & 0x0001);
+        Wifi::SetPowerCnt(PowerControl7 & 0x0002);
     }
 
 #ifdef JIT_ENABLED
@@ -857,72 +943,58 @@ void SetConsoleType(int type)
     ConsoleType = type;
 }
 
-bool LoadROM(const u8* romdata, u32 filelength, const char *sram, bool direct)
+bool LoadCart(const u8* romdata, u32 romlen, const u8* savedata, u32 savelen)
 {
-    if (NDSCart::LoadROM(romdata, filelength, sram, direct))
-    {
-        Running = true;
-        return true;
-    }
-    else
-    {
-        printf("Failed to load ROM from archive\n");
+    if (!NDSCart::LoadROM(romdata, romlen))
         return false;
-    }
+
+    if (savedata && savelen)
+        NDSCart::LoadSave(savedata, savelen);
+
+    return true;
 }
 
-bool LoadROM(const char* path, const char* sram, bool direct)
+void LoadSave(const u8* savedata, u32 savelen)
 {
-    if (NDSCart::LoadROM(path, sram, direct))
-    {
-        Running = true;
-        return true;
-    }
-    else
-    {
-        printf("Failed to load ROM %s\n", path);
-        return false;
-    }
+    if (savedata && savelen)
+        NDSCart::LoadSave(savedata, savelen);
 }
 
-bool LoadGBAROM(const char* path, const char* sram)
+void EjectCart()
 {
-    if (GBACart::LoadROM(path, sram))
-    {
-        return true;
-    }
-    else
-    {
-        printf("Failed to load ROM %s\n", path);
-        return false;
-    }
+    NDSCart::EjectCart();
 }
 
-bool LoadGBAROM(const u8* romdata, u32 filelength, const char *filename, const char *sram)
+bool CartInserted()
 {
-    if (GBACart::LoadROM(romdata, filelength, sram))
-    {
-        return true;
-    }
-    else
-    {
-        printf("Failed to load ROM %s from archive\n", filename);
+    return NDSCart::CartInserted;
+}
+
+bool LoadGBACart(const u8* romdata, u32 romlen, const u8* savedata, u32 savelen)
+{
+    if (!GBACart::LoadROM(romdata, romlen))
         return false;
-    }
+
+    if (savedata && savelen)
+        GBACart::LoadSave(savedata, savelen);
+
+    return true;
+}
+
+void LoadGBAAddon(int type)
+{
+    GBACart::LoadAddon(type);
+}
+
+void EjectGBACart()
+{
+    GBACart::EjectCart();
 }
 
 void LoadBIOS()
 {
     Reset();
-    Running = true;
 }
-
-void RelocateSave(const char* path, bool write)
-{
-    printf("SRAM: relocating to %s (write=%s)\n", path, write?"true":"false");
-    NDSCart::RelocateSave(path, write);
-}
-
 
 
 u64 NextTarget()
@@ -1063,8 +1135,6 @@ u32 RunFrame()
             GPU3D::Timestamp-SysTimestamp);
 #endif
         SPU::TransferOutput();
-
-        NDSCart::FlushSRAMFile();
     }
 
     // In the context of TASes, frame count is traditionally the primary measure of emulated time,
@@ -1082,7 +1152,7 @@ u32 RunFrame()
 u32 RunFrame()
 {
 #ifdef JIT_ENABLED
-    if (Config::JIT_Enable)
+    if (EnableJIT)
         return NDS::ConsoleType == 1
             ? RunFrame<true, 1>()
             : RunFrame<true, 0>();
@@ -1127,6 +1197,25 @@ void ScheduleEvent(u32 id, bool periodic, s32 delay, void (*func)(u32), u32 para
             evt->Timestamp = ARM7Timestamp + delay;
     }
 
+    evt->Func = func;
+    evt->Param = param;
+
+    SchedListMask |= (1<<id);
+
+    Reschedule(evt->Timestamp);
+}
+
+void ScheduleEvent(u32 id, u64 timestamp, void (*func)(u32), u32 param)
+{
+    if (SchedListMask & (1<<id))
+    {
+        printf("!! EVENT %d ALREADY SCHEDULED\n", id);
+        return;
+    }
+
+    SchedEvent* evt = &SchedList[id];
+
+    evt->Timestamp = timestamp;
     evt->Func = func;
     evt->Param = param;
 
@@ -1198,15 +1287,30 @@ void SetLidClosed(bool closed)
     }
 }
 
+void CamInputFrame(int cam, u32* data, int width, int height, bool rgb)
+{
+    // TODO: support things like the GBA-slot camera addon
+    // whenever these are emulated
+
+    if (ConsoleType == 1)
+    {
+        switch (cam)
+        {
+        case 0: return DSi_CamModule::Camera0->InputFrame(data, width, height, rgb);
+        case 1: return DSi_CamModule::Camera1->InputFrame(data, width, height, rgb);
+        }
+    }
+}
+
 void MicInputFrame(s16* data, int samples)
 {
     return SPI_TSC::MicInputFrame(data, samples);
 }
 
-int ImportSRAM(u8* data, u32 length)
+/*int ImportSRAM(u8* data, u32 length)
 {
     return NDSCart::ImportSRAM(data, length);
-}
+}*/
 
 
 void Halt()
@@ -1260,15 +1364,29 @@ void MapSharedWRAM(u8 val)
 }
 
 
+void UpdateWifiTimings()
+{
+    if (PowerControl7 & 0x0002)
+    {
+        const int ntimings[4] = {10, 8, 6, 18};
+        u16 val = WifiWaitCnt;
+
+        SetARM7RegionTimings(0x04800, 0x04808, Mem7_Wifi0, 16, ntimings[val & 0x3], (val & 0x4) ? 4 : 6);
+        SetARM7RegionTimings(0x04808, 0x04810, Mem7_Wifi1, 16, ntimings[(val>>3) & 0x3], (val & 0x20) ? 4 : 10);
+    }
+    else
+    {
+        SetARM7RegionTimings(0x04800, 0x04808, Mem7_Wifi0, 32, 1, 1);
+        SetARM7RegionTimings(0x04808, 0x04810, Mem7_Wifi1, 32, 1, 1);
+    }
+}
+
 void SetWifiWaitCnt(u16 val)
 {
     if (WifiWaitCnt == val) return;
 
     WifiWaitCnt = val;
-
-    const int ntimings[4] = {10, 8, 6, 18};
-    SetARM7RegionTimings(0x04800, 0x04808, Mem7_Wifi0, 16, ntimings[val & 0x3], (val & 0x4) ? 4 : 6);
-    SetARM7RegionTimings(0x04808, 0x04810, Mem7_Wifi1, 16, ntimings[(val>>3) & 0x3], (val & 0x20) ? 4 : 10);
+    UpdateWifiTimings();
 }
 
 void SetGBASlotTimings()
@@ -1878,8 +1996,8 @@ void debug(u32 param)
     //for (int i = 0; i < 9; i++)
     //    printf("VRAM %c: %02X\n", 'A'+i, GPU::VRAMCNT[i]);
 
-    /*FILE*
-    shit = fopen("debug/construct.bin", "wb");
+    FILE*
+    shit = fopen("debug/crayon.bin", "wb");
     fwrite(ARM9->ITCM, 0x8000, 1, shit);
     for (u32 i = 0x02000000; i < 0x02400000; i+=4)
     {
@@ -1891,9 +2009,14 @@ void debug(u32 param)
         u32 val = ARM7Read32(i);
         fwrite(&val, 4, 1, shit);
     }
-    fclose(shit);*/
+    for (u32 i = 0x06000000; i < 0x06040000; i+=4)
+    {
+        u32 val = ARM7Read32(i);
+        fwrite(&val, 4, 1, shit);
+    }
+    fclose(shit);
 
-    FILE*
+    /*FILE*
     shit = fopen("debug/directboot9.bin", "wb");
     for (u32 i = 0x02000000; i < 0x04000000; i+=4)
     {
@@ -1901,13 +2024,13 @@ void debug(u32 param)
         fwrite(&val, 4, 1, shit);
     }
     fclose(shit);
-    shit = fopen("debug/directboot7.bin", "wb");
+    shit = fopen("debug/camera7.bin", "wb");
     for (u32 i = 0x02000000; i < 0x04000000; i+=4)
     {
         u32 val = DSi::ARM7Read32(i);
         fwrite(&val, 4, 1, shit);
     }
-    fclose(shit);
+    fclose(shit);*/
 }
 
 
@@ -1972,6 +2095,8 @@ u8 ARM9Read8(u32 addr)
 
 u16 ARM9Read16(u32 addr)
 {
+    addr &= ~0x1;
+
     if ((addr & 0xFFFFF000) == 0xFFFF0000)
     {
         return *(u16*)&ARM9BIOS[addr & 0xFFF];
@@ -2030,6 +2155,8 @@ u16 ARM9Read16(u32 addr)
 
 u32 ARM9Read32(u32 addr)
 {
+    addr &= ~0x3;
+
     if ((addr & 0xFFFFF000) == 0xFFFF0000)
     {
         return *(u32*)&ARM9BIOS[addr & 0xFFF];
@@ -2134,6 +2261,8 @@ void ARM9Write8(u32 addr, u8 val)
 
 void ARM9Write16(u32 addr, u16 val)
 {
+    addr &= ~0x1;
+
     switch (addr & 0xFF000000)
     {
     case 0x02000000:
@@ -2198,6 +2327,8 @@ void ARM9Write16(u32 addr, u16 val)
 
 void ARM9Write32(u32 addr, u32 val)
 {
+    addr &= ~0x3;
+
     switch (addr & 0xFF000000)
     {
     case 0x02000000:
@@ -2333,6 +2464,7 @@ u8 ARM7Read8(u32 addr)
     case 0x04800000:
         if (addr < 0x04810000)
         {
+            if (!(PowerControl7 & (1<<1))) return 0;
             if (addr & 0x1) return Wifi::Read(addr-1) >> 8;
             return Wifi::Read(addr) & 0xFF;
         }
@@ -2362,6 +2494,8 @@ u8 ARM7Read8(u32 addr)
 
 u16 ARM7Read16(u32 addr)
 {
+    addr &= ~0x1;
+
     if (addr < 0x00004000)
     {
         if (ARM7->R[15] >= 0x00004000)
@@ -2397,6 +2531,7 @@ u16 ARM7Read16(u32 addr)
     case 0x04800000:
         if (addr < 0x04810000)
         {
+            if (!(PowerControl7 & (1<<1))) return 0;
             return Wifi::Read(addr);
         }
         break;
@@ -2425,6 +2560,8 @@ u16 ARM7Read16(u32 addr)
 
 u32 ARM7Read32(u32 addr)
 {
+    addr &= ~0x3;
+
     if (addr < 0x00004000)
     {
         if (ARM7->R[15] >= 0x00004000)
@@ -2460,6 +2597,7 @@ u32 ARM7Read32(u32 addr)
     case 0x04800000:
         if (addr < 0x04810000)
         {
+            if (!(PowerControl7 & (1<<1))) return 0;
             return Wifi::Read(addr) | (Wifi::Read(addr+2) << 16);
         }
         break;
@@ -2485,7 +2623,7 @@ u32 ARM7Read32(u32 addr)
               (GBACart::SRAMRead(addr+3) << 24);
     }
 
-    printf("unknown arm7 read32 %08X | %08X\n", addr, ARM7->R[15]);
+    //printf("unknown arm7 read32 %08X | %08X\n", addr, ARM7->R[15]);
     return 0;
 }
 
@@ -2551,12 +2689,15 @@ void ARM7Write8(u32 addr, u8 val)
         return;
     }
 
-    if (ARM7->R[15] > 0x00002F30) // ARM7 BIOS bug
+    //if (ARM7->R[15] > 0x00002F30) // ARM7 BIOS bug
+    if (addr >= 0x01000000)
         printf("unknown arm7 write8 %08X %02X @ %08X\n", addr, val, ARM7->R[15]);
 }
 
 void ARM7Write16(u32 addr, u16 val)
 {
+    addr &= ~0x1;
+
     switch (addr & 0xFF800000)
     {
     case 0x02000000:
@@ -2599,6 +2740,7 @@ void ARM7Write16(u32 addr, u16 val)
     case 0x04800000:
         if (addr < 0x04810000)
         {
+            if (!(PowerControl7 & (1<<1))) return;
             Wifi::Write(addr, val);
             return;
         }
@@ -2628,11 +2770,14 @@ void ARM7Write16(u32 addr, u16 val)
         return;
     }
 
-    printf("unknown arm7 write16 %08X %04X @ %08X\n", addr, val, ARM7->R[15]);
+    if (addr >= 0x01000000)
+        printf("unknown arm7 write16 %08X %04X @ %08X\n", addr, val, ARM7->R[15]);
 }
 
 void ARM7Write32(u32 addr, u32 val)
 {
+    addr &= ~0x3;
+
     switch (addr & 0xFF800000)
     {
     case 0x02000000:
@@ -2675,6 +2820,7 @@ void ARM7Write32(u32 addr, u32 val)
     case 0x04800000:
         if (addr < 0x04810000)
         {
+            if (!(PowerControl7 & (1<<1))) return;
             Wifi::Write(addr, val & 0xFFFF);
             Wifi::Write(addr+2, val >> 16);
             return;
@@ -2708,7 +2854,8 @@ void ARM7Write32(u32 addr, u32 val)
         return;
     }
 
-    printf("unknown arm7 write32 %08X %08X @ %08X\n", addr, val, ARM7->R[15]);
+    if (addr >= 0x01000000)
+        printf("unknown arm7 write32 %08X %08X @ %08X\n", addr, val, ARM7->R[15]);
 }
 
 bool ARM7GetMemRegion(u32 addr, bool write, MemRegion* region)
@@ -2868,7 +3015,8 @@ u8 ARM9IORead8(u32 addr)
         return (u8)(emuID[idx]);
     }
 
-    printf("unknown ARM9 IO read8 %08X %08X\n", addr, ARM9->R[15]);
+    if ((addr & 0xFFFFF000) != 0x04004000)
+        printf("unknown ARM9 IO read8 %08X %08X\n", addr, ARM9->R[15]);
     return 0;
 }
 
@@ -3014,7 +3162,8 @@ u16 ARM9IORead16(u32 addr)
         return GPU3D::Read16(addr);
     }
 
-    printf("unknown ARM9 IO read16 %08X %08X\n", addr, ARM9->R[15]);
+    if ((addr & 0xFFFFF000) != 0x04004000)
+        printf("unknown ARM9 IO read16 %08X %08X\n", addr, ARM9->R[15]);
     return 0;
 }
 
@@ -3157,7 +3306,8 @@ u32 ARM9IORead32(u32 addr)
         return GPU3D::Read32(addr);
     }
 
-    printf("unknown ARM9 IO read32 %08X %08X\n", addr, ARM9->R[15]);
+    if ((addr & 0xFFFFF000) != 0x04004000)
+        printf("unknown ARM9 IO read32 %08X %08X\n", addr, ARM9->R[15]);
     return 0;
 }
 
@@ -3685,6 +3835,7 @@ u8 ARM7IORead8(u32 addr)
     case 0x04000241: return WRAMCnt;
 
     case 0x04000300: return PostFlag7;
+    case 0x04000304: return PowerControl7;
     }
 
     if (addr >= 0x04000400 && addr < 0x04000520)
@@ -3692,7 +3843,8 @@ u8 ARM7IORead8(u32 addr)
         return SPU::Read8(addr);
     }
 
-    printf("unknown ARM7 IO read8 %08X %08X\n", addr, ARM7->R[15]);
+    if ((addr & 0xFFFFF000) != 0x04004000)
+        printf("unknown ARM7 IO read8 %08X %08X\n", addr, ARM7->R[15]);
     return 0;
 }
 
@@ -3767,7 +3919,9 @@ u16 ARM7IORead16(u32 addr)
     case 0x040001C2: return SPI::ReadData();
 
     case 0x04000204: return ExMemCnt[1];
-    case 0x04000206: return WifiWaitCnt;
+    case 0x04000206:
+        if (!(PowerControl7 & (1<<1))) return 0;
+        return WifiWaitCnt;
 
     case 0x04000208: return IME[1];
     case 0x04000210: return IE[1] & 0xFFFF;
@@ -3783,7 +3937,8 @@ u16 ARM7IORead16(u32 addr)
         return SPU::Read16(addr);
     }
 
-    printf("unknown ARM7 IO read16 %08X %08X\n", addr, ARM7->R[15]);
+    if ((addr & 0xFFFFF000) != 0x04004000)
+        printf("unknown ARM7 IO read16 %08X %08X\n", addr, ARM7->R[15]);
     return 0;
 }
 
@@ -3849,6 +4004,7 @@ u32 ARM7IORead32(u32 addr)
     case 0x04000210: return IE[1];
     case 0x04000214: return IF[1];
 
+    case 0x04000304: return PowerControl7;
     case 0x04000308: return ARM7BIOSProt;
 
     case 0x04100000:
@@ -3882,7 +4038,8 @@ u32 ARM7IORead32(u32 addr)
         return SPU::Read32(addr);
     }
 
-    printf("unknown ARM7 IO read32 %08X %08X\n", addr, ARM7->R[15]);
+    if ((addr & 0xFFFFF000) != 0x04004000)
+        printf("unknown ARM7 IO read32 %08X %08X\n", addr, ARM7->R[15]);
     return 0;
 }
 
@@ -4077,6 +4234,7 @@ void ARM7IOWrite16(u32 addr, u16 val)
             return;
         }
     case 0x04000206:
+        if (!(PowerControl7 & (1<<1))) return;
         SetWifiWaitCnt(val);
         return;
 
@@ -4092,7 +4250,15 @@ void ARM7IOWrite16(u32 addr, u16 val)
             PostFlag7 = val & 0x01;
         return;
 
-    case 0x04000304: PowerControl7 = val; return;
+    case 0x04000304:
+        {
+            u16 change = PowerControl7 ^ val;
+            PowerControl7 = val & 0x0003;
+            SPU::SetPowerCnt(val & 0x0001);
+            Wifi::SetPowerCnt(val & 0x0002);
+            if (change & 0x0002) UpdateWifiTimings();
+        }
+        return;
 
     case 0x04000308:
         if (ARM7BIOSProt == 0)
@@ -4214,7 +4380,15 @@ void ARM7IOWrite32(u32 addr, u32 val)
     case 0x04000210: IE[1] = val; UpdateIRQ(1); return;
     case 0x04000214: IF[1] &= ~val; UpdateIRQ(1); return;
 
-    case 0x04000304: PowerControl7 = val & 0xFFFF; return;
+    case 0x04000304:
+        {
+            u16 change = PowerControl7 ^ val;
+            PowerControl7 = val & 0x0003;
+            SPU::SetPowerCnt(val & 0x0001);
+            Wifi::SetPowerCnt(val & 0x0002);
+            if (change & 0x0002) UpdateWifiTimings();
+        }
+        return;
 
     case 0x04000308:
         if (ARM7BIOSProt == 0)

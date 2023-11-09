@@ -24,7 +24,7 @@
 class FileSavestate : public Savestate
 {
 public:
-    FileSavestate(const char* filename, bool save);
+    FileSavestate(std::string filename, bool save);
     ~FileSavestate() override;
 
     void Section(const char* magic) override;

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -21,6 +21,7 @@
 
 #include "DSi_SD.h"
 #include "FIFO.h"
+#include "Savestate.h"
 
 class DSi_NWifi : public DSi_SDDevice
 {
@@ -29,6 +30,8 @@ public:
     ~DSi_NWifi();
 
     void Reset();
+
+    void DoSavestate(Savestate* file);
 
     void SendCMD(u8 cmd, u32 param);
     void SendACMD(u8 cmd, u32 param);

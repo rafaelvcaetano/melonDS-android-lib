@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -20,6 +20,7 @@
 #define DSI_NDMA_H
 
 #include "types.h"
+#include "Savestate.h"
 
 class DSi_NDMA
 {

@@ -10,27 +10,37 @@ set(ANDROID_SOURCES
         MicInputOboeCallback.cpp
         OpenGLRenderer.cpp
         PlatformAndroid.cpp
-        PlatformConfig.cpp
         FileUtils.cpp
         ifaddrs.c
         android_fopen.c
-        SharedConfig.cpp
         AndroidARCodeFile.cpp
+        Config.cpp
+        ROMManager.cpp
+        SaveManager.cpp
+        LocalMultiplayer.cpp
+        retroachievements/RetroAchievements.cpp
 
-        ../frontend/Util_ROM.cpp
+        fd_recv.cpp
+        fd_send.cpp
+
         ../frontend/Util_Video.cpp
         ../frontend/Util_Audio.cpp
-        ../frontend/FrontendUtil.h
         ../frontend/RewindManager.cpp
         ../frontend/mic_blow.h
 )
 
 set(OBOE ./oboe)
+set(RCHEEVOS ./rcheevos)
+set(LIBSLIRP ./libslirp)
 add_subdirectory(${OBOE} ./oboe)
+add_subdirectory(${RCHEEVOS} ./rcheevos)
+add_subdirectory(${LIBSLIRP} ./libslirp)
 add_library(melonDS-lib SHARED ${ANDROID_SOURCES})
 find_library(android-lib android)
 target_include_directories(${PROJECT_NAME} PUBLIC ${OBOE}/include)
+target_include_directories(${PROJECT_NAME} PUBLIC ${RCHEEVOS}/include)
+target_include_directories(${PROJECT_NAME} PUBLIC ${LIBSLIRP}/src)
 target_include_directories(${PROJECT_NAME} PUBLIC ./)
 target_include_directories(${PROJECT_NAME} PUBLIC ../)
 target_include_directories(${PROJECT_NAME} PUBLIC ../frontend)
-target_link_libraries(melonDS-lib ${android-lib} core oboe)
+target_link_libraries(melonDS-lib ${android-lib} core oboe rcheevos libslirp)

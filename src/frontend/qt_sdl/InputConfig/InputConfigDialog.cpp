@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -24,8 +24,8 @@
 #include <SDL2/SDL.h>
 
 #include "types.h"
+#include "Platform.h"
 #include "Config.h"
-#include "PlatformConfig.h"
 
 #include "MapButton.h"
 #include "Input.h"
@@ -70,7 +70,7 @@ const char* hk_general_labels[] =
     "Frame step",
     "Fast forward",
     "Toggle FPS limit",
-    "Toggle Fullscreen",
+    "Toggle fullscreen",
     "Close/open lid",
     "Microphone",
     "Swap screens"
@@ -124,6 +124,12 @@ InputConfigDialog::InputConfigDialog(QWidget* parent) : QDialog(parent), ui(new 
     }
 
     setupKeypadPage();
+
+    int inst = Platform::InstanceID();
+    if (inst > 0)
+        ui->lblInstanceNum->setText(QString("Configuring mappings for instance %1").arg(inst+1));
+    else
+        ui->lblInstanceNum->hide();
 }
 
 InputConfigDialog::~InputConfigDialog()

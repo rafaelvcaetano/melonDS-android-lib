@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura, RSDuck
+    Copyright 2016-2022 melonDS team
 
     This file is part of melonDS.
 
@@ -33,12 +33,18 @@ namespace ARMJIT
 
 typedef void (*JitBlockEntry)();
 
+extern int MaxBlockSize;
+extern bool LiteralOptimizations;
+extern bool BranchOptimizations;
+extern bool FastMemory;
+
 void Init();
 void DeInit();
 
 void Reset();
 
 void CheckAndInvalidateITCM();
+void CheckAndInvalidateWVRAM(int bank);
 
 void InvalidateByAddr(u32 pseudoPhysical);
 
