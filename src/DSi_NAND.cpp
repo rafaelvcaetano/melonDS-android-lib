@@ -715,7 +715,7 @@ bool ExportFile(const char* path, const char* out)
 
     u32 len = f_size(&file);
 
-    fout = fopen(out, "wb");
+    fout = Platform::OpenFile(out, "wb");
     if (!fout)
     {
         f_close(&file);
