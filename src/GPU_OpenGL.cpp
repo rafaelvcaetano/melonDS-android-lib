@@ -45,7 +45,6 @@ bool GLCompositor::Init()
 
         glBindAttribLocation(CompShader[i][2], 0, "vPosition");
         glBindAttribLocation(CompShader[i][2], 1, "vTexcoord");
-        glBindFragDataLocation(CompShader[i][2], 0, "oColor");
 
         if (!OpenGL::LinkShaderProgram(CompShader[i]))
             return false;
@@ -194,8 +193,6 @@ void GLCompositor::RenderFrame()
 
     glViewport(0, 0, ScreenW, ScreenH);
 
-    glClear(GL_COLOR_BUFFER_BIT);
-
     // TODO: select more shaders (filtering, etc)
     OpenGL::UseShaderProgram(CompShader[0]);
     glUniform1ui(CompScaleLoc[0], Scale);
@@ -224,7 +221,8 @@ void GLCompositor::RenderFrame()
 
 void GLCompositor::BindOutputTexture(int buf)
 {
-    glBindTexture(GL_TEXTURE_2D, CompScreenOutputTex[buf]);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, CompScreenOutputFB[buf]);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
 }
 
 }

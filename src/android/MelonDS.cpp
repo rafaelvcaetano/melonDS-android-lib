@@ -5,6 +5,8 @@
 #include "MelonAudioStreamErrorCallback.h"
 #include "MicInputOboeCallback.h"
 #include "AndroidARCodeFile.h"
+#include "OpenGLContext.h"
+#include "MelonLog.h"
 #include "../NDS.h"
 #include "../GPU.h"
 #include "../GPU3D.h"
@@ -28,12 +30,16 @@
 
 #define MIC_BUFFER_SIZE 2048
 
+const char* MELONDS_TAG = "melonDS";
+
 oboe::AudioStream *audioStream;
 oboe::AudioStreamErrorCallback *audioStreamErrorCallback;
 oboe::AudioStream *micInputStream;
 OboeCallback *outputCallback;
 MicInputOboeCallback *micInputCallback;
 AndroidARCodeFile *arCodeFile;
+OpenGLContext *openGlContext;
+bool isRenderConfigurationDirty = false;
 
 namespace MelonDSAndroid
 {
@@ -60,6 +66,8 @@ namespace MelonDSAndroid
     void cleanupAudioOutputStream();
     void setupMicInputStream();
     void resetAudioOutputStream();
+    bool setupOpenGlContext();
+    void cleanupOpenGlContext();
     void copyString(char** dest, const char* source);
 
     /**
@@ -141,10 +149,19 @@ namespace MelonDSAndroid
             setupMicInputStream();
         }
 
+        if (currentConfiguration.renderer == 1)
+        {
+            if (!setupOpenGlContext())
+                currentConfiguration.renderer = 0;
+        }
+
         NDS::Init();
-        GPU::InitRenderer(0);
-        GPU::SetRenderSettings(0, currentConfiguration.renderSettings);
+        GPU::InitRenderer(currentConfiguration.renderer);
+        GPU::SetRenderSettings(currentConfiguration.renderer, currentConfiguration.renderSettings);
         SPU::SetInterpolation(currentConfiguration.audioInterpolation);
+
+        if (currentConfiguration.renderer == 1)
+            openGlContext->Release();
     }
 
     void setCodeList(std::list<Cheat> cheats)
@@ -194,13 +211,15 @@ namespace MelonDSAndroid
      *
      * @param emulatorConfiguration The new emulator configuration
      */
-    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
+    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration, u32* frameBuffer) {
+        textureBuffer = frameBuffer;
+
         Config::AudioBitrate = emulatorConfiguration.audioBitrate;
-        GPU::SetRenderSettings(0, emulatorConfiguration.renderSettings);
         SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
         Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
         Config::RewindCaptureSpacingSeconds = emulatorConfiguration.rewindCaptureSpacingSeconds;
         Config::RewindLengthSeconds = emulatorConfiguration.rewindLengthSeconds;
+        isRenderConfigurationDirty = true;
 
         if (emulatorConfiguration.rewindEnabled) {
             RewindManager::TrimRewindWindowIfRequired();
@@ -296,11 +315,40 @@ namespace MelonDSAndroid
         if (micInputStream != NULL)
             micInputStream->requestStart();
 
+        if (openGlContext != nullptr)
+        {
+            if (!openGlContext->Use())
+            {
+                LOG_ERROR(MELONDS_TAG, "Failed to use OpenGL context");
+                currentConfiguration.renderer = 0;
+                isRenderConfigurationDirty = true;
+            }
+        }
+
         frame = 0;
     }
 
     u32 loop()
     {
+        if (isRenderConfigurationDirty) {
+            if (GPU::Renderer != currentConfiguration.renderer)
+            {
+                // Setup or teardown OpenGL context depending on the new renderer
+                if (currentConfiguration.renderer == 0)
+                {
+                    cleanupOpenGlContext();
+                }
+                else
+                {
+                    if (!setupOpenGlContext())
+                        currentConfiguration.renderer = 0;
+                }
+            }
+
+            GPU::SetRenderSettings(currentConfiguration.renderer, currentConfiguration.renderSettings);
+            isRenderConfigurationDirty = false;
+        }
+
         u32 nLines = NDS::RunFrame();
         RetroAchievements::FrameUpdate();
 
@@ -311,10 +359,24 @@ namespace MelonDSAndroid
             ROMManager::GBASave->CheckFlush();
 
         int frontbuf = GPU::FrontBuffer;
-        if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
+        if (GPU::Renderer == 0)
         {
-            memcpy(textureBuffer, GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
-            memcpy(&textureBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
+            if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
+            {
+                memcpy(textureBuffer, GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
+                memcpy(&textureBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
+            }
+        }
+        else
+        {
+            int scaledWidth = 256 * currentConfiguration.renderSettings.GL_ScaleFactor;
+            int scaledHeight = 192 * currentConfiguration.renderSettings.GL_ScaleFactor;
+            int scaledPadding = 2 * currentConfiguration.renderSettings.GL_ScaleFactor;
+
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            GPU::CurGLCompositor->BindOutputTexture(frontbuf);
+            glReadPixels(0, 0, scaledWidth, scaledHeight, GL_RGBA, GL_UNSIGNED_BYTE, textureBuffer);
+            glReadPixels(0, scaledHeight + scaledPadding, scaledWidth, scaledHeight, GL_RGBA, GL_UNSIGNED_BYTE, &textureBuffer[scaledWidth * scaledHeight]);
         }
         frame++;
 
@@ -527,6 +589,7 @@ namespace MelonDSAndroid
         currentGbaSramPath = NULL;
 
         cleanupAudioOutputStream();
+        cleanupOpenGlContext();
 
         if (micInputStream != NULL) {
             micInputStream->requestStop();
@@ -637,6 +700,43 @@ namespace MelonDSAndroid
         if (audioStream != NULL) {
             audioStream->requestStart();
         }
+    }
+
+    bool setupOpenGlContext()
+    {
+        if (openGlContext != nullptr)
+            return true;
+
+        openGlContext = new OpenGLContext();
+        if (!openGlContext->InitContext())
+        {
+            LOG_ERROR(MELONDS_TAG, "Failed to init OpenGL context");
+            openGlContext->DeInit();
+            currentConfiguration.renderer = 0;
+            return false;
+        }
+        else
+        {
+            LOG_DEBUG(MELONDS_TAG, "OpenGL context initialised");
+            if (!openGlContext->Use())
+            {
+                LOG_ERROR(MELONDS_TAG, "Failed to use OpenGL context");
+                cleanupOpenGlContext();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void cleanupOpenGlContext()
+    {
+        if (openGlContext == nullptr)
+            return;
+
+        openGlContext->Release();
+        openGlContext->DeInit();
+        delete openGlContext;
+        openGlContext = nullptr;
     }
 
     void copyString(char** dest, const char* source)
