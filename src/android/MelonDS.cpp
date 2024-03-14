@@ -140,14 +140,6 @@ namespace MelonDSAndroid
         textureBuffer = textureBufferPointer;
         LocalMultiplayer::SetIsMasterInstance(isMasterInstance);
 
-        if (currentConfiguration.soundEnabled) {
-            setupAudioOutputStream(currentConfiguration.audioLatency, currentConfiguration.volume);
-        }
-
-        if (currentConfiguration.micSource == 2) {
-            setupMicInputStream();
-        }
-
         if (currentConfiguration.renderer == 1)
         {
             if (!setupOpenGlContext())
@@ -155,6 +147,14 @@ namespace MelonDSAndroid
         }
 
         NDS::Init();
+
+        if (currentConfiguration.soundEnabled) {
+            setupAudioOutputStream(currentConfiguration.audioLatency, currentConfiguration.volume);
+        }
+        if (currentConfiguration.micSource == 2) {
+            setupMicInputStream();
+        }
+
         GPU::InitRenderer(currentConfiguration.renderer);
         GPU::SetRenderSettings(currentConfiguration.renderer, currentConfiguration.renderSettings);
         SPU::SetInterpolation(currentConfiguration.audioInterpolation);
