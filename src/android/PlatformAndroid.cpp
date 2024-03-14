@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <semaphore.h>
 #include <pthread.h>
+#include <unistd.h>
 #include "pcap/pcap.h"
 #include "Platform.h"
 #include "MelonDS.h"
@@ -197,9 +198,8 @@ namespace Platform
         {
             if (mustexist)
             {
-                FILE* file = fopen(path.c_str(), mode.c_str());
-                if (file)
-                    return freopen(path.c_str(), mode.c_str(), file);
+                if (access(path.c_str(), F_OK) == 0)
+                    return fopen(path.c_str(), mode.c_str());
                 else
                     return nullptr;
             }
@@ -318,12 +318,6 @@ namespace Platform
 
     bool Mutex_TryLock(Mutex* mutex) {
         return pthread_mutex_trylock((AndroidMutex*) mutex) == 0;
-    }
-
-    void* GL_GetProcAddress(const char* proc)
-    {
-        return NULL;
-        //return eglGetProcAddress(proc);
     }
 
     void WriteNDSSave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen)
