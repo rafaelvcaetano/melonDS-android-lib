@@ -52,6 +52,7 @@ namespace MelonDSAndroid {
     } EmulatorConfiguration;
 
     typedef struct {
+        bool enable;
         u32 codeLength;
         u32 code[2*64];
     } Cheat;
