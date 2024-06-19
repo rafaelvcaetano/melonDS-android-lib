@@ -279,7 +279,6 @@ namespace MelonDSAndroid
                 return 1;
         }
 
-        RetroAchievements::Init(retroAchievementsCallback);
         NDS::Start();
 
         return 0;
@@ -324,6 +323,7 @@ namespace MelonDSAndroid
             }
         }
 
+        RetroAchievements::Init(retroAchievementsCallback);
         frame = 0;
     }
 
