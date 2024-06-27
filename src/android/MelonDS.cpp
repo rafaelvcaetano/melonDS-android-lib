@@ -56,9 +56,7 @@ namespace MelonDSAndroid
     // Variables used to keep the current state so that emulation can be reset
     char* currentRomPath = NULL;
     char* currentSramPath = NULL;
-    char* currentGbaRomPath = NULL;
-    char* currentGbaSramPath = NULL;
-    bool currentLoadGbaRom;
+    RomGbaSlotConfig* currentGbaSlotConfig = nullptr;
     RunMode currentRunMode;
 
     void setupAudioOutputStream(int audioLatency, int volume);
@@ -67,6 +65,7 @@ namespace MelonDSAndroid
     void resetAudioOutputStream();
     bool setupOpenGlContext();
     void cleanupOpenGlContext();
+    void updateCurrentGbaSlotConfig(RomGbaSlotConfig* newConfig);
     void copyString(char** dest, const char* source);
 
     /**
@@ -259,13 +258,11 @@ namespace MelonDSAndroid
         currentConfiguration = emulatorConfiguration;
     }
 
-    int loadRom(char* romPath, char* sramPath, bool loadGbaRom, char* gbaRom, char* gbaSram)
+    int loadRom(char* romPath, char* sramPath, RomGbaSlotConfig* gbaSlotConfig)
     {
         copyString(&currentRomPath, romPath);
         copyString(&currentSramPath, sramPath);
-        copyString(&currentGbaRomPath, gbaRom);
-        copyString(&currentGbaSramPath, gbaSram);
-        currentLoadGbaRom = loadGbaRom;
+        updateCurrentGbaSlotConfig(gbaSlotConfig);
         currentRunMode = ROM;
 
         bool loaded = ROMManager::LoadROM(romPath, sramPath, true);
@@ -273,10 +270,18 @@ namespace MelonDSAndroid
             return 2;
 
         // Slot 2 is not supported in DSi
-        if (loadGbaRom && NDS::ConsoleType == 0)
+        if (NDS::ConsoleType == 0)
         {
-            if (!ROMManager::LoadGBAROM(gbaRom, gbaSram))
-                return 1;
+            if (gbaSlotConfig->type == GBA_ROM)
+            {
+                RomGbaSlotConfigGbaRom* gbaRomConfig = (RomGbaSlotConfigGbaRom*) gbaSlotConfig;
+                if (!ROMManager::LoadGBAROM(gbaRomConfig->romPath, gbaRomConfig->savePath))
+                    return 1;
+            }
+            else if (gbaSlotConfig->type == MEMORY_EXPANSION)
+            {
+                ROMManager::LoadGBAAddon(NDS::GBAAddon_RAMExpansion);
+            }
         }
 
         NDS::Start();
@@ -410,7 +415,7 @@ namespace MelonDSAndroid
         if (currentRunMode == ROM) {
             RetroAchievements::Reset();
             NDS::Reset();
-            int result = loadRom(currentRomPath, currentSramPath, currentLoadGbaRom, currentGbaRomPath, currentGbaSramPath);
+            int result = loadRom(currentRomPath, currentSramPath, currentGbaSlotConfig);
             if (result != 2 && arCodeFile != NULL) {
                 AREngine::SetCodeFile(arCodeFile);
             }
@@ -567,12 +572,8 @@ namespace MelonDSAndroid
 
         free(currentRomPath);
         free(currentSramPath);
-        free(currentGbaRomPath);
-        free(currentGbaSramPath);
         currentRomPath = NULL;
         currentSramPath = NULL;
-        currentGbaRomPath = NULL;
-        currentGbaSramPath = NULL;
 
         cleanupAudioOutputStream();
         cleanupOpenGlContext();
@@ -590,6 +591,12 @@ namespace MelonDSAndroid
         if (arCodeFile != NULL) {
             delete arCodeFile;
             arCodeFile = NULL;
+        }
+
+        if (currentGbaSlotConfig != NULL)
+        {
+            delete currentGbaSlotConfig;
+            currentGbaSlotConfig = NULL;
         }
 
         assetManager = NULL;
@@ -723,6 +730,29 @@ namespace MelonDSAndroid
         openGlContext->DeInit();
         delete openGlContext;
         openGlContext = nullptr;
+    }
+
+    void updateCurrentGbaSlotConfig(RomGbaSlotConfig* newConfig)
+    {
+        if (currentGbaSlotConfig != nullptr)
+            delete currentGbaSlotConfig;
+
+        if (newConfig->type == RomGbaSlotConfigType::GBA_ROM)
+        {
+            RomGbaSlotConfigGbaRom* gbaRomConfig = new RomGbaSlotConfigGbaRom;
+            gbaRomConfig->romPath = ((RomGbaSlotConfigGbaRom*) newConfig)->romPath;
+            gbaRomConfig->savePath = ((RomGbaSlotConfigGbaRom*) newConfig)->savePath;
+
+            currentGbaSlotConfig = (RomGbaSlotConfig*) gbaRomConfig;
+        }
+        else if (newConfig->type == RomGbaSlotConfigType::MEMORY_EXPANSION)
+        {
+            currentGbaSlotConfig = (RomGbaSlotConfig*) new RomGbaSlotConfigMemoryExpansion;
+        }
+        else
+        {
+            currentGbaSlotConfig = (RomGbaSlotConfig*) new RomGbaSlotConfigNone;
+        }
     }
 
     void copyString(char** dest, const char* source)

@@ -5,6 +5,7 @@
 #include "AndroidFileHandler.h"
 #include "AndroidCameraHandler.h"
 #include "RewindManager.h"
+#include "RomGbaSlotConfig.h"
 #include "retroachievements/RAAchievement.h"
 #include "retroachievements/RACallback.h"
 #include "../types.h"
@@ -84,13 +85,11 @@ namespace MelonDSAndroid {
      *
      * @param romPath The path to the NDS rom
      * @param sramPath The path to the rom's SRAM file
-     * @param loadGbaRom If a GBA ROM must also be loaded
-     * @param gbaRom The path to the GBA ROM
-     * @param gbaSram The path to the GBA rom's SRAM file
+     * @param gbaSlotConfig The config to be used for the GBA slot
      * @return The load result. 0 if everything was loaded successfully, 1 if the NDS ROM was loaded but the GBA ROM
      * failed to load, 2 if the NDS ROM failed to load
      */
-    extern int loadRom(char* romPath, char* sramPath, bool loadGbaRom, char* gbaRom, char* gbaSram);
+    extern int loadRom(char* romPath, char* sramPath, RomGbaSlotConfig* gbaSlotConfig);
     extern int bootFirmware();
     extern void start();
     extern u32 loop();
