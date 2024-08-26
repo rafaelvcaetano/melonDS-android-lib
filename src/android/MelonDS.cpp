@@ -176,7 +176,7 @@ namespace MelonDSAndroid
             Cheat& cheat = *it;
 
             ARCode code = {
-                    .Enabled = true,
+                    .Enabled = cheat.enable,
                     .CodeLen = cheat.codeLength
             };
             memcpy(code.Code, cheat.code, sizeof(code.Code));
