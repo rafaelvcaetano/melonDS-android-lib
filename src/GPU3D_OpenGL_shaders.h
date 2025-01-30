@@ -156,6 +156,7 @@ void main()
 const char* kFinalPassFogFS = kShaderHeader R"(
 
 precision highp float;
+precision highp int;
 
 uniform sampler2D DepthBuffer;
 uniform sampler2D AttrBuffer;
