@@ -219,10 +219,9 @@ void GLCompositor::RenderFrame()
     glDrawArrays(GL_TRIANGLES, 0, 4*3);
 }
 
-void GLCompositor::BindOutputTexture(int buf)
+GLuint GLCompositor::GetOutputTexture(int buf)
 {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, CompScreenOutputFB[buf]);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    return CompScreenOutputTex[buf];
 }
 
 }

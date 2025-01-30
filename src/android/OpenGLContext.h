@@ -7,7 +7,7 @@
 class OpenGLContext
 {
 public:
-    bool InitContext();
+    bool InitContext(long sharedGlContext);
     bool Use();
     void Release();
     void DeInit();

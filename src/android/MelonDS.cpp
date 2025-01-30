@@ -23,6 +23,7 @@
 #include "ROMManager.h"
 #include "AndroidCameraHandler.h"
 #include "LocalMultiplayer.h"
+#include "ScreenshotRenderer.h"
 #include "retroachievements/RetroAchievements.h"
 #include "retroachievements/RACallback.h"
 #include <android/asset_manager.h>
@@ -38,12 +39,14 @@ oboe::AudioStream *micInputStream;
 OboeCallback *outputCallback;
 MicInputOboeCallback *micInputCallback;
 AndroidARCodeFile *arCodeFile;
+FrameRenderedCallback* frameRenderedCallback;
 OpenGLContext *openGlContext;
+ScreenshotRenderer *screenshotRenderer;
 bool isRenderConfigurationDirty = false;
 
 namespace MelonDSAndroid
 {
-    u32* textureBuffer;
+    GLuint softwareRenderingTexture;
     int frame = 0;
     int actualMicSource = 0;
     RetroAchievements::RACallback* retroAchievementsCallback;
@@ -63,7 +66,7 @@ namespace MelonDSAndroid
     void cleanupAudioOutputStream();
     void setupMicInputStream();
     void resetAudioOutputStream();
-    bool setupOpenGlContext();
+    bool setupOpenGlContext(long sharedGlContext);
     void cleanupOpenGlContext();
     void updateCurrentGbaSlotConfig(RomGbaSlotConfig* newConfig);
     void copyString(char** dest, const char* source);
@@ -132,18 +135,14 @@ namespace MelonDSAndroid
         RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
     }
 
-    void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* textureBufferPointer, bool isMasterInstance) {
+    void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, FrameRenderedCallback* androidFrameRenderedCallback, u32* screenshotBufferPointer, long glContext, bool isMasterInstance) {
         assetManager = androidAssetManager;
         cameraHandler = androidCameraHandler;
         retroAchievementsCallback = raCallback;
-        textureBuffer = textureBufferPointer;
+        frameRenderedCallback = androidFrameRenderedCallback;
         LocalMultiplayer::SetIsMasterInstance(isMasterInstance);
-
-        if (currentConfiguration.renderer == 1)
-        {
-            if (!setupOpenGlContext())
-                currentConfiguration.renderer = 0;
-        }
+        setupOpenGlContext(glContext);
+        screenshotRenderer = new ScreenshotRenderer(screenshotBufferPointer);
 
         NDS::Init();
 
@@ -158,8 +157,7 @@ namespace MelonDSAndroid
         GPU::SetRenderSettings(currentConfiguration.renderer, currentConfiguration.renderSettings);
         SPU::SetInterpolation(currentConfiguration.audioInterpolation);
 
-        if (currentConfiguration.renderer == 1)
-            openGlContext->Release();
+        openGlContext->Release();
     }
 
     void setCodeList(std::list<Cheat> cheats)
@@ -209,9 +207,7 @@ namespace MelonDSAndroid
      *
      * @param emulatorConfiguration The new emulator configuration
      */
-    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration, u32* frameBuffer) {
-        textureBuffer = frameBuffer;
-
+    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
         Config::AudioBitrate = emulatorConfiguration.audioBitrate;
         SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
         Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
@@ -318,15 +314,7 @@ namespace MelonDSAndroid
         if (micInputStream != NULL)
             micInputStream->requestStart();
 
-        if (openGlContext != nullptr)
-        {
-            if (!openGlContext->Use())
-            {
-                LOG_ERROR(MELONDS_TAG, "Failed to use OpenGL context");
-                currentConfiguration.renderer = 0;
-                isRenderConfigurationDirty = true;
-            }
-        }
+        openGlContext->Use();
 
         RetroAchievements::Init(retroAchievementsCallback);
         frame = 0;
@@ -335,20 +323,6 @@ namespace MelonDSAndroid
     u32 loop()
     {
         if (isRenderConfigurationDirty) {
-            if (GPU::Renderer != currentConfiguration.renderer)
-            {
-                // Setup or teardown OpenGL context depending on the new renderer
-                if (currentConfiguration.renderer == 0)
-                {
-                    cleanupOpenGlContext();
-                }
-                else
-                {
-                    if (!setupOpenGlContext())
-                        currentConfiguration.renderer = 0;
-                }
-            }
-
             GPU::SetRenderSettings(currentConfiguration.renderer, currentConfiguration.renderSettings);
             isRenderConfigurationDirty = false;
         }
@@ -363,27 +337,31 @@ namespace MelonDSAndroid
             ROMManager::GBASave->CheckFlush();
 
         int frontbuf = GPU::FrontBuffer;
+        int targetTexture;
         if (GPU::Renderer == 0)
         {
             if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
             {
-                memcpy(textureBuffer, GPU::Framebuffer[frontbuf][0], 256 * 192 * 4);
-                memcpy(&textureBuffer[256 * 192], GPU::Framebuffer[frontbuf][1], 256 * 192 * 4);
+                glBindTexture(GL_TEXTURE_2D, softwareRenderingTexture);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192 + 2, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
+                glBindTexture(GL_TEXTURE_2D, 0);
             }
+            targetTexture = softwareRenderingTexture;
         }
         else
         {
-            int scaledWidth = 256 * currentConfiguration.renderSettings.GL_ScaleFactor;
-            int scaledHeight = 192 * currentConfiguration.renderSettings.GL_ScaleFactor;
-            int scaledPadding = 2 * currentConfiguration.renderSettings.GL_ScaleFactor;
-
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-            GPU::CurGLCompositor->BindOutputTexture(frontbuf);
-            glReadPixels(0, 0, scaledWidth, scaledHeight, GL_RGBA, GL_UNSIGNED_BYTE, textureBuffer);
-            glReadPixels(0, scaledHeight + scaledPadding, scaledWidth, scaledHeight, GL_RGBA, GL_UNSIGNED_BYTE, &textureBuffer[scaledWidth * scaledHeight]);
+            targetTexture = GPU::CurGLCompositor->GetOutputTexture(frontbuf);
         }
-        frame++;
 
+        // Capture screenshot
+        screenshotRenderer->renderScreenshot();
+
+        GLsync syncFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        // Get memory address of syncFence and send it to the Java side
+        frameRenderedCallback->onFrameRendered((long) syncFence, (int) targetTexture);
+
+        frame++;
         if (RewindManager::ShouldCaptureState(frame))
         {
             auto nextRewindState = RewindManager::GetNextRewindSaveState(frame);
@@ -510,7 +488,7 @@ namespace MelonDSAndroid
                 success = RetroAchievements::DoSavestate(savestate);
 
             if (success)
-                memcpy(rewindSaveState.screenshot, textureBuffer, 256 * 384 * 4);
+                memcpy(rewindSaveState.screenshot, screenshotRenderer->getScreenshot(), 256 * 384 * 4);
 
             delete savestate;
             return success;
@@ -574,6 +552,7 @@ namespace MelonDSAndroid
         free(currentSramPath);
         currentRomPath = NULL;
         currentSramPath = NULL;
+        delete screenshotRenderer;
 
         cleanupAudioOutputStream();
         cleanupOpenGlContext();
@@ -600,7 +579,8 @@ namespace MelonDSAndroid
         }
 
         assetManager = NULL;
-        textureBuffer = NULL;
+        frameRenderedCallback = NULL;
+        screenshotRenderer = NULL;
     }
 
     void setupAudioOutputStream(int audioLatency, int volume)
@@ -695,13 +675,13 @@ namespace MelonDSAndroid
         }
     }
 
-    bool setupOpenGlContext()
+    bool setupOpenGlContext(long sharedGlContext)
     {
         if (openGlContext != nullptr)
             return true;
 
         openGlContext = new OpenGLContext();
-        if (!openGlContext->InitContext())
+        if (!openGlContext->InitContext(sharedGlContext))
         {
             LOG_ERROR(MELONDS_TAG, "Failed to init OpenGL context");
             openGlContext->DeInit();
@@ -718,6 +698,19 @@ namespace MelonDSAndroid
                 return false;
             }
         }
+
+        // Generate texture for software rendering
+        glGenTextures(1, &softwareRenderingTexture);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, softwareRenderingTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        // Add 2 lines of spacing between the screens to match OpenGL rendering
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 192 * 2 + 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
         return true;
     }
 
@@ -726,6 +719,7 @@ namespace MelonDSAndroid
         if (openGlContext == nullptr)
             return;
 
+        glDeleteTextures(1, &softwareRenderingTexture);
         openGlContext->Release();
         openGlContext->DeInit();
         delete openGlContext;

@@ -40,7 +40,7 @@ public:
 
     void Stop();
     void RenderFrame();
-    void BindOutputTexture(int buf);
+    GLuint GetOutputTexture(int buf);
 private:
 
     int Scale;

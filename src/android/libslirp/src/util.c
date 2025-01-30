@@ -31,6 +31,7 @@
 #include <glib.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <string.h>
 
 #if defined(_WIN32)
 int slirp_inet_aton(const char *cp, struct in_addr *ia)
@@ -373,7 +374,10 @@ static int slirp_vsnprintf(char *str, size_t size,
     int rv = g_vsnprintf(str, size, format, args);
 
     if (rv < 0) {
-        g_error("g_vsnprintf() failed: %s", g_strerror(errno));
+        char buffer[64];
+        if (strerror_r(errno, buffer, sizeof(buffer)) == 0) {
+            g_error("g_vsnprintf() failed: %s", buffer);
+        }
     }
 
     return rv;

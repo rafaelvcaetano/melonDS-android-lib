@@ -35,7 +35,7 @@ void logGlError()
     }
 }
 
-bool OpenGLContext::InitContext()
+bool OpenGLContext::InitContext(long sharedGlContext)
 {
     display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (display == EGL_NO_DISPLAY)
@@ -134,9 +134,10 @@ bool OpenGLContext::InitContext()
         LOG_DEBUG(OPENGL_CONTEXT_TAG, "\tSTENCIL: %d", stencil);
     }
 
+    // Display buffer size doesn't matter since it's not really used
     EGLint surfaceAttributes[] = {
-        EGL_WIDTH, 256,
-        EGL_HEIGHT, 192 * 2 + 2,
+        EGL_WIDTH, 2,
+        EGL_HEIGHT, 2,
         EGL_NONE
     };
 
@@ -153,7 +154,8 @@ bool OpenGLContext::InitContext()
         EGL_NONE
     };
 
-    glContext = eglCreateContext(display, configs[selectedConfigNumber], nullptr, contextAttributes);
+    EGLContext sharedContext = reinterpret_cast<EGLContext>(sharedGlContext);
+    glContext = eglCreateContext(display, configs[selectedConfigNumber], sharedContext, contextAttributes);
     if (glContext == EGL_NO_CONTEXT)
     {
         LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to create context");

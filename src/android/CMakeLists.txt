@@ -18,6 +18,7 @@ set(ANDROID_SOURCES
         ROMManager.cpp
         SaveManager.cpp
         LocalMultiplayer.cpp
+        ScreenshotRenderer.cpp
         retroachievements/RetroAchievements.cpp
 
         fd_recv.cpp
