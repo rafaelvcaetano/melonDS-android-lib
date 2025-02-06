@@ -358,7 +358,8 @@ namespace MelonDSAndroid
         screenshotRenderer->renderScreenshot();
 
         GLsync syncFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        // Get memory address of syncFence and send it to the Java side
+        glFlush();
+        // Get memory address of syncFence and send it to the frontend
         frameRenderedCallback->onFrameRendered((long) syncFence, (int) targetTexture);
 
         frame++;
