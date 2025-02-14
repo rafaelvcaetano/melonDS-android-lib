@@ -471,7 +471,7 @@ vec4 TextureFetch_Direct(ivec2 addr, ivec4 st, int wrapmode)
 vec4 TextureLookup_Nearest(vec2 st)
 {
     int vramOffset = int(fPolygonAttr.y);
-    int attr = int(fPolygonAttr.z << 16);
+    int attr = int(fPolygonAttr.z << 16); // Shift just to reuse same code as in original source. Same below
     int paladdr = int(fPolygonAttr.z >> 16);
 
     float alpha0;
@@ -501,7 +501,7 @@ vec4 TextureLookup_Linear(vec2 texcoord)
     vec2 fracpart = fract(texcoord);
 
     int vramOffset = int(fPolygonAttr.y);
-    int attr = int(fPolygonAttr.z << 16);
+    int attr = int(fPolygonAttr.z << 16);  // Shift just to reuse same code as in original source. Same below
     int paladdr = int(fPolygonAttr.z >> 16);
 
     float alpha0;
@@ -627,7 +627,7 @@ vec4 FinalColor()
         }
     }
 
-    if ((((fPolygonAttr.z >> 26) & 0x7) == 0) || ((uDispCnt & (1<<0)) == 0))
+    if ((((fPolygonAttr.z >> 10) & 0x7) == 0) || ((uDispCnt & (1<<0)) == 0))
     {
         // no texture
         col = vcol;
