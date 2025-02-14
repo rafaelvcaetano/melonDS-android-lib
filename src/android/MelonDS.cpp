@@ -49,6 +49,7 @@ namespace MelonDSAndroid
     GLuint softwareRenderingTexture;
     int frame = 0;
     int actualMicSource = 0;
+    int oldMicSource = 0;
     RetroAchievements::RACallback* retroAchievementsCallback;
     AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
@@ -406,6 +407,19 @@ namespace MelonDSAndroid
             int result = bootFirmware();
             return result == 0;
         }
+    }
+
+    void enableMic()
+    {
+        actualMicSource = oldMicSource;
+        updateMic();
+    }
+
+    void disableMic()
+    {
+        oldMicSource = actualMicSource;
+        actualMicSource = 0;
+        updateMic();
     }
 
     void updateMic()
