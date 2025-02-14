@@ -461,9 +461,10 @@ u32* GLRenderer::SetupVertex(Polygon* poly, int vid, Vertex* vtx, u32 vtxattr, u
 
     *vptr++ = (u16)vtx->TexCoords[0] | ((u16)vtx->TexCoords[1] << 16);
 
+    // Split TexParam into 2 because some GPUs don't have 32 bit ints. TexPalette only uses 13 bits
     *vptr++ = vtxattr | (zshift << 16);
-    *vptr++ = poly->TexParam;
-    *vptr++ = poly->TexPalette;
+    *vptr++ = poly->TexParam & 0xFFFF;
+    *vptr++ = (poly->TexParam >> 16 ) | (poly->TexPalette << 16);
 
     return vptr;
 }
@@ -637,9 +638,10 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
 
                 *vptr++ = (u16)cS | ((u16)cT << 16);
 
+                // Split TexParam into 2 because some GPUs don't have 32 bit ints. TexPalette only uses 13 bits
                 *vptr++ = vtxattr | (zshift << 16);
-                *vptr++ = poly->TexParam;
-                *vptr++ = poly->TexPalette;
+                *vptr++ = poly->TexParam & 0xFFFF;
+                *vptr++ = (poly->TexParam >> 16 ) | (poly->TexPalette << 16);
 
                 vidx++;
 

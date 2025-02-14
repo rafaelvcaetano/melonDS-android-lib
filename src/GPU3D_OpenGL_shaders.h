@@ -470,8 +470,9 @@ vec4 TextureFetch_Direct(ivec2 addr, ivec4 st, int wrapmode)
 
 vec4 TextureLookup_Nearest(vec2 st)
 {
-    int attr = int(fPolygonAttr.y);
-    int paladdr = int(fPolygonAttr.z);
+    int vramOffset = int(fPolygonAttr.y);
+    int attr = int(fPolygonAttr.z << 16);
+    int paladdr = int(fPolygonAttr.z >> 16);
 
     float alpha0;
     if ((attr & (1<<29)) != 0) alpha0 = 0.0;
@@ -481,7 +482,7 @@ vec4 TextureLookup_Nearest(vec2 st)
     int th = 8 << ((attr >> 23) & 0x7);
     ivec4 st_full = ivec4(ivec2(st), tw, th);
 
-    ivec2 vramaddr = ivec2((attr & 0xFFFF) << 3, paladdr);
+    ivec2 vramaddr = ivec2(vramOffset << 3, paladdr);
     int wrapmode = (attr >> 16);
 
     int type = (attr >> 26) & 0x7;
@@ -499,8 +500,9 @@ vec4 TextureLookup_Linear(vec2 texcoord)
     ivec2 intpart = ivec2(texcoord);
     vec2 fracpart = fract(texcoord);
 
-    int attr = int(fPolygonAttr.y);
-    int paladdr = int(fPolygonAttr.z);
+    int vramOffset = int(fPolygonAttr.y);
+    int attr = int(fPolygonAttr.z << 16);
+    int paladdr = int(fPolygonAttr.z >> 16);
 
     float alpha0;
     if ((attr & (1<<29)) != 0) alpha0 = 0.0;
@@ -510,7 +512,7 @@ vec4 TextureLookup_Linear(vec2 texcoord)
     int th = 8 << ((attr >> 23) & 0x7);
     ivec4 st_full = ivec4(intpart, tw, th);
 
-    ivec2 vramaddr = ivec2((attr & 0xFFFF) << 3, paladdr);
+    ivec2 vramaddr = ivec2(vramOffset << 3, paladdr);
     int wrapmode = (attr >> 16);
 
     vec4 A, B, C, D;
@@ -625,7 +627,7 @@ vec4 FinalColor()
         }
     }
 
-    if ((((fPolygonAttr.y >> 26) & 0x7) == 0) || ((uDispCnt & (1<<0)) == 0))
+    if ((((fPolygonAttr.z >> 26) & 0x7) == 0) || ((uDispCnt & (1<<0)) == 0))
     {
         // no texture
         col = vcol;
