@@ -97,6 +97,8 @@ namespace MelonDSAndroid {
     extern void pause();
     extern void resume();
     extern bool reset();
+    extern void enableMic();
+    extern void disableMic();
     extern void updateMic();
     extern bool saveState(const char* path);
     extern bool loadState(const char* path);
