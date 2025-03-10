@@ -11,7 +11,7 @@ MicInputOboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, i
 
     for (int i = 0; i < numFrames; ++i) {
         int intVal = (int) input[i];
-        int newVal = intVal * 10;
+        int newVal = intVal * 2;
         if (newVal >= 32768)
             newVal = 32767;
         else if (newVal <= -32767)
