@@ -73,7 +73,7 @@ const char* kFinalPassEdgeFS = kShaderHeader R"(
 
 precision highp float;
 
-uniform sampler2D DepthBuffer;
+uniform highp sampler2D DepthBuffer;
 uniform sampler2D AttrBuffer;
 
 layout(std140) uniform uConfig
@@ -158,7 +158,7 @@ const char* kFinalPassFogFS = kShaderHeader R"(
 precision highp float;
 precision highp int;
 
-uniform sampler2D DepthBuffer;
+uniform highp sampler2D DepthBuffer;
 uniform sampler2D AttrBuffer;
 
 layout(std140) uniform uConfig
