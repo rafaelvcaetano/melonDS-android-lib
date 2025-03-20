@@ -47,8 +47,8 @@ RewindSaveState CreateRewindSaveState(int frame)
 
 void DeleteRewindSaveState(RewindSaveState state)
 {
-    delete state.buffer;
-    delete state.screenshot;
+    delete[] state.buffer;
+    delete[] state.screenshot;
 }
 
 void SetRewindBufferSizes(u32 savestateSizeBytes, u32 screenshotSizeBytes)
