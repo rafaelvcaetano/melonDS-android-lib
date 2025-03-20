@@ -4,7 +4,7 @@
 class FrameRenderedCallback
 {
 public:
-    virtual void onFrameRendered(long syncFence, int textureId) = 0;
+    virtual void onFrameRendered(int textureId) = 0;
 };
 
 #endif //FRAMERENDEREDCALLBACK_H

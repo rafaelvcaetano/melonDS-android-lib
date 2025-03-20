@@ -349,14 +349,10 @@ namespace MelonDSAndroid
         {
             targetTexture = GPU::CurGLCompositor->GetOutputTexture(frontbuf);
         }
+        frameRenderedCallback->onFrameRendered((int) targetTexture);
 
         // Capture screenshot
         screenshotRenderer->renderScreenshot();
-
-        GLsync syncFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();
-        // Get memory address of syncFence and send it to the frontend
-        frameRenderedCallback->onFrameRendered((long) syncFence, (int) targetTexture);
 
         frame++;
         if (RewindManager::ShouldCaptureState(frame))
