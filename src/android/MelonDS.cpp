@@ -349,6 +349,8 @@ namespace MelonDSAndroid
         {
             targetTexture = GPU::CurGLCompositor->GetOutputTexture(frontbuf);
         }
+
+        glFlush();
         frameRenderedCallback->onFrameRendered((int) targetTexture);
 
         // Capture screenshot
