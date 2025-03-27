@@ -105,6 +105,7 @@ namespace MelonDSAndroid {
     extern bool saveRewindState(RewindManager::RewindSaveState rewindSaveState);
     extern bool loadRewindState(RewindManager::RewindSaveState rewindSaveState);
     extern RewindWindow getRewindWindow();
+    extern void stop();
     extern void cleanup();
 }
 

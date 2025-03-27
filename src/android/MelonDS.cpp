@@ -312,6 +312,7 @@ namespace MelonDSAndroid
 
         openGlContext->Use();
 
+        screenshotRenderer->init();
         RetroAchievements::Init(retroAchievementsCallback);
         frame = 0;
     }
@@ -556,17 +557,21 @@ namespace MelonDSAndroid
         };
     }
 
-    void cleanup()
+    void stop()
     {
         RetroAchievements::DeInit();
         ROMManager::EjectCart();
         ROMManager::EjectGBACart();
-        //GBACart::EjectCart();
         NDS::Stop();
         GPU::DeInitRenderer();
         NDS::DeInit();
         RewindManager::Reset();
 
+        screenshotRenderer->cleanup();
+    }
+
+    void cleanup()
+    {
         free(currentRomPath);
         free(currentSramPath);
         currentRomPath = NULL;
@@ -740,7 +745,10 @@ namespace MelonDSAndroid
         if (openGlContext == nullptr)
             return;
 
-        glDeleteTextures(1, &softwareRenderingTexture);
+        if (openGlContext->Use())
+        {
+            glDeleteTextures(1, &softwareRenderingTexture);
+        }
         openGlContext->Release();
         openGlContext->DeInit();
         delete openGlContext;

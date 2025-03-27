@@ -19,16 +19,16 @@ private:
     GLuint texCoordAttribLocation;
     int currentBuffer;
 
-    void setupResources();
     void setupFrameBuffers();
     void setupShaders();
     void setupVertexBuffers();
 
 public:
     ScreenshotRenderer(u32* screenshotBuffer);
+    void init();
     void renderScreenshot();
     u32* getScreenshot();
-    ~ScreenshotRenderer();
+    void cleanup();
 };
 
 #endif //SCREENSHOTRENDERER_H

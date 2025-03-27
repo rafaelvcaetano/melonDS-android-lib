@@ -6,8 +6,13 @@ ScreenshotRenderer::ScreenshotRenderer(u32* screenshotBuffer)
 {
     this->screenshotBuffer = screenshotBuffer;
     this->currentBuffer = 0;
+}
 
-    setupResources();
+void ScreenshotRenderer::init()
+{
+    setupFrameBuffers();
+    setupShaders();
+    setupVertexBuffers();
 }
 
 void ScreenshotRenderer::renderScreenshot()
@@ -62,13 +67,6 @@ void ScreenshotRenderer::renderScreenshot()
 u32* ScreenshotRenderer::getScreenshot()
 {
     return screenshotBuffer;
-}
-
-void ScreenshotRenderer::setupResources()
-{
-    setupFrameBuffers();
-    setupShaders();
-    setupVertexBuffers();
 }
 
 void ScreenshotRenderer::setupFrameBuffers()
@@ -211,7 +209,7 @@ void ScreenshotRenderer::setupVertexBuffers()
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 }
 
-ScreenshotRenderer::~ScreenshotRenderer()
+void ScreenshotRenderer::cleanup()
 {
     glDeleteShader(screenshotRenderVertexShader);
     glDeleteShader(screenshotRenderFragmentShader);
