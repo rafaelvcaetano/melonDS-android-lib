@@ -96,7 +96,7 @@ namespace MelonDSAndroid {
     extern u32 loop();
     extern void pause();
     extern void resume();
-    extern bool reset();
+    extern void reset();
     extern void enableMic();
     extern void disableMic();
     extern void updateMic();

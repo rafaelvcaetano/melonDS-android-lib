@@ -383,24 +383,16 @@ namespace MelonDSAndroid
             micInputStream->requestStart();
     }
 
-    bool reset()
+    void reset()
     {
         frame = 0;
-        if (currentRunMode == ROM) {
+
+        if (currentRunMode == ROM)
+        {
             RetroAchievements::Reset();
-            NDS::Reset();
-            int result = loadRom(currentRomPath, currentSramPath, currentGbaSlotConfig);
-            if (result != 2 && arCodeFile != NULL) {
-                AREngine::SetCodeFile(arCodeFile);
-            }
-
             RewindManager::Reset();
-
-            return result != 2;
-        } else {
-            int result = bootFirmware();
-            return result == 0;
         }
+        ROMManager::Reset();
     }
 
     void enableMic()
