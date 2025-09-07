@@ -18,7 +18,8 @@ set(ANDROID_SOURCES
         ROMManager.cpp
         SaveManager.cpp
         LocalMultiplayer.cpp
-        ScreenshotRenderer.cpp
+        renderer/ScreenshotRenderer.cpp
+        renderer/FrameQueue.cpp
         retroachievements/RetroAchievements.cpp
 
         fd_recv.cpp

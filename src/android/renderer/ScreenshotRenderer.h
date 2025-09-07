@@ -1,7 +1,8 @@
 #ifndef SCREENSHOTRENDERER_H
 #define SCREENSHOTRENDERER_H
 
-#include "../types.h"
+#include "FrameQueue.h"
+#include "types.h"
 #include <GLES3/gl3.h>
 
 class ScreenshotRenderer {
@@ -26,7 +27,7 @@ private:
 public:
     ScreenshotRenderer(u32* screenshotBuffer);
     void init();
-    void renderScreenshot();
+    void renderScreenshot(Frame* renderFrame);
     u32* getScreenshot();
     void cleanup();
 };

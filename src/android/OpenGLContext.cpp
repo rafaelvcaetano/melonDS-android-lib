@@ -3,34 +3,52 @@
 
 const char* OPENGL_CONTEXT_TAG = "OpenGLContext";
 
-void logGlError()
+void logEglError()
 {
-    GLenum error = glGetError();
+    GLint error = eglGetError();
     switch(error)
     {
-        case GL_NO_ERROR:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_NO_ERROR");
+        case EGL_NOT_INITIALIZED:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_NOT_INITIALIZED");
             break;
-        case GL_INVALID_ENUM:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_INVALID_ENUM");
+        case EGL_BAD_ACCESS:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_ACCESS");
             break;
-        case GL_INVALID_VALUE:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_INVALID_VALUE");
+        case EGL_BAD_ALLOC:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_ALLOC");
             break;
-        case GL_INVALID_OPERATION:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_INVALID_OPERATION");
+        case EGL_BAD_ATTRIBUTE:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_ATTRIBUTE");
             break;
-        case GL_INVALID_FRAMEBUFFER_OPERATION:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_INVALID_FRAMEBUFFER_OPERATION");
+        case EGL_BAD_CONTEXT:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_CONTEXT");
             break;
-        case GL_OUT_OF_MEMORY:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_OUT_OF_MEMORY");
+        case EGL_BAD_CONFIG:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_CONFIG");
             break;
-        case GL_STACK_UNDERFLOW:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_STACK_UNDERFLOW");
+        case EGL_BAD_CURRENT_SURFACE:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_CURRENT_SURFACE");
             break;
-        case GL_STACK_OVERFLOW:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "GL_STACK_OVERFLOW");
+        case EGL_BAD_DISPLAY:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_DISPLAY");
+            break;
+        case EGL_BAD_SURFACE:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_SURFACE");
+            break;
+        case EGL_BAD_MATCH:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_MATCH");
+            break;
+        case EGL_BAD_PARAMETER:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_PARAMETER");
+            break;
+        case EGL_BAD_NATIVE_PIXMAP:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_NATIVE_PIXMAP");
+            break;
+        case EGL_BAD_NATIVE_WINDOW:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_NATIVE_WINDOW");
+            break;
+        case EGL_CONTEXT_LOST:
+            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_CONTEXT_LOST");
             break;
     }
 }
@@ -71,7 +89,7 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     if (!eglChooseConfig(display, attributes, nullptr, 0, &numConfigs))
     {
         LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to determine the number of configs");
-        logGlError();
+        logEglError();
         return false;
     }
 
@@ -145,7 +163,7 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     if (surface == EGL_NO_SURFACE)
     {
         LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to create buffer surface");
-        logGlError();
+        logEglError();
         return false;
     }
 
@@ -159,7 +177,7 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     if (glContext == EGL_NO_CONTEXT)
     {
         LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to create context");
-        logGlError();
+        logEglError();
         return false;
     }
 

@@ -1,6 +1,6 @@
 #include "ScreenshotRenderer.h"
 #include "MelonLog.h"
-#include "../GPU.h"
+#include "GPU.h"
 
 ScreenshotRenderer::ScreenshotRenderer(u32* screenshotBuffer)
 {
@@ -15,7 +15,7 @@ void ScreenshotRenderer::init()
     setupVertexBuffers();
 }
 
-void ScreenshotRenderer::renderScreenshot()
+void ScreenshotRenderer::renderScreenshot(Frame* renderFrame)
 {
     int frontBuffer = GPU::FrontBuffer;
     if (GPU::Renderer == 0)
@@ -35,7 +35,7 @@ void ScreenshotRenderer::renderScreenshot()
 
         // Render to screenshot front buffer
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, GPU::CurGLCompositor->GetOutputTexture(frontBuffer));
+        glBindTexture(GL_TEXTURE_2D, renderFrame->frameTexture);
 
         glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);

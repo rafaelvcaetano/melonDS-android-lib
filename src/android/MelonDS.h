@@ -4,11 +4,11 @@
 #include <list>
 #include "AndroidFileHandler.h"
 #include "AndroidCameraHandler.h"
-#include "FrameRenderedCallback.h"
 #include "RewindManager.h"
 #include "RomGbaSlotConfig.h"
 #include "retroachievements/RAAchievement.h"
 #include "retroachievements/RACallback.h"
+#include "renderer/FrameQueue.h"
 #include "../types.h"
 #include "../GPU.h"
 #include <android/asset_manager.h>
@@ -74,7 +74,7 @@ namespace MelonDSAndroid {
     extern std::string internalFilesDir;
 
     extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
-    extern void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, FrameRenderedCallback* androidFrameRenderedCallback, u32* screenshotBufferPointer, long glContext, bool isMasterInstance);
+    extern void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, long glContext, bool isMasterInstance);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::string* richPresenceScript);
     extern void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
@@ -94,6 +94,7 @@ namespace MelonDSAndroid {
     extern int bootFirmware();
     extern void start();
     extern u32 loop();
+    extern Frame* getPresentationFrame();
     extern void pause();
     extern void resume();
     extern void reset();

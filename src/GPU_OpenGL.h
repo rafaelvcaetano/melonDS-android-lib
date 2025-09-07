@@ -40,6 +40,7 @@ public:
 
     void Stop();
     void RenderFrame();
+    void SetOutputTexture(GLuint texture);
     GLuint GetOutputTexture(int buf);
 private:
 
