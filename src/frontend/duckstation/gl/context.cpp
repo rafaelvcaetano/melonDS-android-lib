@@ -3,19 +3,17 @@
 #include "loader.h"
 #include <cstdlib>
 #include <cstring>
-#ifdef __APPLE__
 #include <stdlib.h>
-#else
-#include <malloc.h>
-#endif
 Log_SetChannel(GL::Context);
 
-#if defined(_WIN32) && !defined(_M_ARM64)
+#if defined(_WIN32)
 #include "context_wgl.h"
 #elif defined(__APPLE__)
 #include "context_agl.h"
 #else
+#ifdef WAYLAND_ENABLED
 #include "context_egl_wayland.h"
+#endif
 #include "context_egl_x11.h"
 #include "context_glx.h"
 #endif
@@ -66,7 +64,7 @@ std::unique_ptr<GL::Context> Context::Create(const WindowInfo& wi, const Version
   }
 
   std::unique_ptr<Context> context;
-#if defined(_WIN32) && !defined(_M_ARM64)
+#if defined(_WIN32)
   context = ContextWGL::Create(wi, versions_to_try, num_versions_to_try);
 #elif defined(__APPLE__)
   context = ContextAGL::Create(wi, versions_to_try, num_versions_to_try);
@@ -80,8 +78,10 @@ std::unique_ptr<GL::Context> Context::Create(const WindowInfo& wi, const Version
       context = ContextGLX::Create(wi, versions_to_try, num_versions_to_try);
   }
 
+#ifdef WAYLAND_ENABLED
   if (wi.type == WindowInfo::Type::Wayland)
     context = ContextEGLWayland::Create(wi, versions_to_try, num_versions_to_try);
+#endif
 #endif
 
   if (!context)

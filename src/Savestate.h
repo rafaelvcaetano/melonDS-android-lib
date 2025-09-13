@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -19,46 +19,106 @@
 #ifndef SAVESTATE_H
 #define SAVESTATE_H
 
+#include <cstring>
 #include <string>
 #include <stdio.h>
 #include "types.h"
 
-#define SAVESTATE_MAJOR 9
-#define SAVESTATE_MINOR 0
+#define SAVESTATE_MAJOR 12
+#define SAVESTATE_MINOR 1
 
+namespace melonDS
+{
 class Savestate
 {
 public:
+    static constexpr u32 DEFAULT_SIZE = 32 * 1024 * 1024; // 32 MB
+    Savestate(void* buffer, u32 size, bool save);
+    explicit Savestate(u32 initial_size = DEFAULT_SIZE);
+
+    ~Savestate();
+
     bool Error;
 
     bool Saving;
-    u32 VersionMajor;
-    u32 VersionMinor;
 
     u32 CurSection;
 
-    virtual ~Savestate() {};
+    void Section(const char* magic);
 
-    virtual void Section(const char* magic) = 0;
-
-    virtual void Var8(u8* var) = 0;
-    virtual void Var16(u16* var) = 0;
-    virtual void Var32(u32* var) = 0;
-    virtual void Var64(u64* var) = 0;
-
-    virtual void Bool32(bool* var) = 0;
-
-    virtual void VarArray(void* data, u32 len) = 0;
-
-    bool IsAtleastVersion(u32 major, u32 minor)
+    void Var8(u8* var)
     {
-        if (VersionMajor > major) return true;
-        if (VersionMajor == major && VersionMinor >= minor) return true;
+        VarArray(var, sizeof(*var));
+    }
+
+    void Var16(u16* var)
+    {
+        VarArray(var, sizeof(*var));
+    }
+
+    void Var32(u32* var)
+    {
+        VarArray(var, sizeof(*var));
+    }
+
+    void Var64(u64* var)
+    {
+        VarArray(var, sizeof(*var));
+    }
+
+    void Bool32(bool* var);
+
+    void VarArray(void* data, u32 len);
+
+    void Finish();
+
+    // TODO rewinds the stream
+    void Rewind(bool save);
+
+    bool IsAtLeastVersion(u32 major, u32 minor)
+    {
+        u16 major_version = MajorVersion();
+        if (MajorVersion() > major) return true;
+        if (major_version == major && MinorVersion() >= minor) return true;
         return false;
     }
 
-protected:
-    const char* MAGIC = "MELN";
+    void* Buffer() { return buffer; }
+    [[nodiscard]] const void* Buffer() const { return buffer; }
+
+    [[nodiscard]] u32 BufferLength() const { return buffer_length; }
+
+    [[nodiscard]] u32 Length() const { return buffer_offset; }
+
+    [[nodiscard]] u16 MajorVersion() const
+    {
+        // major version is stored at offset 0x04
+        u16 major = 0;
+        memcpy(&major, buffer + 0x04, sizeof(major));
+        return major;
+    }
+
+    [[nodiscard]] u16 MinorVersion() const
+    {
+        // minor version is stored at offset 0x06
+        u16 minor = 0;
+        memcpy(&minor, buffer + 0x06, sizeof(minor));
+        return minor;
+    }
+
+private:
+    static constexpr u32 NO_SECTION = 0xffffffff;
+    void CloseCurrentSection();
+    bool Resize(u32 new_length);
+    void WriteSavestateHeader();
+    void WriteStateLength();
+    u32 FindSection(const char* magic) const;
+    u8* buffer;
+    u32 buffer_offset;
+    u32 buffer_length;
+    bool buffer_owned;
+    bool finished;
 };
+}
 
 #endif // SAVESTATE_H

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -16,98 +16,112 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include <algorithm>
 #include <stdio.h>
 #include <string.h>
 #include "DSi.h"
 #include "DSi_Camera.h"
 #include "Platform.h"
 
-
-namespace DSi_CamModule
+namespace melonDS
 {
+using Platform::Log;
+using Platform::LogLevel;
 
-Camera* Camera0; // 78 / facing outside
-Camera* Camera1; // 7A / selfie cam
-
-u16 ModuleCnt;
-u16 Cnt;
-
-u32 CropStart, CropEnd;
-
-// pixel data buffer holds a maximum of 512 words, regardless of how long scanlines are
-u32 DataBuffer[512];
-u32 BufferReadPos, BufferWritePos;
-u32 BufferNumLines;
-Camera* CurCamera;
 
 // note on camera data/etc intervals
 // on hardware those are likely affected by several factors
 // namely, how long cameras take to process frames
 // camera IRQ is fired at roughly 15FPS with default config
 
-const u32 kIRQInterval = 1120000; // ~30 FPS
-const u32 kTransferStart = 60000;
+// camera IRQ marks camera VBlank
+// each scanline takes roughly 3173 cycles
+const u32 DSi_CamModule::kIRQInterval = 2234248; // ~15 FPS
+const u32 DSi_CamModule::kScanlineTime = 3173;
+const u32 DSi_CamModule::kTransferStart = DSi_CamModule::kIRQInterval - (DSi_CamModule::kScanlineTime * 480);
 
 
-bool Init()
+DSi_CamModule::DSi_CamModule(melonDS::DSi& dsi) : DSi(dsi)
 {
-    Camera0 = new Camera(0);
-    Camera1 = new Camera(1);
+    DSi.RegisterEventFuncs(Event_DSi_CamIRQ, this, {MakeEventThunk(DSi_CamModule, IRQ)});
+    DSi.RegisterEventFuncs(Event_DSi_CamTransfer, this, {MakeEventThunk(DSi_CamModule, TransferScanline)});
 
-    return true;
+    Camera0 = DSi.I2C.GetOuterCamera();
+    Camera1 = DSi.I2C.GetInnerCamera();
 }
 
-void DeInit()
+DSi_CamModule::~DSi_CamModule()
 {
-    delete Camera0;
-    delete Camera1;
+    Camera0 = nullptr;
+    Camera1 = nullptr;
+
+    DSi.UnregisterEventFuncs(Event_DSi_CamIRQ);
+    DSi.UnregisterEventFuncs(Event_DSi_CamTransfer);
 }
 
-void Reset()
+void DSi_CamModule::Reset()
 {
-    Camera0->Reset();
-    Camera1->Reset();
-
     ModuleCnt = 0; // CHECKME
     Cnt = 0;
 
     CropStart = 0;
     CropEnd = 0;
 
-    memset(DataBuffer, 0, 512*sizeof(u32));
-    BufferReadPos = 0;
-    BufferWritePos = 0;
+    Transferring = false;
+
+    memset(PixelBuffer, 0, sizeof(PixelBuffer));
+    CurPixelBuffer = 0;
     BufferNumLines = 0;
     CurCamera = nullptr;
 
-    NDS::ScheduleEvent(NDS::Event_DSi_CamIRQ, true, kIRQInterval, IRQ, 0);
+    // TODO: ideally this should be started when a camera is active
+    // instead of just being a constant thing
+    DSi.ScheduleEvent(Event_DSi_CamIRQ, false, kIRQInterval, 0, 0);
 }
 
-void Stop()
+void DSi_CamModule::Stop()
 {
     Camera0->Stop();
     Camera1->Stop();
 }
 
-void DoSavestate(Savestate* file)
+void DSi_CamModule::DoSavestate(Savestate* file)
 {
     file->Section("CAMi");
 
     file->Var16(&ModuleCnt);
     file->Var16(&Cnt);
 
-    /*file->VarArray(FrameBuffer, sizeof(FrameBuffer));
-    file->Var32(&TransferPos);
-    file->Var32(&FrameLength);*/
+    file->Var32(&CropStart);
+    file->Var32(&CropEnd);
 
-    Camera0->DoSavestate(file);
-    Camera1->DoSavestate(file);
+    file->Bool32(&Transferring);
+
+    file->VarArray(&PixelBuffer[0].Data, 512);
+    file->Var32(&PixelBuffer[0].ReadPos);
+    file->Var32(&PixelBuffer[0].WritePos);
+    file->VarArray(&PixelBuffer[1].Data, 512);
+    file->Var32(&PixelBuffer[1].ReadPos);
+    file->Var32(&PixelBuffer[1].WritePos);
+    file->Var8(&CurPixelBuffer);
+
+    file->Var32(&BufferNumLines);
+
+    if (!file->Saving)
+    {
+        DSi_Camera* activecam = nullptr;
+
+        if      (Camera0->IsActivated()) activecam = Camera0;
+        else if (Camera1->IsActivated()) activecam = Camera1;
+
+        CurCamera = activecam;
+    }
 }
 
 
-void IRQ(u32 param)
+void DSi_CamModule::IRQ(u32 param)
 {
-    Camera* activecam = nullptr;
+    DSi_Camera* activecam = nullptr;
 
     // TODO: cameras don't have any priority!
     // activating both together will jumble the image data together
@@ -119,34 +133,46 @@ void IRQ(u32 param)
         activecam->StartTransfer();
 
         if (Cnt & (1<<11))
-            NDS::SetIRQ(0, NDS::IRQ_DSi_Camera);
+            DSi.SetIRQ(0, IRQ_DSi_Camera);
 
-        if (Cnt & (1<<15))
-        {
-            BufferReadPos = 0;
-            BufferWritePos = 0;
-            BufferNumLines = 0;
-            CurCamera = activecam;
-            NDS::ScheduleEvent(NDS::Event_DSi_CamTransfer, false, kTransferStart, TransferScanline, 0);
-        }
+        CurCamera = activecam;
+        DSi.ScheduleEvent(Event_DSi_CamTransfer, false, kTransferStart, 0, 0);
     }
 
-    NDS::ScheduleEvent(NDS::Event_DSi_CamIRQ, true, kIRQInterval, IRQ, 0);
+    DSi.ScheduleEvent(Event_DSi_CamIRQ, true, kIRQInterval, 0, 0);
 }
 
-void TransferScanline(u32 line)
+void DSi_CamModule::TransferScanline(u32 line)
 {
-    u32* dstbuf = &DataBuffer[BufferWritePos];
-    int maxlen = 512 - BufferWritePos;
+    if (Cnt & (1<<4))
+    {
+        Transferring = false;
+        return;
+    }
+
+    if (line == 0)
+    {
+        if (!(Cnt & (1<<15)))
+            return;
+
+        BufferNumLines = 0;
+        Transferring = true;
+    }
+
+    sPixelBuffer* buffer = &PixelBuffer[CurPixelBuffer];
+    u32* dstbuf = &buffer->Data[buffer->WritePos];
+    int maxlen = 512 - buffer->WritePos;
 
     u32 tmpbuf[512];
-    int datalen = CurCamera->TransferScanline(tmpbuf, 512);
+    int lines_next;
+    int datalen = CurCamera->TransferScanline(tmpbuf, 512, lines_next);
+    u32 numscan;
 
-    // TODO: must be tweaked such that each block has enough time to transfer
-    u32 delay = datalen*4 + 16;
+    u32 delay = lines_next * kScanlineTime;
 
     int copystart = 0;
     int copylen = datalen;
+    bool line_last = false;
 
     if (Cnt & (1<<14))
     {
@@ -156,10 +182,8 @@ void TransferScanline(u32 line)
         int yend = (CropEnd >> 16) & 0x1FF;
         if (line < ystart || line > yend)
         {
-            if (!CurCamera->TransferDone())
-                NDS::ScheduleEvent(NDS::Event_DSi_CamTransfer, false, delay, TransferScanline, line+1);
-
-            return;
+            if (line == yend+1) line_last = true;
+            goto skip_line;
         }
 
         int xstart = (CropStart >> 1) & 0x1FF;
@@ -177,7 +201,6 @@ void TransferScanline(u32 line)
     if (copylen > maxlen)
     {
         copylen = maxlen;
-        Cnt |= (1<<4);
     }
 
     if (Cnt & (1<<13))
@@ -219,62 +242,105 @@ void TransferScanline(u32 line)
         memcpy(dstbuf, &tmpbuf[copystart], copylen*sizeof(u32));
     }
 
-    u32 numscan = Cnt & 0x000F;
+    buffer->WritePos += copylen;
+    if (buffer->WritePos > 512) buffer->WritePos = 512;
+
+    numscan = Cnt & 0x000F;
     if (BufferNumLines >= numscan)
     {
-        BufferReadPos = 0; // checkme
-        BufferWritePos = 0;
         BufferNumLines = 0;
-        DSi::CheckNDMAs(0, 0x0B);
+        SwapPixelBuffers();
     }
     else
     {
-        BufferWritePos += copylen;
-        if (BufferWritePos > 512) BufferWritePos = 512;
         BufferNumLines++;
     }
 
-    if (CurCamera->TransferDone())
-        return;
+skip_line:
+    bool done = CurCamera->TransferDone();
+    if (done || line_last)
+    {
+        // when the frame is finished, transfer any remaining data if needed
+        // (if the frame height isn't a multiple of the DMA interval)
+        if (BufferNumLines > 0)
+        {
+            BufferNumLines = 0;
+            SwapPixelBuffers();
+        }
+    }
 
-    NDS::ScheduleEvent(NDS::Event_DSi_CamTransfer, false, delay, TransferScanline, line+1);
+    if (done)
+    {
+        Transferring = false;
+        return;
+    }
+
+    DSi.ScheduleEvent(Event_DSi_CamTransfer, false, delay, 0, line+1);
+}
+
+void DSi_CamModule::SwapPixelBuffers()
+{
+    // pixel buffers are swapped every time a buffer is filled (ie. when the DMA interval is reached)
+    // the swap fails if the other buffer isn't empty
+
+    sPixelBuffer* otherbuf = &PixelBuffer[CurPixelBuffer ^ 1];
+    if (otherbuf->ReadPos < otherbuf->WritePos)
+    {
+        // overrun
+        Cnt |= (1<<4);
+        Transferring = false;
+    }
+    else
+    {
+        PixelBuffer[CurPixelBuffer].ReadPos = 0;
+        otherbuf->WritePos = 0;
+        CurPixelBuffer ^= 1;
+        DSi.CheckNDMAs(0, 0x0B);
+    }
+}
+
+bool DSi_CamModule::IsTransferring()
+{
+    if (Cnt & (1<<15)) return true;
+    if (Transferring) return true;
+    return false;
 }
 
 
-u8 Read8(u32 addr)
+u8 DSi_CamModule::Read8(u32 addr)
 {
     //
 
-    printf("unknown DSi cam read8 %08X\n", addr);
+    Log(LogLevel::Debug, "unknown DSi cam read8 %08X\n", addr);
     return 0;
 }
 
-u16 Read16(u32 addr)
+u16 DSi_CamModule::Read16(u32 addr)
 {
     switch (addr)
     {
     case 0x04004200: return ModuleCnt;
-    case 0x04004202: return Cnt;
+    case 0x04004202: return Cnt | (Transferring ? (1<<15) : 0);
     }
 
-    printf("unknown DSi cam read16 %08X\n", addr);
+    Log(LogLevel::Debug, "unknown DSi cam read16 %08X\n", addr);
     return 0;
 }
 
-u32 Read32(u32 addr)
+u32 DSi_CamModule::Read32(u32 addr)
 {
     switch (addr)
     {
     case 0x04004204:
         {
-            u32 ret = DataBuffer[BufferReadPos];
-            if (Cnt & (1<<15))
-            {
-                if (BufferReadPos < 511)
-                    BufferReadPos++;
-                // CHECKME!!!!
-                // also presumably we should set bit4 in Cnt if there's no new data to be read
-            }
+            sPixelBuffer* buffer = &PixelBuffer[CurPixelBuffer ^ 1];
+            u32 ret;
+            if (buffer->ReadPos < buffer->WritePos)
+                ret = buffer->Data[buffer->ReadPos++];
+            else if (buffer->ReadPos > 0)
+                ret = buffer->Data[buffer->ReadPos - 1];
+            else
+                ret = buffer->Data[0];
 
             return ret;
         }
@@ -283,18 +349,18 @@ u32 Read32(u32 addr)
     case 0x04004214: return CropEnd;
     }
 
-    printf("unknown DSi cam read32 %08X\n", addr);
+    Log(LogLevel::Debug, "unknown DSi cam read32 %08X\n", addr);
     return 0;
 }
 
-void Write8(u32 addr, u8 val)
+void DSi_CamModule::Write8(u32 addr, u8 val)
 {
     //
 
-    printf("unknown DSi cam write8 %08X %02X\n", addr, val);
+    Log(LogLevel::Debug, "unknown DSi cam write8 %08X %02X\n", addr, val);
 }
 
-void Write16(u32 addr, u16 val)
+void DSi_CamModule::Write16(u32 addr, u16 val)
 {
     switch (addr)
     {
@@ -309,6 +375,7 @@ void Write16(u32 addr, u16 val)
                 // CHECKME
 
                 Cnt = 0;
+                Transferring = false;
             }
 
             if ((ModuleCnt & (1<<5)) && !(oldcnt & (1<<5)))
@@ -320,12 +387,9 @@ void Write16(u32 addr, u16 val)
 
     case 0x04004202:
         {
-            // TODO: during a transfer, clearing bit15 does not reflect immediately
-            // maybe it needs to finish the trasnfer or atleast the current block
-
             // checkme
             u16 oldmask;
-            if (Cnt & 0x8000)
+            if (IsTransferring())
             {
                 val &= 0x8F20;
                 oldmask = 0x601F;
@@ -340,68 +404,61 @@ void Write16(u32 addr, u16 val)
             if (val & (1<<5))
             {
                 Cnt &= ~(1<<4);
-                BufferReadPos = 0;
-                BufferWritePos = 0;
-            }
-
-            if ((val & (1<<15)) && !(Cnt & (1<<15)))
-            {
-                // start transfer
-                //DSi::CheckNDMAs(0, 0x0B);
+                memset(PixelBuffer, 0, sizeof(PixelBuffer));
+                CurPixelBuffer = 0;
             }
         }
         return;
 
     case 0x04004210:
-        if (Cnt & (1<<15)) return;
+        if (IsTransferring()) return;
         CropStart = (CropStart & 0x01FF0000) | (val & 0x03FE);
         return;
     case 0x04004212:
-        if (Cnt & (1<<15)) return;
+        if (IsTransferring()) return;
         CropStart = (CropStart & 0x03FE) | ((val & 0x01FF) << 16);
         return;
     case 0x04004214:
-        if (Cnt & (1<<15)) return;
+        if (IsTransferring()) return;
         CropEnd = (CropEnd & 0x01FF0000) | (val & 0x03FE);
         return;
     case 0x04004216:
-        if (Cnt & (1<<15)) return;
+        if (IsTransferring()) return;
         CropEnd = (CropEnd & 0x03FE) | ((val & 0x01FF) << 16);
         return;
     }
 
-    printf("unknown DSi cam write16 %08X %04X\n", addr, val);
+    Log(LogLevel::Debug, "unknown DSi cam write16 %08X %04X\n", addr, val);
 }
 
-void Write32(u32 addr, u32 val)
+void DSi_CamModule::Write32(u32 addr, u32 val)
 {
     switch (addr)
     {
     case 0x04004210:
-        if (Cnt & (1<<15)) return;
+        if (IsTransferring()) return;
         CropStart = val & 0x01FF03FE;
         return;
     case 0x04004214:
-        if (Cnt & (1<<15)) return;
+        if (IsTransferring()) return;
         CropEnd = val & 0x01FF03FE;
         return;
     }
 
-    printf("unknown DSi cam write32 %08X %08X\n", addr, val);
+    Log(LogLevel::Debug, "unknown DSi cam write32 %08X %08X\n", addr, val);
 }
 
 
 
-Camera::Camera(u32 num)
-{
-    Num = num;
-}
-
-Camera::~Camera()
+DSi_Camera::DSi_Camera(melonDS::DSi& dsi, DSi_I2CHost* host, u32 num) : DSi_I2CDevice(dsi, host), Num(num)
 {
 }
 
-void Camera::DoSavestate(Savestate* file)
+DSi_Camera::~DSi_Camera()
+{
+}
+
+void DSi_Camera::DoSavestate(Savestate* file)
 {
     char magic[5] = "CAMx";
     magic[3] = '0' + Num;
@@ -422,9 +479,9 @@ void Camera::DoSavestate(Savestate* file)
     file->VarArray(MCURegs, 0x8000);
 }
 
-void Camera::Reset()
+void DSi_Camera::Reset()
 {
-    Platform::Camera_Stop(Num);
+    Platform::Camera_Stop(Num, DSi.UserData);
 
     DataPos = 0;
     RegAddr = 0;
@@ -443,16 +500,17 @@ void Camera::Reset()
     // default state is preview mode (checkme)
     MCURegs[0x2104] = 3;
 
+    InternalY = 0;
     TransferY = 0;
     memset(FrameBuffer, 0, (640*480/2)*sizeof(u32));
 }
 
-void Camera::Stop()
+void DSi_Camera::Stop()
 {
-    Platform::Camera_Stop(Num);
+    Platform::Camera_Stop(Num, DSi.UserData);
 }
 
-bool Camera::IsActivated()
+bool DSi_Camera::IsActivated() const
 {
     if (StandbyCnt & (1<<14)) return false; // standby
     if (!(MiscCnt & (1<<9))) return false; // data transfer not enabled
@@ -461,8 +519,9 @@ bool Camera::IsActivated()
 }
 
 
-void Camera::StartTransfer()
+void DSi_Camera::StartTransfer()
 {
+    InternalY = 0;
     TransferY = 0;
 
     u8 state = MCURegs[0x2104];
@@ -488,17 +547,19 @@ void Camera::StartTransfer()
         FrameFormat = 0;
     }
 
-    Platform::Camera_CaptureFrame(Num, FrameBuffer, 640, 480, true);
+    Platform::Camera_CaptureFrame(Num, FrameBuffer, 640, 480, true, DSi.UserData);
 }
 
-bool Camera::TransferDone()
+bool DSi_Camera::TransferDone() const
 {
     return TransferY >= FrameHeight;
 }
 
-int Camera::TransferScanline(u32* buffer, int maxlen)
+int DSi_Camera::TransferScanline(u32* buffer, int maxlen, int& nlines)
 {
-    if (TransferY >= FrameHeight)
+    nlines = 0;
+
+    if ((TransferY >= FrameHeight) || (InternalY >= 480))
         return 0;
 
     if (FrameWidth > 640 || FrameHeight > 480 ||
@@ -506,7 +567,7 @@ int Camera::TransferScanline(u32* buffer, int maxlen)
         (FrameWidth & 1))
     {
         // TODO work out something for these cases?
-        printf("CAM%d: invalid resolution %dx%d\n", Num, FrameWidth, FrameHeight);
+        Log(LogLevel::Warn, "CAM%d: invalid resolution %dx%d\n", Num, FrameWidth, FrameHeight);
         //memset(buffer, 0, width*height*sizeof(u16));
         return 0;
     }
@@ -514,7 +575,7 @@ int Camera::TransferScanline(u32* buffer, int maxlen)
     // TODO: non-YUV pixel formats and all
 
     int retlen = FrameWidth >> 1;
-    int sy = (TransferY * 480) / FrameHeight;
+    int sy = InternalY;
     if (FrameReadMode & (1<<1))
         sy = 479 - sy;
 
@@ -543,18 +604,26 @@ int Camera::TransferScanline(u32* buffer, int maxlen)
         }
     }
 
-    TransferY++;
+    // determine how many scanlines we're skipping until the next scanline
+    int oldy = TransferY;
+    do
+    {
+        InternalY++;
+        TransferY = (InternalY * FrameHeight) / 480;
+        nlines++;
+    }
+    while ((TransferY == oldy) && (InternalY < 480));
 
     return retlen;
 }
 
 
-void Camera::I2C_Start()
+void DSi_Camera::Acquire()
 {
     DataPos = 0;
 }
 
-u8 Camera::I2C_Read(bool last)
+u8 DSi_Camera::Read(bool last)
 {
     u8 ret;
 
@@ -575,7 +644,7 @@ u8 Camera::I2C_Read(bool last)
     return ret;
 }
 
-void Camera::I2C_Write(u8 val, bool last)
+void DSi_Camera::Write(u8 val, bool last)
 {
     if (DataPos < 2)
     {
@@ -584,7 +653,7 @@ void Camera::I2C_Write(u8 val, bool last)
         else
             RegAddr |= val;
 
-        if (RegAddr & 0x1) printf("DSi_Camera: !! UNALIGNED REG ADDRESS %04X\n", RegAddr);
+        if (RegAddr & 0x1) Log(LogLevel::Warn, "DSi_Camera: !! UNALIGNED REG ADDRESS %04X\n", RegAddr);
     }
     else
     {
@@ -604,7 +673,7 @@ void Camera::I2C_Write(u8 val, bool last)
     else      DataPos++;
 }
 
-u16 Camera::I2C_ReadReg(u16 addr)
+u16 DSi_Camera::I2C_ReadReg(u16 addr) const
 {
     switch (addr)
     {
@@ -636,11 +705,11 @@ u16 Camera::I2C_ReadReg(u16 addr)
     case 0x301A: return ((~StandbyCnt) & 0x4000) >> 12;
     }
 
-    if(Num==1)printf("DSi_Camera%d: unknown read %04X\n", Num, addr);
+    if(Num==1) Log(LogLevel::Debug, "DSi_Camera%d: unknown read %04X\n", Num, addr);
     return 0;
 }
 
-void Camera::I2C_WriteReg(u16 addr, u16 val)
+void DSi_Camera::I2C_WriteReg(u16 addr, u16 val)
 {
     switch (addr)
     {
@@ -669,8 +738,8 @@ void Camera::I2C_WriteReg(u16 addr, u16 val)
             StandbyCnt = val;
             //printf("CAM%d STBCNT=%04X (%04X)\n", Num, StandbyCnt, val);
             bool isactive = IsActivated();
-            if (isactive && !wasactive)      Platform::Camera_Start(Num);
-            else if (wasactive && !isactive) Platform::Camera_Stop(Num);
+            if (isactive && !wasactive)      Platform::Camera_Start(Num, DSi.UserData);
+            else if (wasactive && !isactive) Platform::Camera_Stop(Num, DSi.UserData);
         }
         return;
     case 0x001A:
@@ -679,8 +748,8 @@ void Camera::I2C_WriteReg(u16 addr, u16 val)
             MiscCnt = val & 0x0B7B;
             //printf("CAM%d MISCCNT=%04X (%04X)\n", Num, MiscCnt, val);
             bool isactive = IsActivated();
-            if (isactive && !wasactive)      Platform::Camera_Start(Num);
-            else if (wasactive && !isactive) Platform::Camera_Stop(Num);
+            if (isactive && !wasactive)      Platform::Camera_Start(Num, DSi.UserData);
+            else if (wasactive && !isactive) Platform::Camera_Stop(Num, DSi.UserData);
         }
         return;
 
@@ -702,21 +771,21 @@ void Camera::I2C_WriteReg(u16 addr, u16 val)
         return;
     }
 
-    if(Num==1)printf("DSi_Camera%d: unknown write %04X %04X\n", Num, addr, val);
+    if(Num==1) Log(LogLevel::Debug, "DSi_Camera%d: unknown write %04X %04X\n", Num, addr, val);
 }
 
 
 // TODO: not sure at all what is the accessible range
 // or if there is any overlap in the address range
 
-u8 Camera::MCU_Read(u16 addr)
+u8 DSi_Camera::MCU_Read(u16 addr) const
 {
     addr &= 0x7FFF;
 
     return MCURegs[addr];
 }
 
-void Camera::MCU_Write(u16 addr, u8 val)
+void DSi_Camera::MCU_Write(u16 addr, u8 val)
 {
     addr &= 0x7FFF;
 
@@ -727,7 +796,7 @@ void Camera::MCU_Write(u16 addr, u8 val)
         if      (val == 2) MCURegs[0x2104] = 7; // capture mode
         else if (val == 1) MCURegs[0x2104] = 3; // preview mode
         else if (val != 5 && val != 6)
-            printf("CAM%d: atypical SEQ_CMD %04X\n", Num, val);
+            Log(LogLevel::Debug, "CAM%d: atypical SEQ_CMD %04X\n", Num, val);
         return;
 
     case 0x2104: // SEQ_STATE, read-only
@@ -738,7 +807,7 @@ void Camera::MCU_Write(u16 addr, u8 val)
 }
 
 
-void Camera::InputFrame(u32* data, int width, int height, bool rgb)
+void DSi_Camera::InputFrame(const u32* data, int width, int height, bool rgb)
 {
     // TODO: double-buffering?
 
@@ -811,17 +880,3 @@ void Camera::InputFrame(u32* data, int width, int height, bool rgb)
 }
 
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

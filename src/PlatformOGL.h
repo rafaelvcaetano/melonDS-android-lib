@@ -1,9 +1,18 @@
 #ifndef PLATFORMOGL_H
 #define PLATFORMOGL_H
 
-// if you don't wanna use glad for your platform
-// add your header here!
+// If you don't wanna use glad for your platform,
+// define MELONDS_GL_HEADER to the path of some other header
+// that pulls in the necessary OpenGL declarations.
+// Make sure to include quotes or angle brackets as needed,
+// and that all targets get the same MELONDS_GL_HEADER definition.
 
+#ifndef MELONDS_GL_HEADER
+#define MELONDS_GL_HEADER "\"frontend/glad/glad.h\""
+#endif
+
+// TODO: Add this definition somewhere else
 #include <GLES3/gl32.h>
+//#include MELONDS_GL_HEADER
 
 #endif

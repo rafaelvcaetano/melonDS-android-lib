@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -16,12 +16,13 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
-#include <stdio.h>
 #include "ARM.h"
+#include "Platform.h"
 
-
-namespace ARMInterpreter
+namespace melonDS::ARMInterpreter
 {
+using Platform::Log;
+using Platform::LogLevel;
 
 
 void A_B(ARM* cpu)
@@ -79,7 +80,7 @@ void T_BLX_REG(ARM* cpu)
 {
     if (cpu->Num==1)
     {
-        printf("!! THUMB BLX_REG ON ARM7\n");
+        Log(LogLevel::Warn, "!! THUMB BLX_REG ON ARM7\n");
         return;
     }
 

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -24,6 +24,8 @@
 
 namespace Ui { class MPSettingsDialog; }
 class MPSettingsDialog;
+
+class EmuInstance;
 
 class MPSettingsDialog : public QDialog
 {
@@ -52,12 +54,13 @@ public:
     }
 
 private slots:
-    void done(int r);
+    void done(int r) override;
 
     //
 
 private:
     Ui::MPSettingsDialog* ui;
+    EmuInstance* emuInstance;
 
     QButtonGroup* grpAudioMode;
 };

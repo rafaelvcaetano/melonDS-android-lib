@@ -1,37 +1,63 @@
-name: CMake Build (Ubuntu x86-64)
+name: Ubuntu
 
 on:
   push:
     branches:
       - master
+      - ci/*
   pull_request:
     branches:
       - master
 
+env:
+  MELONDS_GIT_BRANCH: ${{ github.ref }}
+  MELONDS_GIT_HASH: ${{ github.sha }}
+  MELONDS_BUILD_PROVIDER: GitHub Actions
+#  MELONDS_VERSION_SUFFIX: " RC"
+
 jobs:
   build:
+    continue-on-error: true
+    strategy:
+      matrix:
+        arch:
+          - runner: ubuntu-22.04
+            name: x86_64
+          - runner: ubuntu-22.04-arm
+            name: aarch64
 
-    runs-on: ubuntu-20.04
+    name: ${{ matrix.arch.name }}
+    runs-on: ${{ matrix.arch.runner }}
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v4
+      name: Check out sources
     - name: Install dependencies
       run: |
-        sudo rm -f /etc/apt/sources.list.d/dotnetdev.list /etc/apt/sources.list.d/microsoft-prod.list
         sudo apt update
-        sudo apt install cmake extra-cmake-modules libcurl4-gnutls-dev libpcap0.8-dev libsdl2-dev qt5-default qtbase5-private-dev qtmultimedia5-dev libslirp0 libslirp-dev libarchive-dev --allow-downgrades
-    - name: Create build environment
-      run: mkdir ${{runner.workspace}}/build
+        sudo apt install --allow-downgrades cmake ninja-build extra-cmake-modules libpcap0.8-dev libsdl2-dev libenet-dev \
+          qt6-{base,base-private,multimedia}-dev libqt6svg6-dev libarchive-dev libzstd-dev libfuse2
     - name: Configure
-      working-directory: ${{runner.workspace}}/build
-      run: cmake $GITHUB_WORKSPACE
-    - name: Make
-      working-directory: ${{runner.workspace}}/build
+      run: cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DMELONDS_EMBED_BUILD_INFO=ON
+    - name: Build
       run: |
-        make -j$(nproc --all)
-        mkdir dist
-        cp melonDS dist
-    - uses: actions/upload-artifact@v1
+        cmake --build build
+        DESTDIR=AppDir cmake --install build
+    - uses: actions/upload-artifact@v4
       with:
-        name: melonDS-ubuntu-x86_64
-        path: ${{runner.workspace}}/build/dist
+        name: melonDS-ubuntu-${{ matrix.arch.name }}
+        path: AppDir/usr/bin/melonDS
+    - name: Fetch AppImage tools
+      run: |
+        wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch.name }}.AppImage
+        wget https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${{ matrix.arch.name }}.AppImage
+        chmod a+x linuxdeploy-*.AppImage
+    - name: Build the AppImage
+      env:
+        QMAKE: /usr/lib/qt6/bin/qmake
+      run: |
+        ./linuxdeploy-${{ matrix.arch.name }}.AppImage --appdir AppDir --plugin qt --output appimage
+    - uses: actions/upload-artifact@v4
+      with:
+        name: melonDS-appimage-${{ matrix.arch.name }}
+        path: melonDS*.AppImage

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team, RSDuck
+    Copyright 2016-2025 melonDS team, RSDuck
 
     This file is part of melonDS.
 
@@ -19,16 +19,20 @@
 #ifndef ARMJIT_REGCACHE_H
 #define ARMJIT_REGCACHE_H
 
-#include "ARMJIT.h"
 #include "ARMJIT_Internal.h"
+#include "Platform.h"
 
 // TODO: replace this in the future
 #include "dolphin/BitSet.h"
 
 #include <assert.h>
 
-namespace ARMJIT
+namespace melonDS
 {
+    using Platform::Log;
+    using Platform::LogLevel;
+    using namespace Common;
+    // Imported inside the namespace so that other headers aren't polluted
 
 template <typename T, typename Reg>
 class RegisterCache
@@ -80,7 +84,7 @@ public:
             }
         }
 
-        printf("this is a JIT bug! LoadRegister failed\n");
+        Log(LogLevel::Error, "this is a JIT bug! LoadRegister failed\n");
         abort();
     }
 
@@ -95,7 +99,7 @@ public:
         LiteralsLoaded &= ~(1 << reg);
     }
 
-    bool IsLiteral(int reg)
+    bool IsLiteral(int reg) const
     {
         return LiteralsLoaded & (1 << reg);
     }

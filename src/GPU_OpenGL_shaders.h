@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -19,6 +19,8 @@
 #ifndef GPU_OPENGL_SHADERS_H
 #define GPU_OPENGL_SHADERS_H
 
+namespace melonDS
+{
 const char* kCompositorVS = R"(#version 320 es
 
 in vec2 vPosition;
@@ -44,7 +46,6 @@ precision mediump float;
 precision mediump usampler2D;
 
 uniform uint u3DScale;
-uniform int u3DXPos;
 
 uniform usampler2D ScreenTex;
 uniform sampler2D _3DTex;
@@ -57,10 +58,12 @@ void main()
 {
     ivec4 pixel = ivec4(texelFetch(ScreenTex, ivec2(fTexcoord), 0));
 
-    float _3dxpos = float(u3DXPos);
-
     ivec4 mbright = ivec4(texelFetch(ScreenTex, ivec2(256*3, int(fTexcoord.y)), 0));
     int dispmode = mbright.b & 0x3;
+
+    // mbright.a == HOFS bit0..7
+    // mbright.b bit7 == HOFS bit8 (sign)
+    float _3dxpos = float(mbright.a - ((mbright.b & 0x80) * 2));
 
     if (dispmode == 1)
     {
@@ -869,5 +872,6 @@ void main()
 
 
 
+}
 
 #endif // GPU_OPENGL_SHADERS_H

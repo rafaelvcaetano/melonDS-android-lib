@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2022 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -24,6 +24,8 @@
 
 namespace Ui { class AudioSettingsDialog; }
 class AudioSettingsDialog;
+
+class EmuInstance;
 
 class AudioSettingsDialog : public QDialog
 {
@@ -51,7 +53,11 @@ public:
         currentDlg = nullptr;
     }
 
+    void onSyncVolumeLevel();
+    void onConsoleReset();
+
 signals:
+    void updateAudioVolume(int vol, bool dsisync);
     void updateAudioSettings();
 
 private slots:
@@ -59,18 +65,25 @@ private slots:
     void on_AudioSettingsDialog_rejected();
 
     void on_cbInterpolation_currentIndexChanged(int idx);
-    void on_cbBitrate_currentIndexChanged(int idx);
+    void on_cbBitDepth_currentIndexChanged(int idx);
     void on_slVolume_valueChanged(int val);
+    void on_chkSyncDSiVolume_clicked(bool checked);
     void onChangeMicMode(int mode);
     void on_btnMicWavBrowse_clicked();
 
 private:
     Ui::AudioSettingsDialog* ui;
 
+    EmuInstance* emuInstance;
+
     int oldInterp;
-    int oldBitrate;
+    int oldBitDepth;
     int oldVolume;
+    bool oldDSiSync;
     QButtonGroup* grpMicMode;
+
+    int volume;
+    bool dsiSync;
 };
 
 #endif // AUDIOSETTINGSDIALOG_H
