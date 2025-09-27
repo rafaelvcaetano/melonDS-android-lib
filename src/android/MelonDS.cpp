@@ -1,68 +1,53 @@
+#include <cstring>
+#include <android/asset_manager.h>
 #include <oboe/Oboe.h>
+#include "EmulatorArgsBuilder.h"
 #include "MelonDS.h"
-#include "FileUtils.h"
 #include "OboeCallback.h"
 #include "MelonAudioStreamErrorCallback.h"
 #include "MicInputOboeCallback.h"
-#include "AndroidARCodeFile.h"
 #include "OpenGLContext.h"
-#include "MelonLog.h"
-#include "../NDS.h"
-#include "../GPU.h"
-#include "../GPU3D.h"
-#include "../GBACart.h"
-#include "../SPU.h"
-#include "../Platform.h"
-#include "../AREngine.h"
-#include "../FileSavestate.h"
-#include "../DSi_I2C.h"
-#include "Config.h"
-#include "MemorySavestate.h"
-#include "FrontendUtil.h"
+#include "mic_blow.h"
+#include "NDS.h"
+#include "GPU.h"
+#include "GPU3D.h"
+#include "GBACart.h"
+#include "SPU.h"
+#include "Platform.h"
+#include "Savestate.h"
+#include "MelonInstance.h"
 #include "RewindManager.h"
 #include "ROMManager.h"
+#include "MPInterface.h"
 #include "AndroidCameraHandler.h"
-#include "LocalMultiplayer.h"
 #include "renderer/ScreenshotRenderer.h"
 #include "renderer/FrameQueue.h"
-#include "retroachievements/RetroAchievements.h"
+#include "retroachievements/RetroAchievementsManager.h"
 #include "retroachievements/RACallback.h"
-#include <android/asset_manager.h>
-#include <cstring>
+#include "net/Net.h"
+#include "net/Net_Slirp.h"
 
 #define MIC_BUFFER_SIZE 2048
-
-const char* MELONDS_TAG = "melonDS";
 
 std::shared_ptr<oboe::AudioStream> audioStream;
 oboe::AudioStreamErrorCallback *audioStreamErrorCallback;
 std::shared_ptr<oboe::AudioStream> micInputStream;
 OboeCallback *outputCallback;
 MicInputOboeCallback *micInputCallback;
-AndroidARCodeFile *arCodeFile;
 OpenGLContext *openGlContext;
-ScreenshotRenderer *screenshotRenderer;
-FrameQueue frameQueue;
-bool isRenderConfigurationDirty = false;
 
 namespace MelonDSAndroid
 {
     long sharedGlContext;
-    int frame = 0;
     int actualMicSource = 0;
     bool isMicInputEnabled = true;
-    RetroAchievements::RACallback* retroAchievementsCallback;
-    AAssetManager* assetManager;
     AndroidFileHandler* fileHandler;
     AndroidCameraHandler* cameraHandler;
     std::string internalFilesDir;
-    EmulatorConfiguration currentConfiguration;
+    std::shared_ptr<EmulatorConfiguration> currentConfiguration;
+    std::shared_ptr<Net> net;
 
-    // Variables used to keep the current state so that emulation can be reset
-    char* currentRomPath = NULL;
-    char* currentSramPath = NULL;
-    RomGbaSlotConfig* currentGbaSlotConfig = nullptr;
-    RunMode currentRunMode;
+    std::shared_ptr<MelonInstance> instance;
 
     void setupAudioOutputStream(int audioLatency, int volume);
     void cleanupAudioOutputStream();
@@ -71,8 +56,6 @@ namespace MelonDSAndroid
     void resetAudioOutputStream();
     bool setupOpenGlContext();
     void cleanupOpenGlContext();
-    void updateCurrentGbaSlotConfig(RomGbaSlotConfig* newConfig);
-    void copyString(char** dest, const char* source);
 
     /**
      * Used to set the emulator's initial configuration, before boot. To update the configuration during runtime, use @updateEmulatorConfiguration.
@@ -80,129 +63,66 @@ namespace MelonDSAndroid
      * @param emulatorConfiguration The emulator configuration during the next emulator run
      */
     void setConfiguration(EmulatorConfiguration emulatorConfiguration) {
-        currentConfiguration = emulatorConfiguration;
-        internalFilesDir = emulatorConfiguration.internalFilesDir;
-        actualMicSource = emulatorConfiguration.micSource;
+        currentConfiguration = std::make_shared<EmulatorConfiguration>(std::move(emulatorConfiguration));
+        internalFilesDir = currentConfiguration->internalFilesDir;
+        actualMicSource = currentConfiguration->micSource;
         isMicInputEnabled = true;
 
-        Config::BIOS7Path = emulatorConfiguration.dsBios7Path ?: "";
-        Config::BIOS9Path = emulatorConfiguration.dsBios9Path ?: "";
-        Config::FirmwarePath = emulatorConfiguration.dsFirmwarePath ?: "";
-
-        Config::DSiBIOS7Path = emulatorConfiguration.dsiBios7Path ?: "";
-        Config::DSiBIOS9Path = emulatorConfiguration.dsiBios9Path ?: "";
-        Config::DSiFirmwarePath = emulatorConfiguration.dsiFirmwarePath ?: "";
-        Config::DSiNANDPath = emulatorConfiguration.dsiNandPath ?: "";
-
-        // Internal BIOS and Firmware can only be used for DS
-        if (emulatorConfiguration.userInternalFirmwareAndBios) {
-            Config::FirmwareUsername = emulatorConfiguration.firmwareConfiguration.username;
-            Config::FirmwareUsername =emulatorConfiguration.firmwareConfiguration.username;
-            Config::FirmwareMessage = emulatorConfiguration.firmwareConfiguration.message;
-            Config::FirmwareLanguage = emulatorConfiguration.firmwareConfiguration.language;
-            Config::FirmwareBirthdayMonth = emulatorConfiguration.firmwareConfiguration.birthdayMonth;
-            Config::FirmwareBirthdayDay = emulatorConfiguration.firmwareConfiguration.birthdayDay;
-            Config::FirmwareFavouriteColour = emulatorConfiguration.firmwareConfiguration.favouriteColour;
-            Config::FirmwareMAC = emulatorConfiguration.firmwareConfiguration.macAddress;
-            Config::DSBatteryLevelOkay = true;
-            Config::ConsoleType = 0;
-            Config::ExternalBIOSEnable = false;
-        } else {
-            Config::ExternalBIOSEnable = true;
-            Config::DirectBoot = !emulatorConfiguration.showBootScreen;
-
-            if (emulatorConfiguration.consoleType == 0) {
-                Config::DSBatteryLevelOkay = true;
-                Config::ConsoleType = 0;
-            } else {
-                Config::DSiBatteryLevel = DSi_BPTWL::batteryLevel_Full;
-                Config::DSiBatteryCharging = true;
-                Config::ConsoleType = 1;
-            }
-        }
-
-#ifdef JIT_ENABLED
-        Config::JIT_Enable = emulatorConfiguration.useJit;
-#endif
-
-        Config::AudioBitrate = emulatorConfiguration.audioBitrate;
-        Config::FirmwareOverrideSettings = false;
-        Config::RandomizeMAC = emulatorConfiguration.firmwareConfiguration.randomizeMacAddress;
-        Config::SocketBindAnyAddr = true;
-        Config::DLDIEnable = false;
-        Config::DSiSDEnable = false;
-
-        Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
-        Config::RewindCaptureSpacingSeconds = emulatorConfiguration.rewindCaptureSpacingSeconds;
-        Config::RewindLengthSeconds = emulatorConfiguration.rewindLengthSeconds;
-        // Use 20MB per savestate
-        RewindManager::SetRewindBufferSizes(1024 * 1024 * 20, 256 * 384 * 4);
+        net = std::make_shared<Net>();
+        net->SetDriver(std::make_unique<Net_Slirp>([](const u8* data, int len) {
+            net->RXEnqueue(data, len);
+        }));
     }
 
-    void setup(AAssetManager* androidAssetManager, AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, long glContext, bool isMasterInstance) {
-        assetManager = androidAssetManager;
+    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, long glContext, int instanceId) {
         cameraHandler = androidCameraHandler;
-        retroAchievementsCallback = raCallback;
-        LocalMultiplayer::SetIsMasterInstance(isMasterInstance);
-        screenshotRenderer = new ScreenshotRenderer(screenshotBufferPointer);
+        RetroAchievements::RetroAchievementsManager::AchievementsCallback = raCallback;
         sharedGlContext = glContext;
 
-        NDS::Init();
-
-        if (currentConfiguration.soundEnabled) {
-            setupAudioOutputStream(currentConfiguration.audioLatency, currentConfiguration.volume);
+        auto instanceArgs = BuildArgsFromConfiguration(*currentConfiguration, instanceId);
+        if (!instanceArgs.has_value())
+        {
+            // TODO: Handle this somehow?
+            instance = nullptr;
+            return;
         }
-        if (currentConfiguration.micSource == 2) {
+        instance = std::make_shared<MelonInstance>(
+            instanceId,
+            currentConfiguration,
+            std::move(instanceArgs.value()),
+            net,
+            ScreenshotRenderer(screenshotBufferPointer),
+            currentConfiguration->consoleType
+        );
+
+        if (currentConfiguration->soundEnabled)
+        {
+            setupAudioOutputStream(currentConfiguration->audioLatency, currentConfiguration->volume);
+        }
+        if (currentConfiguration->micSource == 2)
+        {
             setupMicInputStream();
         }
-
-        // Always start with software renderer. Once the emulator thread starts, the OpenGL context is setup and the switch to the GL renderer is made if necessary
-        GPU::InitRenderer(0);
-        GPU::SetRenderSettings(0, currentConfiguration.renderSettings);
-        SPU::SetInterpolation(currentConfiguration.audioInterpolation);
-        isRenderConfigurationDirty = true;
     }
 
     void setCodeList(std::list<Cheat> cheats)
     {
-        if (arCodeFile == NULL) {
-            arCodeFile = new AndroidARCodeFile();
-            AREngine::SetCodeFile(arCodeFile);
-        }
-
-        ARCodeList codeList;
-
-        for (std::list<Cheat>::iterator it = cheats.begin(); it != cheats.end(); it++)
-        {
-            Cheat& cheat = *it;
-
-            ARCode code = {
-                    .Enabled = true,
-                    .CodeLen = cheat.codeLength
-            };
-            memcpy(code.Code, cheat.code, sizeof(code.Code));
-
-            codeList.push_back(code);
-        }
-
-        arCodeFile->updateCodeList(codeList);
+        instance->loadCheats(cheats);
     }
 
-    void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::string* richPresenceScript)
+    void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::optional<std::string> richPresenceScript)
     {
-        RetroAchievements::LoadAchievements(achievements);
-        if (richPresenceScript != nullptr)
-            RetroAchievements::SetupRichPresence(*richPresenceScript);
+        instance->setupAchievements(achievements, richPresenceScript);
     }
 
     void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements)
     {
-        RetroAchievements::UnloadAchievements(achievements);
+        instance->unloadAchievements(achievements);
     }
 
     std::string getRichPresenceStatus()
     {
-        return RetroAchievements::GetRichPresenceStatus();
+        return instance->getRichPresenceStatus();
     }
 
     /**
@@ -210,96 +130,82 @@ namespace MelonDSAndroid
      *
      * @param emulatorConfiguration The new emulator configuration
      */
-    void updateEmulatorConfiguration(EmulatorConfiguration emulatorConfiguration) {
-        Config::AudioBitrate = emulatorConfiguration.audioBitrate;
-        SPU::SetInterpolation(emulatorConfiguration.audioInterpolation);
-        Config::RewindEnabled = emulatorConfiguration.rewindEnabled;
-        Config::RewindCaptureSpacingSeconds = emulatorConfiguration.rewindCaptureSpacingSeconds;
-        Config::RewindLengthSeconds = emulatorConfiguration.rewindLengthSeconds;
-        isRenderConfigurationDirty = true;
+    void updateEmulatorConfiguration(std::unique_ptr<EmulatorConfiguration> emulatorConfiguration) {
+        std::shared_ptr<EmulatorConfiguration> sharedConfig = std::move(emulatorConfiguration);
+        instance->updateConfiguration(sharedConfig);
 
-        if (emulatorConfiguration.rewindEnabled) {
-            RewindManager::TrimRewindWindowIfRequired();
-        } else {
-            RewindManager::Reset();
-        }
-
-        if (emulatorConfiguration.soundEnabled && currentConfiguration.volume > 0) {
+        if (sharedConfig->soundEnabled && currentConfiguration->volume > 0) {
             if (!audioStream) {
-                setupAudioOutputStream(emulatorConfiguration.audioLatency, emulatorConfiguration.volume);
-            } else if (currentConfiguration.audioLatency != emulatorConfiguration.audioLatency || currentConfiguration.volume != emulatorConfiguration.volume) {
+                setupAudioOutputStream(sharedConfig->audioLatency, sharedConfig->volume);
+            } else if (currentConfiguration->audioLatency != sharedConfig->audioLatency || currentConfiguration->volume != sharedConfig->volume) {
                 // Recreate audio stream with new settings
                 cleanupAudioOutputStream();
-                setupAudioOutputStream(emulatorConfiguration.audioLatency, emulatorConfiguration.volume);
+                setupAudioOutputStream(sharedConfig->audioLatency, sharedConfig->volume);
             }
         } else if (audioStream) {
             cleanupAudioOutputStream();
         }
 
         int oldMicSource = actualMicSource;
-        actualMicSource = emulatorConfiguration.micSource;
+        actualMicSource = sharedConfig->micSource;
 
-        if (oldMicSource == 2 && emulatorConfiguration.micSource != 2) {
+        if (oldMicSource == 2 && sharedConfig->micSource != 2) {
             // No longer using device mic. Destroy stream
             cleanupMicInputStream();
-        } else if (oldMicSource != 2 && emulatorConfiguration.micSource == 2) {
+        } else if (oldMicSource != 2 && sharedConfig->micSource == 2) {
             // Now using device mic. Setup stream
             setupMicInputStream();
         }
 
-        currentConfiguration = emulatorConfiguration;
+        currentConfiguration = sharedConfig;
     }
 
-    int loadRom(char* romPath, char* sramPath, RomGbaSlotConfig* gbaSlotConfig)
+    int loadRom(std::string romPath, std::string sramPath, RomGbaSlotConfig* gbaSlotConfig)
     {
-        copyString(&currentRomPath, romPath);
-        copyString(&currentSramPath, sramPath);
-        updateCurrentGbaSlotConfig(gbaSlotConfig);
-        currentRunMode = ROM;
-
-        bool loaded = ROMManager::LoadROM(romPath, sramPath, true);
-        if (!loaded)
+        if (!instance->loadRom(romPath, sramPath))
             return 2;
 
-        // Slot 2 is not supported in DSi
-        if (NDS::ConsoleType == 0)
+        if (gbaSlotConfig->type == GBA_ROM)
         {
-            if (gbaSlotConfig->type == GBA_ROM)
-            {
-                RomGbaSlotConfigGbaRom* gbaRomConfig = (RomGbaSlotConfigGbaRom*) gbaSlotConfig;
-                if (!ROMManager::LoadGBAROM(gbaRomConfig->romPath, gbaRomConfig->savePath))
-                    return 1;
-            }
-            else if (gbaSlotConfig->type == MEMORY_EXPANSION)
-            {
-                ROMManager::LoadGBAAddon(NDS::GBAAddon_RAMExpansion);
-            }
+            RomGbaSlotConfigGbaRom* gbaRomConfig = (RomGbaSlotConfigGbaRom*) gbaSlotConfig;
+            if (!instance->loadGbaRom(gbaRomConfig->romPath, gbaRomConfig->savePath))
+                return 1;
         }
-
-        NDS::Start();
+        else if (gbaSlotConfig->type == MEMORY_EXPANSION)
+        {
+            instance->loadGbaMemoryExpansion();
+        }
 
         return 0;
     }
 
     int bootFirmware()
     {
-        currentRunMode = FIRMWARE;
-        ROMManager::SetupResult result = ROMManager::VerifySetup();
-        if (result != ROMManager::SUCCESS)
-        {
-            return result;
-        }
-
-        bool successful = ROMManager::LoadBIOS();
-        if (successful)
-        {
-            NDS::Start();
+        // TODO: Maybe validate BIOS and firmware?
+        if (instance->bootFirmware())
             return ROMManager::SUCCESS;
-        }
         else
-        {
             return ROMManager::FIRMWARE_NOT_BOOTABLE;
-        }
+    }
+
+    void touchScreen(u16 x, u16 y)
+    {
+        instance->touchScreen(x, y);
+    }
+
+    void releaseScreen()
+    {
+        instance->releaseScreen();
+    }
+
+    void pressKey(u32 key)
+    {
+        instance->pressKey(key);
+    }
+
+    void releaseKey(u32 key)
+    {
+        instance->releaseKey(key);
     }
 
     void start()
@@ -312,104 +218,25 @@ namespace MelonDSAndroid
 
         setupOpenGlContext();
 
-        screenshotRenderer->init();
-        RetroAchievements::Init(retroAchievementsCallback);
-        frame = 0;
+        instance->start();
     }
 
     u32 loop()
     {
-        if (isRenderConfigurationDirty) {
-            GPU::SetRenderSettings(currentConfiguration.renderer, currentConfiguration.renderSettings);
-            isRenderConfigurationDirty = false;
-        }
-
-        int screenWidth;
-        int screenHeight;
-        if (GPU::Renderer == 0)
-        {
-            screenWidth = 256;
-            screenHeight = 192 + 1;
-        }
-        else
-        {
-            screenWidth = 256 * currentConfiguration.renderSettings.GL_ScaleFactor;
-            screenHeight = (192 + 1) * currentConfiguration.renderSettings.GL_ScaleFactor;
-        }
-
-        Frame* renderFrame = frameQueue.getRenderFrame();
-
-        // Delete old render fence
-        if (renderFrame->renderFence)
-        {
-            glDeleteSync(renderFrame->renderFence);
-            renderFrame->renderFence = 0;
-        }
-
-        // Ensure presentation is finished
-        if (renderFrame->presentFence)
-        {
-            glWaitSync(renderFrame->presentFence, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(renderFrame->presentFence);
-            renderFrame->presentFence = 0;
-        }
-
-        // Validate frame after ensuring that the frame has finished presenting
-        frameQueue.validateRenderFrame(renderFrame, screenWidth, screenHeight * 2);
-
-        if (GPU::Renderer == 1)
-        {
-            GPU::CurGLCompositor->SetOutputTexture(renderFrame->frameTexture);
-        }
-
-        u32 nLines = NDS::RunFrame();
-        RetroAchievements::FrameUpdate();
-
-        if (ROMManager::NDSSave)
-            ROMManager::NDSSave->CheckFlush();
-
-        if (ROMManager::GBASave)
-            ROMManager::GBASave->CheckFlush();
-
-        if (GPU::Renderer == 0)
-        {
-            int frontbuf = GPU::FrontBuffer;
-            if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
-            {
-                glBindTexture(GL_TEXTURE_2D, renderFrame->frameTexture);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192 + 2, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
-                glBindTexture(GL_TEXTURE_2D, 0);
-            }
-        }
-        else
-        {
-            // Do nothing. Emulator already renders into the texture, which was set-up above
-        }
-
-        renderFrame->renderFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();
-        frameQueue.pushRenderedFrame(renderFrame);
-
-        // Capture screenshot
-        screenshotRenderer->renderScreenshot(renderFrame);
-
-        frame++;
-        if (RewindManager::ShouldCaptureState(frame))
-        {
-            auto nextRewindState = RewindManager::GetNextRewindSaveState(frame);
-            saveRewindState(nextRewindState);
-        }
-
-        return nLines;
+        MPInterface::Get().Process();
+        return instance->runFrame();
     }
 
     Frame* getPresentationFrame()
     {
-        return frameQueue.getPresentFrame();
+        if (!instance)
+            return nullptr;
+
+        return instance->getPresentationFrame();
     }
 
-    void pause() {
+    void pause()
+    {
         if (audioStream)
             audioStream->requestPause();
 
@@ -417,7 +244,8 @@ namespace MelonDSAndroid
             micInputStream->requestStop();
     }
 
-    void resume() {
+    void resume()
+    {
         if (audioStream)
             audioStream->requestStart();
 
@@ -427,14 +255,7 @@ namespace MelonDSAndroid
 
     void reset()
     {
-        frame = 0;
-
-        if (currentRunMode == ROM)
-        {
-            RetroAchievements::Reset();
-            RewindManager::Reset();
-        }
-        ROMManager::Reset();
+        instance->reset();
     }
 
     void enableMic()
@@ -459,27 +280,71 @@ namespace MelonDSAndroid
     {
         if (!isMicInputEnabled)
         {
-            Frontend::Mic_FeedSilence();
+            instance->feedMicAudio(nullptr, 0);
             return;
         }
 
         switch (actualMicSource)
         {
             case 0: // no mic
-                Frontend::Mic_FeedSilence();
+                instance->feedMicAudio(nullptr, 0);
                 break;
             case 1: // white noise
-                Frontend::Mic_FeedNoise();
+            {
+                int sample_len = sizeof(mic_blow) / sizeof(u16);
+                static int sample_pos = 0;
+
+                s16 tmp[735];
+
+                for (int i = 0; i < 735; i++)
+                {
+                    tmp[i] = mic_blow[sample_pos] ^ 0x8000;
+                    sample_pos++;
+                    if (sample_pos >= sample_len)
+                        sample_pos = 0;
+                }
+
+                instance->feedMicAudio(tmp, 735);
                 break;
+            }
             case 2: // host mic
-                Frontend::Mic_FeedExternalBuffer();
+                instance->feedMicAudio(micInputCallback->buffer, 735);
                 break;
         }
     }
 
     bool saveState(const char* path)
     {
-        FileSavestate* savestate = new FileSavestate(path, true);
+        Platform::FileHandle* saveStateFile = Platform::OpenFile(path, Platform::FileMode::Write);
+
+        if (!saveStateFile)
+            return false;
+
+        Savestate state;
+        if (state.Error)
+        {
+            Platform::CloseFile(saveStateFile);
+            return false;
+        }
+
+        instance->saveState(&state);
+
+        if (state.Error)
+        {
+            Platform::CloseFile(saveStateFile);
+            return false;
+        }
+
+        if (Platform::FileWrite(state.Buffer(), state.Length(), 1, saveStateFile) == 0)
+        {
+            Platform::Log(Platform::Error, "Failed to write %d-byte savestate to %s\n", state.Length(), path);
+            Platform::CloseFile(saveStateFile);
+            return false;
+        }
+
+        Platform::CloseFile(saveStateFile);
+
+        /*FileSavestate* savestate = new FileSavestate(path, true);
         if (savestate->Error)
         {
             delete savestate;
@@ -493,144 +358,108 @@ namespace MelonDSAndroid
 
             delete savestate;
             return result;
-        }
+        }*/
+        return true;
     }
 
     bool loadState(const char* path)
     {
-        bool success = true;
-        char* backupPath = joinPaths(currentConfiguration.internalFilesDir, "backup.mln");
-
-        FileSavestate* backup = new FileSavestate(backupPath, true);
-        NDS::DoSavestate(backup);
-        RetroAchievements::DoSavestate(backup);
-        delete backup;
-
-        FileSavestate* savestate = new FileSavestate(path, false);
-        if (savestate->Error)
+        auto saveStateFile = Platform::OpenFile(path, Platform::FileMode::Read);
+        if (!saveStateFile)
         {
-            delete savestate;
-
-            savestate = new FileSavestate(backupPath, false);
-            success = false;
-        }
-
-        NDS::DoSavestate(savestate);
-        RetroAchievements::DoSavestate(savestate);
-        delete savestate;
-
-        // Delete backup file
-        remove(backupPath);
-
-        delete[] backupPath;
-
-        return success;
-    }
-
-    bool saveRewindState(RewindManager::RewindSaveState rewindSaveState)
-    {
-        MemorySavestate* savestate = new MemorySavestate(rewindSaveState.buffer, true);
-        if (savestate->Error)
-        {
-            delete savestate;
+            Platform::Log(Platform::LogLevel::Error, "Failed to open state file \"%s\"\n", path);
             return false;
         }
-        else
+
+        std::unique_ptr<Savestate> backup = std::make_unique<Savestate>(Savestate::DEFAULT_SIZE);
+        if (backup->Error)
         {
-            bool success = NDS::DoSavestate(savestate);
-            if (success)
-                success = RetroAchievements::DoSavestate(savestate);
-
-            if (success)
-                memcpy(rewindSaveState.screenshot, screenshotRenderer->getScreenshot(), 256 * 384 * 4);
-
-            delete savestate;
-            return success;
+            Platform::Log(Platform::LogLevel::Error, "Failed to allocate memory for state backup\n");
+            Platform::CloseFile(saveStateFile);
+            return false;
         }
+
+        if (!instance->saveState(backup.get()) || backup->Error)
+        {
+            Platform::Log(Platform::LogLevel::Error, "Failed to back up state, aborting load (from \"%s\")\n", path);
+            Platform::CloseFile(saveStateFile);
+            return false;
+        }
+
+        size_t size = Platform::FileLength(saveStateFile);
+
+        // Allocate exactly as much memory as we need for the savestate
+        std::vector<u8> buffer(size);
+        if (Platform::FileRead(buffer.data(), size, 1, saveStateFile) == 0)
+        {
+            Platform::Log(Platform::LogLevel::Error, "Failed to read %u-byte state file \"%s\"\n", size, path);
+            Platform::CloseFile(saveStateFile);
+            return false;
+        }
+        Platform::CloseFile(saveStateFile);
+
+        std::unique_ptr<Savestate> state = std::make_unique<Savestate>(buffer.data(), size, false);
+
+        if (!instance->loadState(state.get()) || state->Error)
+        {
+            Platform::Log(Platform::LogLevel::Error, "Failed to load state file \"%s\" into emulator\n", path);
+            // Restore backup
+            if (!instance->loadState(backup.get()) || state->Error)
+                Platform::Log(Platform::LogLevel::Error, "Failed to load backup state\n", path);
+            else
+                Platform::Log(Platform::LogLevel::Info, "Backup state loaded\n", path);
+
+            return false;
+        }
+        return true;
     }
 
-    bool loadRewindState(RewindManager::RewindSaveState rewindSaveState)
+    bool loadRewindState(melonDS::RewindSaveState rewindSaveState)
     {
-        bool success = true;
-        char* backupPath = joinPaths(currentConfiguration.internalFilesDir, "backup.mln");
-
-        FileSavestate* backup = new FileSavestate(backupPath, true);
-        NDS::DoSavestate(backup);
-        RetroAchievements::DoSavestate(backup);
-        delete backup;
-
-        Savestate* savestate = new MemorySavestate(rewindSaveState.buffer, false);
-        if (savestate->Error)
+        std::unique_ptr<Savestate> backup = std::make_unique<Savestate>(Savestate::DEFAULT_SIZE);
+        if (backup->Error)
         {
-            delete savestate;
-
-            savestate = new FileSavestate(backupPath, false);
-            success = false;
+            Platform::Log(Platform::LogLevel::Error, "Failed to allocate memory for state backup");
+            return false;
         }
 
-        NDS::DoSavestate(savestate);
-        RetroAchievements::DoSavestate(savestate);
-        delete savestate;
+        if (!instance->saveState(backup.get()) || backup->Error)
+        {
+            Platform::Log(Platform::LogLevel::Error, "Failed to back up state, aborting rewind state load");
+            return false;
+        }
 
-        // Delete backup file
-        remove(backupPath);
-        // Restore frame
-        frame = rewindSaveState.frame;
-        RewindManager::OnRewindFromState(rewindSaveState);
+        bool result = instance->loadRewindState(rewindSaveState);
+        if (!result)
+        {
+            Platform::Log(Platform::LogLevel::Error, "Failed to load rewind state");
+            // Restore backup
+            if (!instance->loadState(backup.get()) || backup->Error)
+                Platform::Log(Platform::LogLevel::Error, "Failed to load backup state");
+            else
+                Platform::Log(Platform::LogLevel::Info, "Backup state loaded");
+        }
 
-        delete[] backupPath;
-
-        return success;
+        return result;
     }
 
     RewindWindow getRewindWindow()
     {
-        return RewindWindow {
-            .currentFrame = frame,
-            .rewindStates = RewindManager::GetRewindWindow()
-        };
+        return instance->getRewindWindow();
     }
 
     void stop()
     {
-        RetroAchievements::DeInit();
-        ROMManager::EjectCart();
-        ROMManager::EjectGBACart();
-        NDS::Stop();
-        GPU::DeInitRenderer();
-        NDS::DeInit();
-        RewindManager::Reset();
-
-        frameQueue.clear();
-        screenshotRenderer->cleanup();
-
+        instance->stop();
         cleanupOpenGlContext();
     }
 
     void cleanup()
     {
-        free(currentRomPath);
-        free(currentSramPath);
-        currentRomPath = NULL;
-        currentSramPath = NULL;
-        delete screenshotRenderer;
-
         cleanupAudioOutputStream();
         cleanupMicInputStream();
 
-        if (arCodeFile != NULL) {
-            delete arCodeFile;
-            arCodeFile = NULL;
-        }
-
-        if (currentGbaSlotConfig != NULL)
-        {
-            delete currentGbaSlotConfig;
-            currentGbaSlotConfig = NULL;
-        }
-
-        assetManager = NULL;
-        screenshotRenderer = NULL;
+        instance = nullptr;
     }
 
     void setupAudioOutputStream(int audioLatency, int volume)
@@ -651,6 +480,8 @@ namespace MelonDSAndroid
         }
 
         outputCallback = new OboeCallback(volume);
+        outputCallback->activeInstance = instance;
+
         audioStreamErrorCallback = new MelonAudioStreamErrorCallback(resetAudioOutputStream);
         oboe::AudioStreamBuilder streamBuilder;
         streamBuilder.setChannelCount(2);
@@ -670,8 +501,6 @@ namespace MelonDSAndroid
             delete audioStreamErrorCallback;
             outputCallback = NULL;
             audioStreamErrorCallback = NULL;
-        } else {
-            Frontend::Init_Audio(audioStream->getSampleRate());
         }
     }
 
@@ -710,8 +539,6 @@ namespace MelonDSAndroid
             fprintf(stderr, "Failed to init mic audio stream");
             delete micInputCallback;
             micInputCallback = NULL;
-        } else {
-            Frontend::Mic_SetExternalBuffer(micInputCallback->buffer, MIC_BUFFER_SIZE);
         }
     }
 
@@ -723,14 +550,13 @@ namespace MelonDSAndroid
             delete micInputCallback;
             micInputStream = NULL;
             micInputCallback = NULL;
-            Frontend::Mic_SetExternalBuffer(NULL, 0);
         }
     }
 
     void resetAudioOutputStream()
     {
         cleanupAudioOutputStream();
-        setupAudioOutputStream(currentConfiguration.audioLatency, currentConfiguration.volume);
+        setupAudioOutputStream(currentConfiguration->audioLatency, currentConfiguration->volume);
         if (audioStream) {
             audioStream->requestStart();
         }
@@ -744,17 +570,17 @@ namespace MelonDSAndroid
         openGlContext = new OpenGLContext();
         if (!openGlContext->InitContext(sharedGlContext))
         {
-            LOG_ERROR(MELONDS_TAG, "Failed to init OpenGL context");
+            Platform::Log(Platform::LogLevel::Error, "Failed to init OpenGL context");
             openGlContext->DeInit();
-            currentConfiguration.renderer = 0;
+            currentConfiguration->renderer = Renderer::Software;
             return false;
         }
         else
         {
-            LOG_DEBUG(MELONDS_TAG, "OpenGL context initialised");
+            Platform::Log(Platform::LogLevel::Info, "OpenGL context initialised");
             if (!openGlContext->Use())
             {
-                LOG_ERROR(MELONDS_TAG, "Failed to use OpenGL context");
+                Platform::Log(Platform::LogLevel::Error, "Failed to use OpenGL context");
                 cleanupOpenGlContext();
                 return false;
             }
@@ -773,55 +599,6 @@ namespace MelonDSAndroid
         openGlContext->DeInit();
         delete openGlContext;
         openGlContext = nullptr;
-    }
-
-    void updateCurrentGbaSlotConfig(RomGbaSlotConfig* newConfig)
-    {
-        if (currentGbaSlotConfig != nullptr)
-            delete currentGbaSlotConfig;
-
-        if (newConfig->type == RomGbaSlotConfigType::GBA_ROM)
-        {
-            RomGbaSlotConfigGbaRom* gbaRomConfig = new RomGbaSlotConfigGbaRom;
-            gbaRomConfig->romPath = ((RomGbaSlotConfigGbaRom*) newConfig)->romPath;
-            gbaRomConfig->savePath = ((RomGbaSlotConfigGbaRom*) newConfig)->savePath;
-
-            currentGbaSlotConfig = (RomGbaSlotConfig*) gbaRomConfig;
-        }
-        else if (newConfig->type == RomGbaSlotConfigType::MEMORY_EXPANSION)
-        {
-            currentGbaSlotConfig = (RomGbaSlotConfig*) new RomGbaSlotConfigMemoryExpansion;
-        }
-        else
-        {
-            currentGbaSlotConfig = (RomGbaSlotConfig*) new RomGbaSlotConfigNone;
-        }
-    }
-
-    void copyString(char** dest, const char* source)
-    {
-        if (source == nullptr)
-        {
-            if (*dest != nullptr)
-            {
-                free(*dest);
-                *dest = nullptr;
-            }
-
-            return;
-        }
-
-        int length = strlen(source);
-        if (*dest == nullptr)
-        {
-            *dest = (char*) malloc(length + 1);
-        }
-        else
-        {
-            *dest = (char*) realloc(*dest, length + 1);
-        }
-
-        strcpy(*dest, source);
     }
 }
 

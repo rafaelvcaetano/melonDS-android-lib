@@ -272,11 +272,10 @@ void GLCompositor::RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept
     glDrawArrays(GL_TRIANGLES, 0, 4*3);
 }
 
-void GLCompositor::SetOutputTexture(const GPU& gpu, GLuint texture)
+void GLCompositor::SetOutputTexture(int buf, GLuint texture)
 {
-    int frontbuf = gpu.FrontBuffer;
     GLenum fbassign[] = {GL_COLOR_ATTACHMENT0};
-    glBindFramebuffer(GL_FRAMEBUFFER, CompScreenOutputFB[frontbuf]);
+    glBindFramebuffer(GL_FRAMEBUFFER, CompScreenOutputFB[buf]);
     glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0);
     glDrawBuffers(1, fbassign);
 }

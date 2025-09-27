@@ -1,7 +1,9 @@
 #ifndef ANDROIDCAMERAHANDLER_H
 #define ANDROIDCAMERAHANDLER_H
 
-#include "../types.h"
+#include "types.h"
+
+using namespace melonDS;
 
 namespace MelonDSAndroid
 {

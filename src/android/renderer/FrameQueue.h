@@ -4,7 +4,9 @@
 #include <array>
 #include <queue>
 #include <GLES3/gl3.h>
-#include "../types.h"
+#include "types.h"
+
+using namespace melonDS;
 
 // 9 frames should allow the emulator to run up 8x speed. This includes 8 frames ready to present, plus one frame currently being rendered to.
 constexpr std::size_t FRAME_QUEUE_SIZE = 9;

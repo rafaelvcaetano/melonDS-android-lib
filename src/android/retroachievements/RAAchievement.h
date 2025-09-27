@@ -3,6 +3,8 @@
 
 #include <string>
 
+namespace MelonDSAndroid
+{
 namespace RetroAchievements
 {
 
@@ -12,6 +14,7 @@ typedef struct RAAchievement
     std::string memoryAddress;
 } RAAchievement;
 
+}
 }
 
 #endif //RAACHIEVEMENT_H

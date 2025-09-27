@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2025 Arisotura
 
     This file is part of melonDS.
 
@@ -17,65 +17,61 @@
 */
 
 #include "RewindManager.h"
-#include "Config.h"
 #include <list>
 
-namespace RewindManager
+namespace melonDS
 {
 
 const int FRAMES_PER_SECOND = 60;
 
-std::list<RewindSaveState> RewindWindow = std::list<RewindSaveState>();
-u32 SavestateBufferSize;
-u32 ScreenshotBufferSize;
-
-int RewindWindowSize()
+RewindManager::RewindManager(bool enabled, int rewindLengthSeconds, int rewindCapturingIntervalSeconds, size_t rewindBufferSize, size_t screenshotBufferSize) :
+    Enabled(enabled),
+    RewindLengthSeconds(rewindLengthSeconds),
+    RewindCapturingIntervalSeconds(rewindCapturingIntervalSeconds),
+    SavestateBufferSize(rewindBufferSize),
+    ScreenshotBufferSize(screenshotBufferSize)
 {
-    return Config::RewindLengthSeconds / Config::RewindCaptureSpacingSeconds;
 }
 
-RewindSaveState CreateRewindSaveState(int frame)
+RewindManager::~RewindManager()
 {
-    return RewindSaveState {
-        .buffer = new u8[SavestateBufferSize],
-        .bufferSize = SavestateBufferSize,
-        .screenshot = new u8[ScreenshotBufferSize],
-        .screenshotSize = ScreenshotBufferSize,
-        .frame = frame
-    };
+    for (auto state : RewindWindow)
+        DeleteRewindSaveState(state);
 }
 
-void DeleteRewindSaveState(RewindSaveState state)
+void RewindManager::UpdateRewindSettings(bool enabled, int rewindLengthSeconds, int rewindCapturingIntervalSeconds)
 {
-    delete[] state.buffer;
-    delete[] state.screenshot;
+    RewindLengthSeconds = rewindLengthSeconds;
+    RewindCapturingIntervalSeconds = rewindCapturingIntervalSeconds;
+
+    if (Enabled)
+    {
+        if (!enabled)
+            Reset();
+        else
+            TrimRewindWindowIfRequired();
+    }
+
+    Enabled = enabled;
 }
 
-void SetRewindBufferSizes(u32 savestateSizeBytes, u32 screenshotSizeBytes)
+bool RewindManager::ShouldCaptureState(int currentFrame)
 {
-    SavestateBufferSize = savestateSizeBytes;
-    ScreenshotBufferSize = screenshotSizeBytes;
-}
-
-bool ShouldCaptureState(int currentFrame)
-{
-    if (!Config::RewindEnabled || RewindWindowSize() == 0)
+    if (!Enabled || RewindWindowSize() == 0)
     {
         return false;
     }
 
-    return currentFrame % (Config::RewindCaptureSpacingSeconds * FRAMES_PER_SECOND) == 0;
+    return currentFrame % (RewindCapturingIntervalSeconds * FRAMES_PER_SECOND) == 0;
 }
 
-RewindSaveState GetNextRewindSaveState(int currentFrame)
+RewindSaveState* RewindManager::GetNextRewindSaveState(int currentFrame)
 {
-    RewindSaveState nextRewindSaveState;
     if (RewindWindow.size() < RewindWindowSize())
     {
         // Windows is not yet full. Create new savestate
         RewindSaveState newRewindSaveState = CreateRewindSaveState(currentFrame);
         RewindWindow.push_front(newRewindSaveState);
-        nextRewindSaveState = newRewindSaveState;
     }
     else
     {
@@ -84,18 +80,17 @@ RewindSaveState GetNextRewindSaveState(int currentFrame)
         oldestState.frame = currentFrame;
         RewindWindow.pop_back();
         RewindWindow.push_front(oldestState);
-        nextRewindSaveState = oldestState;
     }
 
-    return nextRewindSaveState;
+    return &*RewindWindow.begin();
 }
 
-std::list<RewindSaveState> GetRewindWindow()
+std::list<RewindSaveState> RewindManager::GetRewindWindow()
 {
     return RewindWindow;
 }
 
-void OnRewindFromState(RewindSaveState state)
+void RewindManager::OnRewindFromState(RewindSaveState state)
 {
     auto iterator = RewindWindow.begin();
     while ((*iterator).frame > state.frame && iterator != RewindWindow.end())
@@ -107,7 +102,19 @@ void OnRewindFromState(RewindSaveState state)
     }
 }
 
-void TrimRewindWindowIfRequired()
+RewindSaveState RewindManager::CreateRewindSaveState(int frame)
+{
+    return RewindSaveState {
+        .buffer = new u8[SavestateBufferSize],
+        .bufferSize = SavestateBufferSize,
+        .bufferContentSize = 0,
+        .screenshot = new u8[ScreenshotBufferSize],
+        .screenshotSize = ScreenshotBufferSize,
+        .frame = frame
+    };
+}
+
+void RewindManager::TrimRewindWindowIfRequired()
 {
     int windowSize = RewindWindowSize();
     while (RewindWindow.size() > windowSize)
@@ -118,7 +125,7 @@ void TrimRewindWindowIfRequired()
     }
 }
 
-void Reset()
+void RewindManager::Reset()
 {
     for (auto state : RewindWindow)
     {
@@ -126,6 +133,12 @@ void Reset()
     }
 
     RewindWindow.clear();
+}
+
+void RewindManager::DeleteRewindSaveState(RewindSaveState state)
+{
+    delete[] state.buffer;
+    delete[] state.screenshot;
 }
 
 }

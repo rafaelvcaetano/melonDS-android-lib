@@ -2,6 +2,9 @@
 #include "MelonLog.h"
 #include "GPU.h"
 
+namespace MelonDSAndroid
+{
+
 ScreenshotRenderer::ScreenshotRenderer(u32* screenshotBuffer)
 {
     this->screenshotBuffer = screenshotBuffer;
@@ -15,13 +18,13 @@ void ScreenshotRenderer::init()
     setupVertexBuffers();
 }
 
-void ScreenshotRenderer::renderScreenshot(Frame* renderFrame)
+void ScreenshotRenderer::renderScreenshot(GPU* gpu, Renderer renderer, Frame* renderFrame)
 {
-    int frontBuffer = GPU::FrontBuffer;
-    if (GPU::Renderer == 0)
+    if (renderer == Renderer::Software)
     {
-        memcpy(screenshotBuffer, GPU::Framebuffer[frontBuffer][0], 256 * 192 * 4);
-        memcpy(&screenshotBuffer[256 * 192], GPU::Framebuffer[frontBuffer][1], 256 * 192 * 4);
+        int frontBuffer = gpu->FrontBuffer;
+        memcpy(screenshotBuffer, gpu->Framebuffer[frontBuffer][0].get(), 256 * 192 * 4);
+        memcpy(&screenshotBuffer[256 * 192], gpu->Framebuffer[frontBuffer][1].get(), 256 * 192 * 4);
     }
     else
     {
@@ -218,4 +221,6 @@ void ScreenshotRenderer::cleanup()
     glDeleteFramebuffers(2, frameBuffers);
     glDeleteBuffers(1, &vbo);
     glDeleteVertexArrays(1, &vao);
+}
+
 }

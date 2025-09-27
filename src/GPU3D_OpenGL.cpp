@@ -1328,6 +1328,11 @@ void GLRenderer::Blit(const GPU& gpu)
     CurGLCompositor.RenderFrame(gpu, *this);
 }
 
+void GLRenderer::SetOutputTexture(int buffer, u32 texture)
+{
+    CurGLCompositor.SetOutputTexture(buffer, (GLuint) texture);
+}
+
 void GLRenderer::BindOutputTexture(int buffer)
 {
     CurGLCompositor.BindOutputTexture(buffer);

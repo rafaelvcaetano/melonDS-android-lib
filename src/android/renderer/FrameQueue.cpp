@@ -101,6 +101,8 @@ void FrameQueue::clear()
 
     for (auto& frame : frames) {
         glDeleteTextures(1, &frame.frameTexture);
+        glDeleteSync(frame.renderFence);
+        glDeleteSync(frame.presentFence);
         frame.frameTexture = 0;
         frame.width = 0;
         frame.height = 0;

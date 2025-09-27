@@ -11,8 +11,6 @@
 #define MELONDS_GL_HEADER "\"frontend/glad/glad.h\""
 #endif
 
-// TODO: Add this definition somewhere else
-#include <GLES3/gl32.h>
-//#include MELONDS_GL_HEADER
+#include MELONDS_GL_HEADER
 
 #endif

@@ -16,27 +16,29 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include <dlfcn.h>
+#include <filesystem>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <semaphore.h>
 #include <pthread.h>
 #include <unistd.h>
 #include "pcap/pcap.h"
 #include "Platform.h"
 #include "MelonDS.h"
-#include "android_fopen.h"
-#include "LAN_Socket.h"
-#include "LAN_PCap.h"
-#include "FileUtils.h"
-#include "Config.h"
 #include "ROMManager.h"
-#include "LocalMultiplayer.h"
-#include <string>
+#include "PlatformAndroid.h"
+#include "MelonInstance.h"
+#include "MelonLog.h"
+#include "net/MPInterface.h"
 
+using namespace melonDS;
+
+namespace melonDS
+{
 namespace Platform
 {
-    FILE* OpenInternalFile(char* path, char* mode);
-
     typedef struct
     {
         int val;
@@ -57,179 +59,260 @@ namespace Platform
     {
         AndroidThread* thread = (AndroidThread*)data;
         thread->Func();
-        return NULL;
+        return nullptr;
     }
 
-    int InstanceID()
+    void SignalStop(StopReason reason, void* userdata)
     {
-        return 0;
+        MelonDSAndroid::MelonInstance* instance = (MelonDSAndroid::MelonInstance*) userdata;
+        // TODO: Notify frontend that emulator has stopped
+        //instance->emuStop(reason);
     }
 
-    std::string InstanceFileSuffix()
+    constexpr char AccessMode(FileMode mode, bool fileExists)
     {
-        return "";
+        if (mode & FileMode::Append)
+            return  'a';
+
+        if (!(mode & FileMode::Write))
+            // If we're only opening the file for reading...
+            return 'r';
+
+        if (mode & (FileMode::NoCreate))
+            // If we're not allowed to create a new file...
+            return 'r'; // Open in "r+" mode (IsExtended will add the "+")
+
+        if ((mode & FileMode::Preserve) && fileExists)
+            // If we're not allowed to overwrite a file that already exists...
+            return 'r'; // Open in "r+" mode (IsExtended will add the "+")
+
+        return 'w';
     }
 
-    int GetConfigInt(ConfigEntry entry)
+    constexpr bool IsExtended(FileMode mode)
     {
-        const int imgsizes[] = {0, 256, 512, 1024, 2048, 4096};
+        // fopen's "+" flag always opens the file for read/write
+        return (mode & FileMode::ReadWrite) == FileMode::ReadWrite;
+    }
 
-        switch (entry)
-        {
-#ifdef JIT_ENABLED
-            case JIT_MaxBlockSize: return Config::JIT_MaxBlockSize;
-#endif
+    static std::string GetModeString(FileMode mode, bool fileExists)
+    {
+        std::string modeString;
 
-            case DLDI_ImageSize: return imgsizes[Config::DLDISize];
+        modeString += AccessMode(mode, fileExists);
 
-            case DSiSD_ImageSize: return imgsizes[Config::DSiSDSize];
+        if (IsExtended(mode))
+            modeString += '+';
 
-            case Firm_Language: return Config::FirmwareLanguage;
-            case Firm_BirthdayMonth: return Config::FirmwareBirthdayMonth;
-            case Firm_BirthdayDay: return Config::FirmwareBirthdayDay;
-            case Firm_Color: return Config::FirmwareFavouriteColour;
+        if (!(mode & FileMode::Text))
+            modeString += 'b';
 
-            case AudioBitrate: return Config::AudioBitrate;
+        return modeString;
+    }
+
+    FileHandle* OpenFile(const std::string& path,  FileMode mode)
+    {
+        if ((mode & (FileMode::ReadWrite | FileMode::Append)) == FileMode::None)
+        { // If we aren't reading or writing, then we can't open the file
+            Log(LogLevel::Error, "Attempted to open \"%s\" in neither read nor write mode (FileMode 0x%x)\n", path.c_str(), mode);
+            return nullptr;
         }
 
-        return 0;
-    }
-
-    bool GetConfigBool(ConfigEntry entry)
-    {
-        switch (entry)
-        {
-#ifdef JIT_ENABLED
-            case JIT_Enable: return Config::JIT_Enable != 0;
-            case JIT_LiteralOptimizations: return Config::JIT_LiteralOptimisations != 0;
-            case JIT_BranchOptimizations: return Config::JIT_BranchOptimisations != 0;
-            case JIT_FastMemory: return Config::JIT_FastMemory != 0;
-#endif
-
-            case ExternalBIOSEnable: return Config::ExternalBIOSEnable != 0;
-
-            case DLDI_Enable: return Config::DLDIEnable != 0;
-            case DLDI_ReadOnly: return Config::DLDIReadOnly != 0;
-            case DLDI_FolderSync: return Config::DLDIFolderSync != 0;
-
-            case DSiSD_Enable: return Config::DSiSDEnable != 0;
-            case DSiSD_ReadOnly: return Config::DSiSDReadOnly != 0;
-            case DSiSD_FolderSync: return Config::DSiSDFolderSync != 0;
-
-            case Firm_RandomizeMAC: return Config::RandomizeMAC != 0;
-            case Firm_OverrideSettings: return Config::FirmwareOverrideSettings != 0;
-        }
-
-        return false;
-    }
-
-    std::string GetConfigString(ConfigEntry entry)
-    {
-        switch (entry)
-        {
-            case BIOS9Path: return Config::BIOS9Path;
-            case BIOS7Path: return Config::BIOS7Path;
-            case FirmwarePath: return Config::FirmwarePath;
-
-            case DSi_BIOS9Path: return Config::DSiBIOS9Path;
-            case DSi_BIOS7Path: return Config::DSiBIOS7Path;
-            case DSi_FirmwarePath: return Config::DSiFirmwarePath;
-            case DSi_NANDPath: return Config::DSiNANDPath;
-
-            case DLDI_ImagePath: return Config::DLDISDPath;
-            case DLDI_FolderPath: return Config::DLDIFolderPath;
-
-            case DSiSD_ImagePath: return Config::DSiSDPath;
-            case DSiSD_FolderPath: return Config::DSiSDFolderPath;
-
-            case Firm_Username: return Config::FirmwareUsername;
-            case Firm_Message: return Config::FirmwareMessage;
-        }
-
-        return "";
-    }
-
-    bool GetConfigArray(ConfigEntry entry, void* data)
-    {
-        switch (entry)
-        {
-            case Firm_MAC:
-            {
-                std::string& mac_in = Config::FirmwareMAC;
-                u8* mac_out = (u8*)data;
-
-                int o = 0;
-                u8 tmp = 0;
-                for (int i = 0; i < 18; i++)
-                {
-                    char c = mac_in[i];
-                    if (c == '\0') break;
-
-                    int n;
-                    if      (c >= '0' && c <= '9') n = c - '0';
-                    else if (c >= 'a' && c <= 'f') n = c - 'a' + 10;
-                    else if (c >= 'A' && c <= 'F') n = c - 'A' + 10;
-                    else continue;
-
-                    if (!(o & 1))
-                        tmp = n;
-                    else
-                        mac_out[o >> 1] = n | (tmp << 4);
-
-                    o++;
-                    if (o >= 12) return true;
-                }
-            }
-                return false;
-        }
-
-        return false;
-    }
-
-    FILE* OpenFile(std::string path, std::string mode, bool mustexist)
-    {
         if (path.empty())
         {
             return nullptr;
         }
 
+        bool fileExists = access(path.c_str(), F_OK) == 0;
+        std::string modeString = GetModeString(mode, fileExists);
+
         // If it's a standard absolute file path, open it a simple file. If not, delegate to the file handler
         if (path[0] == '/')
         {
-            if (mustexist)
+            bool mustExist = (mode & FileMode::NoCreate) != 0;
+            if (mustExist)
             {
-                if (access(path.c_str(), F_OK) == 0)
-                    return fopen(path.c_str(), mode.c_str());
+                if (fileExists)
+                    return reinterpret_cast<FileHandle*>(fopen(path.c_str(), modeString.c_str()));
                 else
                     return nullptr;
             }
             else
-                return fopen(path.c_str(), mode.c_str());
+                return reinterpret_cast<FileHandle*>(fopen(path.c_str(), modeString.c_str()));
         }
         else
         {
-            return MelonDSAndroid::fileHandler->open(path.c_str(), mode.c_str());
+            return reinterpret_cast<FileHandle*>(MelonDSAndroid::fileHandler->open(path.c_str(), modeString.c_str()));
         }
     }
 
-    FILE* OpenLocalFile(std::string path, std::string mode)
+    FileHandle* OpenLocalFile(const std::string& path, FileMode mode)
     {
         if (path.empty())
             return nullptr;
 
         // Always open file as absolute
-        return OpenFile(path, mode, mode[0] == 'r');
+        return OpenFile(path, mode);
     }
 
-    FILE* OpenDataFile(const char* path)
+    FileHandle* OpenInternalFile(const std::string path, FileMode mode)
     {
-        return android_fopen(MelonDSAndroid::assetManager, path, "rb");
+        std::filesystem::path fullFilePath = MelonDSAndroid::internalFilesDir;
+        fullFilePath /= path;
+        return OpenFile(fullFilePath, mode);
     }
 
-    FILE* OpenInternalFile(std::string path, std::string mode)
+    bool CloseFile(FileHandle* file)
     {
-        std::string fullFilePath = MelonDSAndroid::internalFilesDir + "/" + path;
-        return OpenFile(fullFilePath, mode, mode[0] == 'r');
+        return fclose(reinterpret_cast<FILE *>(file)) == 0;
+    }
+
+    bool IsEndOfFile(FileHandle* file)
+    {
+        return feof(reinterpret_cast<FILE *>(file)) != 0;
+    }
+
+    bool FileReadLine(char* str, int count, FileHandle* file)
+    {
+        return fgets(str, count, reinterpret_cast<FILE *>(file)) != nullptr;
+    }
+
+    bool FileExists(const std::string& name)
+    {
+        FileHandle* f = OpenFile(name, FileMode::Read);
+        if (!f) return false;
+        CloseFile(f);
+        return true;
+    }
+
+    bool LocalFileExists(const std::string& name)
+    {
+        FileHandle* f = OpenLocalFile(name, FileMode::Read);
+        if (!f) return false;
+        CloseFile(f);
+        return true;
+    }
+
+    bool CheckFileWritable(const std::string& filepath)
+    {
+        FileHandle* file = Platform::OpenFile(filepath.c_str(), FileMode::Read);
+
+        if (file)
+        {
+            // if the file exists, check if it can be opened for writing.
+            Platform::CloseFile(file);
+            file = Platform::OpenFile(filepath.c_str(), FileMode::Append);
+            if (file)
+            {
+                Platform::CloseFile(file);
+                return true;
+            }
+            else return false;
+        }
+        else
+        {
+            // if the file does not exist, create a temporary file to check, to avoid creating an empty file.
+            /*if (QTemporaryFile(filepath.c_str()).open())
+            {
+                return true;
+            }
+            else return false;*/
+            // TODO: Check if folder is writable?
+            return true;
+        }
+    }
+
+    bool CheckLocalFileWritable(const std::string& name)
+    {
+        FileHandle* file = Platform::OpenLocalFile(name.c_str(), FileMode::Append);
+        if (file)
+        {
+            Platform::CloseFile(file);
+            return true;
+        }
+        else return false;
+    }
+
+    bool FileSeek(FileHandle* file, s64 offset, FileSeekOrigin origin)
+    {
+        int stdorigin;
+        switch (origin)
+        {
+            case FileSeekOrigin::Start: stdorigin = SEEK_SET; break;
+            case FileSeekOrigin::Current: stdorigin = SEEK_CUR; break;
+            case FileSeekOrigin::End: stdorigin = SEEK_END; break;
+        }
+
+        return fseek(reinterpret_cast<FILE *>(file), offset, stdorigin) == 0;
+    }
+
+    void FileRewind(FileHandle* file)
+    {
+        rewind(reinterpret_cast<FILE *>(file));
+    }
+
+    u64 FileRead(void* data, u64 size, u64 count, FileHandle* file)
+    {
+        return fread(data, size, count, reinterpret_cast<FILE *>(file));
+    }
+
+    bool FileFlush(FileHandle* file)
+    {
+        return fflush(reinterpret_cast<FILE *>(file)) == 0;
+    }
+
+    u64 FileWrite(const void* data, u64 size, u64 count, FileHandle* file)
+    {
+        return fwrite(data, size, count, reinterpret_cast<FILE *>(file));
+    }
+
+    u64 FileWriteFormatted(FileHandle* file, const char* fmt, ...)
+    {
+        if (fmt == nullptr)
+            return 0;
+
+        va_list args;
+        va_start(args, fmt);
+        u64 ret = vfprintf(reinterpret_cast<FILE *>(file), fmt, args);
+        va_end(args);
+        return ret;
+    }
+
+    u64 FileLength(FileHandle* file)
+    {
+        FILE* stdfile = reinterpret_cast<FILE *>(file);
+        long pos = ftell(stdfile);
+        fseek(stdfile, 0, SEEK_END);
+        long len = ftell(stdfile);
+        fseek(stdfile, pos, SEEK_SET);
+        return len;
+    }
+
+    void Log(LogLevel level, const char* fmt, ...)
+    {
+        if (fmt == nullptr)
+            return;
+
+        va_list args;
+        va_start(args, fmt);
+
+        switch (level)
+        {
+            case LogLevel::Debug:
+                __android_log_vprint(ANDROID_LOG_DEBUG, "melonDS", fmt, args);
+                break;
+            case LogLevel::Info:
+                __android_log_vprint(ANDROID_LOG_INFO, "melonDS", fmt, args);
+                break;
+            case LogLevel::Warn:
+                __android_log_vprint(ANDROID_LOG_WARN, "melonDS", fmt, args);
+                break;
+            case LogLevel::Error:
+                __android_log_vprint(ANDROID_LOG_ERROR, "melonDS", fmt, args);
+                break;
+        }
+
+        va_end(args);
     }
 
     Thread* Thread_Create(std::function<void()> func)
@@ -288,6 +371,49 @@ namespace Platform
         pthread_mutex_unlock(&semaphore->mutex);
     }
 
+    bool Semaphore_TryWait(Semaphore* sema, int timeout_ms)
+    {
+        AndroidSemaphore* semaphore = (AndroidSemaphore*) sema;
+        pthread_mutex_lock(&semaphore->mutex);
+        bool result;
+
+        if (semaphore->val > 0)
+        {
+            semaphore->val--;
+            pthread_mutex_unlock(&semaphore->mutex);
+            return true;
+        }
+
+        if (!timeout_ms)
+        {
+            // No resources available. Can't acquire
+            result = false;
+        }
+        else
+        {
+            timespec timeout {
+                .tv_sec = 0,
+                .tv_nsec = timeout_ms * 1000000
+            };
+
+            int waitResult = 0;
+            while (semaphore->val == 0 && waitResult == 0)
+                waitResult = pthread_cond_timedwait(&semaphore->cond, &semaphore->mutex, &timeout);
+
+            if (waitResult == 0)
+            {
+                semaphore->val--;
+                result = true;
+            }
+            else
+            {
+                result = false;
+            }
+        }
+
+        return result;
+    }
+
     void Semaphore_Post(Semaphore* sema, int count)
     {
         AndroidSemaphore* semaphore = (AndroidSemaphore*) sema;
@@ -320,115 +446,120 @@ namespace Platform
         return pthread_mutex_trylock((AndroidMutex*) mutex) == 0;
     }
 
-    void WriteNDSSave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen)
+    void WriteNDSSave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen, void* userdata)
     {
-        if (ROMManager::NDSSave)
-            ROMManager::NDSSave->RequestFlush(savedata, savelen, writeoffset, writelen);
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        if (emulatorInstance)
+            emulatorInstance->requestNdsSaveWrite(savedata, savelen, writeoffset, writelen);
     }
 
-    void WriteGBASave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen)
+    void WriteGBASave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen, void* userdata)
     {
-        if (ROMManager::GBASave)
-            ROMManager::GBASave->RequestFlush(savedata, savelen, writeoffset, writelen);
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        if (emulatorInstance)
+            emulatorInstance->requestGbaSaveWrite(savedata, savelen, writeoffset, writelen);
     }
 
-    bool MP_Init()
+    void WriteFirmware(const Firmware& firmware, u32 writeoffset, u32 writelen, void* userdata)
     {
-        return LocalMultiplayer::Init();
-    }
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        if (!emulatorInstance)
+            return;
 
-    void MP_DeInit()
-    {
-        LocalMultiplayer::DeInit();
-        return;
-    }
-
-    void MP_Begin()
-    {
-        LocalMultiplayer::Begin();
-    }
-
-    void MP_End()
-    {
-        LocalMultiplayer::End();
-    }
-
-    int MP_SendPacket(u8* data, int len, u64 timestamp)
-    {
-        return LocalMultiplayer::SendPacket(data, len, timestamp);
-    }
-
-    int MP_RecvPacket(u8* data, u64* timestamp)
-    {
-        return LocalMultiplayer::RecvPacket(data, timestamp);
-    }
-
-    int MP_SendCmd(u8* data, int len, u64 timestamp)
-    {
-        return LocalMultiplayer::SendCmd(data, len, timestamp);
-    }
-
-    int MP_SendReply(u8* data, int len, u64 timestamp, u16 aid)
-    {
-        return LocalMultiplayer::SendReply(data, len, timestamp, aid);
-    }
-
-    int MP_SendAck(u8* data, int len, u64 timestamp)
-    {
-        return LocalMultiplayer::SendAck(data, len, timestamp);
-    }
-
-    int MP_RecvHostPacket(u8* data, u64* timestamp)
-    {
-        return LocalMultiplayer::RecvHostPacket(data, timestamp);
-    }
-
-    u16 MP_RecvReplies(u8* data, u64 timestamp, u16 aidmask)
-    {
-        return LocalMultiplayer::RecvReplies(data, timestamp, aidmask);
-    }
-
-    bool LAN_Init()
-    {
-        if (Config::DirectLAN)
-        {
-            if (!LAN_PCap::Init(true))
-                return false;
+        if (firmware.GetHeader().Identifier != GENERATED_FIRMWARE_IDENTIFIER)
+        { // If this is not the default built-in firmware...
+            // ...then write the whole thing back.
+            emulatorInstance->requestFirmwareSaveWrite(firmware.Buffer(), firmware.Length(), writeoffset, writelen);
         }
         else
         {
-            if (!LAN_Socket::Init())
-                return false;
+            u32 eapstart = firmware.GetExtendedAccessPointOffset();
+            u32 eapend = eapstart + sizeof(firmware.GetExtendedAccessPoints());
+
+            u32 apstart = firmware.GetWifiAccessPointOffset();
+            u32 apend = apstart + sizeof(firmware.GetAccessPoints());
+
+            // assert that the extended access points come just before the regular ones
+            assert(eapend == apstart);
+
+            if (eapstart <= writeoffset && writeoffset < apend)
+            { // If we're writing to the access points...
+                const u8* buffer = firmware.GetExtendedAccessPointPosition();
+                u32 length = sizeof(firmware.GetExtendedAccessPoints()) + sizeof(firmware.GetAccessPoints());
+                emulatorInstance->requestFirmwareSaveWrite(buffer, length, writeoffset - eapstart, writelen);
+            }
         }
-
-        return true;
     }
 
-    void LAN_DeInit()
+    void WriteDateTime(int year, int month, int day, int hour, int minute, int second, void* userdata)
     {
-        // checkme. blarg
-        //if (Config::DirectLAN)
-        //    LAN_PCap::DeInit();
-        //else
-        //    LAN_Socket::DeInit();
-        LAN_PCap::DeInit();
-        LAN_Socket::DeInit();
+        // TODO
     }
 
-    int LAN_SendPacket(u8* data, int len)
+    void MP_Begin(void* userdata)
     {
-        if (Config::DirectLAN)
-            return LAN_PCap::SendPacket(data, len);
-        else
-            return LAN_Socket::SendPacket(data, len);
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        MPInterface::Get().Begin(emulatorInstance->getInstanceId());
     }
 
-    int LAN_RecvPacket(u8* data)
+    void MP_End(void* userdata)
     {
-        if (Config::DirectLAN)
-            return LAN_PCap::RecvPacket(data);
-        else
-            return LAN_Socket::RecvPacket(data);
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        MPInterface::Get().End(emulatorInstance->getInstanceId());
+    }
+
+    int MP_SendPacket(u8* data, int len, u64 timestamp, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return MPInterface::Get().SendPacket(emulatorInstance->getInstanceId(), data, len, timestamp);
+    }
+
+    int MP_RecvPacket(u8* data, u64* timestamp, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return MPInterface::Get().RecvPacket(emulatorInstance->getInstanceId(), data, timestamp);
+    }
+
+    int MP_SendCmd(u8* data, int len, u64 timestamp, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return MPInterface::Get().SendCmd(emulatorInstance->getInstanceId(), data, len, timestamp);
+    }
+
+    int MP_SendReply(u8* data, int len, u64 timestamp, u16 aid, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return MPInterface::Get().SendReply(emulatorInstance->getInstanceId(), data, len, timestamp, aid);
+    }
+
+    int MP_SendAck(u8* data, int len, u64 timestamp, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return MPInterface::Get().SendAck(emulatorInstance->getInstanceId(), data, len, timestamp);
+    }
+
+    int MP_RecvHostPacket(u8* data, u64* timestamp, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return MPInterface::Get().RecvHostPacket(emulatorInstance->getInstanceId(), data, timestamp);
+    }
+
+    u16 MP_RecvReplies(u8* data, u64 timestamp, u16 aidmask, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return MPInterface::Get().RecvReplies(emulatorInstance->getInstanceId(), data, timestamp, aidmask);
+    }
+
+    int Net_SendPacket(u8* data, int len, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return emulatorInstance->sendNetPacket(data, len);
+    }
+
+    int Net_RecvPacket(u8* data, void* userdata)
+    {
+        auto emulatorInstance = (MelonDSAndroid::MelonInstance*) userdata;
+        return emulatorInstance->receiveNetPacket(data);
     }
 
     void Sleep(u64 usecs)
@@ -436,22 +567,58 @@ namespace Platform
         usleep(usecs);
     }
 
-    void StopEmu()
-    {
-    }
-
-    void Camera_Start(int num)
+    void Camera_Start(int num, void* userdata)
     {
         MelonDSAndroid::cameraHandler->startCamera(num);
     }
 
-    void Camera_Stop(int num)
+    void Camera_Stop(int num, void* userdata)
     {
         MelonDSAndroid::cameraHandler->stopCamera(num);
     }
 
-    void Camera_CaptureFrame(int num, u32* frame, int width, int height, bool yuv)
+    void Camera_CaptureFrame(int num, u32* frame, int width, int height, bool yuv, void* userdata)
     {
         MelonDSAndroid::cameraHandler->captureFrame(num, frame, width, height, yuv);
     }
+
+    bool Addon_KeyDown(KeyType type, void* userdata)
+    {
+        return false;
+    }
+
+    void Addon_RumbleStart(u32 len, void* userdata)
+    {
+        // TODO
+    }
+
+    void Addon_RumbleStop(void* userdata)
+    {
+        // TODO
+    }
+
+    float Addon_MotionQuery(MotionQueryType type, void* userdata)
+    {
+        // TODO
+        return 0;
+    }
+
+    DynamicLibrary* DynamicLibrary_Load(const char* lib)
+    {
+        void* library = dlopen(lib, RTLD_NOW | RTLD_LOCAL);
+        return reinterpret_cast<DynamicLibrary*>(library);
+    }
+
+    void DynamicLibrary_Unload(DynamicLibrary* lib)
+    {
+        dlclose(reinterpret_cast<void*>(lib));
+    }
+
+    void* DynamicLibrary_LoadFunction(DynamicLibrary* lib, const char* name)
+    {
+        void* library = reinterpret_cast<void*>(lib);
+        return dlsym(library, name);
+    }
+}
+
 }

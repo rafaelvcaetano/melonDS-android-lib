@@ -1,8 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-cmake_minimum_required(VERSION 3.19)
-
-cmake_policy(VERSION 3.19)
+cmake_policy(VERSION 3.15)
 if (POLICY CMP0076)
     cmake_policy(SET CMP0076 NEW)
 endif()
@@ -100,7 +98,7 @@ if (ENABLE_GDBSTUB)
     add_definitions(-DGDBSTUB_ENABLED)
 endif()
 
-option(BUILD_QT_SDL "Build Qt/SDL frontend" OFF)
+option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
 
 add_subdirectory(src)
 

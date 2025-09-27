@@ -31,6 +31,17 @@ MicInputOboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, i
         memcpy(&this->buffer[this->bufferOffset], input, numFrames * sizeof(s16));
         this->bufferOffset += numFrames;
     }
+
+    if (numFrames == 0)
+    {
+        memset(this->buffer, 0, sizeof(s16) * bufferSize);
+    }
+    else if (numFrames < 735)
+    {
+        for (int i = numFrames; i < 735; i++)
+            this->buffer[i] = this->buffer[numFrames - 1];
+    }
+
     return oboe::DataCallbackResult::Continue;
 }
 

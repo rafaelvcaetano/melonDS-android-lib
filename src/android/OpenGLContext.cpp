@@ -1,7 +1,6 @@
 #include "OpenGLContext.h"
 #include "MelonLog.h"
-
-const char* OPENGL_CONTEXT_TAG = "OpenGLContext";
+#include "Platform.h"
 
 void logEglError()
 {
@@ -9,46 +8,46 @@ void logEglError()
     switch(error)
     {
         case EGL_NOT_INITIALIZED:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_NOT_INITIALIZED");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_NOT_INITIALIZED");
             break;
         case EGL_BAD_ACCESS:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_ACCESS");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_ACCESS");
             break;
         case EGL_BAD_ALLOC:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_ALLOC");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_ALLOC");
             break;
         case EGL_BAD_ATTRIBUTE:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_ATTRIBUTE");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_ATTRIBUTE");
             break;
         case EGL_BAD_CONTEXT:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_CONTEXT");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_CONTEXT");
             break;
         case EGL_BAD_CONFIG:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_CONFIG");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_CONFIG");
             break;
         case EGL_BAD_CURRENT_SURFACE:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_CURRENT_SURFACE");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_CURRENT_SURFACE");
             break;
         case EGL_BAD_DISPLAY:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_DISPLAY");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_DISPLAY");
             break;
         case EGL_BAD_SURFACE:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_SURFACE");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_SURFACE");
             break;
         case EGL_BAD_MATCH:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_MATCH");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_MATCH");
             break;
         case EGL_BAD_PARAMETER:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_PARAMETER");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_PARAMETER");
             break;
         case EGL_BAD_NATIVE_PIXMAP:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_NATIVE_PIXMAP");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_NATIVE_PIXMAP");
             break;
         case EGL_BAD_NATIVE_WINDOW:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_BAD_NATIVE_WINDOW");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_BAD_NATIVE_WINDOW");
             break;
         case EGL_CONTEXT_LOST:
-            LOG_ERROR(OPENGL_CONTEXT_TAG, "EGL_CONTEXT_LOST");
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_CONTEXT_LOST");
             break;
     }
 }
@@ -58,19 +57,19 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (display == EGL_NO_DISPLAY)
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to get display");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Failed to get display");
         return false;
     }
 
     int majorVersion, minorVersion;
     if (!eglInitialize(display, &majorVersion, &minorVersion))
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to initialize display");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Failed to initialize display");
         return false;
     }
     else
     {
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "Initialised display with version %d.%d", majorVersion, minorVersion);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "Initialised display with version %d.%d", majorVersion, minorVersion);
     }
 
     EGLint attributes[] = {
@@ -88,19 +87,19 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     EGLint numConfigs;
     if (!eglChooseConfig(display, attributes, nullptr, 0, &numConfigs))
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to determine the number of configs");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Failed to determine the number of configs");
         logEglError();
         return false;
     }
 
     if (numConfigs <= 0)
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "No configs found");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "No configs found");
         return false;
     }
     else
     {
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "Found %d configs", numConfigs);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "Found %d configs", numConfigs);
     }
 
     EGLConfig configs[numConfigs];
@@ -131,7 +130,7 @@ bool OpenGLContext::InitContext(long sharedGlContext)
 
     if (selectedConfigNumber < 0)
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "Couldn't find matching configuration");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Couldn't find matching configuration");
         return false;
     }
     else
@@ -144,12 +143,12 @@ bool OpenGLContext::InitContext(long sharedGlContext)
         eglGetConfigAttrib(display, configs[selectedConfigNumber], EGL_GREEN_SIZE, &green);
         eglGetConfigAttrib(display, configs[selectedConfigNumber], EGL_BLUE_SIZE, &blue);
 
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "Selected GL contextAttributes (#%d):", selectedConfigNumber);
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "\tRED: %d", red);
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "\tGREEN: %d", green);
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "\tBLUE: %d", blue);
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "\tDEPTH: %d", depth);
-        LOG_DEBUG(OPENGL_CONTEXT_TAG, "\tSTENCIL: %d", stencil);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "Selected GL contextAttributes (#%d):", selectedConfigNumber);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "\tRED: %d", red);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "\tGREEN: %d", green);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "\tBLUE: %d", blue);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "\tDEPTH: %d", depth);
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Debug, "\tSTENCIL: %d", stencil);
     }
 
     // Display buffer size doesn't matter since it's not really used
@@ -162,7 +161,7 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     surface = eglCreatePbufferSurface(display, configs[selectedConfigNumber], surfaceAttributes);
     if (surface == EGL_NO_SURFACE)
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to create buffer surface");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Failed to create buffer surface");
         logEglError();
         return false;
     }
@@ -176,7 +175,7 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     glContext = eglCreateContext(display, configs[selectedConfigNumber], sharedContext, contextAttributes);
     if (glContext == EGL_NO_CONTEXT)
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to create context");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Failed to create context");
         logEglError();
         return false;
     }
@@ -192,7 +191,7 @@ bool OpenGLContext::Use()
     }
     else
     {
-        LOG_ERROR(OPENGL_CONTEXT_TAG, "Failed to use OpenGL context");
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Failed to use OpenGL context");
         glGetError();
         return false;
     }
@@ -210,11 +209,11 @@ void OpenGLContext::DeInit()
 
     eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
-    if (glContext != EGL_NO_CONTEXT)
-        eglDestroyContext(display, glContext);
-
     if (surface != EGL_NO_SURFACE)
         eglDestroySurface(display, surface);
+
+    if (glContext != EGL_NO_CONTEXT)
+        eglDestroyContext(display, glContext);
 
     eglTerminate(display);
 

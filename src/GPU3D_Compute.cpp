@@ -1099,7 +1099,7 @@ u32* ComputeRenderer::GetLine(int line)
     if (line == 0)
     {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelBuffer);
-        u8* data = (u8*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        u8* data = (u8*)glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4 * stride * 192, GL_MAP_READ_BIT);
         if (data) memcpy(&FramebufferCPU[0], data, 4*stride*192);
         glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
     }
@@ -1116,7 +1116,13 @@ void ComputeRenderer::PrepareCaptureFrame()
 {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelBuffer);
     glBindTexture(GL_TEXTURE_2D, LowResFramebuffer);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+    // TODO: Read using glReadPixels. But target is null???
+    // glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+}
+
+void ComputeRenderer::SetOutputTexture(int buffer, u32 texture)
+{
+    CurGLCompositor.SetOutputTexture(buffer, (GLuint) texture);
 }
 
 void ComputeRenderer::BindOutputTexture(int buffer)

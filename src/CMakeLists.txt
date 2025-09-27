@@ -1,8 +1,6 @@
-project(core)
-
 set (CMAKE_CXX_STANDARD 17)
 
-#include(FixInterfaceIncludes)
+include(FixInterfaceIncludes)
 
 add_library(core STATIC
     ARCodeFile.cpp

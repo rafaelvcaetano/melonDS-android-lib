@@ -48,6 +48,7 @@ public:
     void PrepareCaptureFrame() override;
     void Blit(const GPU& gpu) override;
 
+    void SetOutputTexture(int buffer, u32 texture) override;
     void BindOutputTexture(int buffer) override;
 
     static std::unique_ptr<GLRenderer> New() noexcept;

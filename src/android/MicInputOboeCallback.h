@@ -4,6 +4,8 @@
 #include <oboe/Oboe.h>
 #include "types.h"
 
+using namespace melonDS;
+
 class MicInputOboeCallback : public oboe::AudioStreamCallback {
 private:
     int bufferSize;

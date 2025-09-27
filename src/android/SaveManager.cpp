@@ -22,7 +22,6 @@
 #include "SaveManager.h"
 #include "Platform.h"
 
-
 SaveManager::SaveManager(std::string path)
 {
     SecondaryBuffer = nullptr;
@@ -57,12 +56,12 @@ SaveManager::~SaveManager()
         FlushSecondaryBuffer();
     }
 
-    if (SecondaryBuffer) delete[] SecondaryBuffer;
+    SecondaryBuffer = nullptr;
 
     Platform::Mutex_Free(SecondaryBufferLock);
     Platform::Thread_Free(Thread);
 
-    if (Buffer) delete[] Buffer;
+    Buffer = nullptr;
 }
 
 std::string SaveManager::GetPath()
@@ -76,11 +75,17 @@ void SaveManager::SetPath(std::string path, bool reload)
 
     if (reload)
     {
-        FILE* f = Platform::OpenFile(Path, "rb", true);
+        FileHandle* f = Platform::OpenFile(Path, FileMode::Read);
         if (f)
         {
-            fread(Buffer, 1, Length, f);
-            fclose(f);
+            if (u32 length = Platform::FileLength(f); length != Length)
+            { // If the new file is a different size, we need to re-allocate the buffer.
+                Length = length;
+                Buffer = std::make_unique<u8[]>(Length);
+            }
+
+            FileRead(Buffer.get(), 1, Length, f);
+            CloseFile(f);
         }
     }
     else
@@ -91,12 +96,10 @@ void SaveManager::RequestFlush(const u8* savedata, u32 savelen, u32 writeoffset,
 {
     if (Length != savelen)
     {
-        if (Buffer) delete[] Buffer;
-
         Length = savelen;
-        Buffer = new u8[Length];
+        Buffer = std::make_unique<u8[]>(Length);
 
-        memcpy(Buffer, savedata, Length);
+        memcpy(Buffer.get(), savedata, Length);
     }
     else
     {
@@ -123,17 +126,15 @@ void SaveManager::CheckFlush()
 
     Platform::Mutex_Lock(SecondaryBufferLock);
 
-    printf("SaveManager: Flush requested\n");
+    Log(LogLevel::Info, "SaveManager: Flush requested\n");
 
     if (SecondaryBufferLength != Length)
     {
-        if (SecondaryBuffer) delete[] SecondaryBuffer;
-
         SecondaryBufferLength = Length;
-        SecondaryBuffer = new u8[SecondaryBufferLength];
+        SecondaryBuffer = std::make_unique<u8[]>(SecondaryBufferLength);
     }
 
-    memcpy(SecondaryBuffer, Buffer, Length);
+    memcpy(SecondaryBuffer.get(), Buffer.get(), Length);
 
     FlushRequested = false;
     FlushVersion++;
@@ -172,16 +173,16 @@ void SaveManager::FlushSecondaryBuffer(u8* dst, u32 dstLength)
     Platform::Mutex_Lock(SecondaryBufferLock);
     if (dst)
     {
-        memcpy(dst, SecondaryBuffer, SecondaryBufferLength);
+        memcpy(dst, SecondaryBuffer.get(), SecondaryBufferLength);
     }
     else
     {
-        FILE* f = Platform::OpenFile(Path, "wb");
+        FileHandle* f = Platform::OpenFile(Path, FileMode::Write);
         if (f)
         {
-            printf("SaveManager: Written\n");
-            fwrite(SecondaryBuffer, SecondaryBufferLength, 1, f);
-            fclose(f);
+            FileWrite(SecondaryBuffer.get(), SecondaryBufferLength, 1, f);
+            Log(LogLevel::Info, "SaveManager: Wrote %u bytes to %s\n", SecondaryBufferLength, Path.c_str());
+            CloseFile(f);
         }
     }
     PreviousFlushVersion = FlushVersion;

@@ -1,6 +1,8 @@
 #ifndef RACALLBACK_H
 #define RACALLBACK_H
 
+namespace MelonDSAndroid
+{
 namespace RetroAchievements
 {
 
@@ -12,6 +14,7 @@ public:
     virtual void onAchievementUnprimed(long achievementId) = 0;
 };
 
+}
 }
 
 #endif //RACALLBACK_H

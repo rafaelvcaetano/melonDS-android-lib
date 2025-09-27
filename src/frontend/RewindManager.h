@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2021 Arisotura
+    Copyright 2016-2025 Arisotura
 
     This file is part of melonDS.
 
@@ -20,27 +20,51 @@
 #define REWINDMANAGER_H
 
 #include <list>
+#include "types.h"
 
-#include "../types.h"
-
-namespace RewindManager
+namespace melonDS
 {
 
 struct RewindSaveState {
     u8* buffer;
     u32 bufferSize;
+    u32 bufferContentSize;
     u8* screenshot;
     u32 screenshotSize;
     int frame;
 };
 
-extern void SetRewindBufferSizes(u32 savestateSizeBytes, u32 screenshotSizeBytes);
-extern bool ShouldCaptureState(int currentFrame);
-extern RewindSaveState GetNextRewindSaveState(int currentFrame);
-extern std::list<RewindSaveState> GetRewindWindow();
-extern void OnRewindFromState(RewindSaveState state);
-extern void TrimRewindWindowIfRequired();
-extern void Reset();
+typedef struct {
+    int currentFrame;
+    std::list<melonDS::RewindSaveState> rewindStates;
+} RewindWindow;
+
+class RewindManager
+{
+public:
+    RewindManager(bool enabled, int rewindLengthSeconds, int rewindCapturingIntervalSeconds, size_t rewindBufferSize, size_t screenshotBufferSize);
+    ~RewindManager();
+    void UpdateRewindSettings(bool enabled, int rewindLengthSeconds, int rewindCapturingIntervalSeconds);
+    bool ShouldCaptureState(int currentFrame);
+    RewindSaveState* GetNextRewindSaveState(int currentFrame);
+    std::list<RewindSaveState> GetRewindWindow();
+    void OnRewindFromState(RewindSaveState state);
+    void Reset();
+
+private:
+    RewindSaveState CreateRewindSaveState(int frame);
+    void TrimRewindWindowIfRequired();
+    void DeleteRewindSaveState(RewindSaveState state);
+    int RewindWindowSize() { return RewindLengthSeconds / RewindCapturingIntervalSeconds; };
+
+private:
+    bool Enabled;
+    std::list<RewindSaveState> RewindWindow = std::list<RewindSaveState>();
+    int RewindLengthSeconds;
+    int RewindCapturingIntervalSeconds;
+    u32 SavestateBufferSize;
+    u32 ScreenshotBufferSize;
+};
 
 }
 
