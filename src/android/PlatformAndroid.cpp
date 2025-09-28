@@ -16,6 +16,7 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include <cassert>
 #include <dlfcn.h>
 #include <filesystem>
 #include <stdio.h>
