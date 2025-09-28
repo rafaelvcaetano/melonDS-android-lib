@@ -42,16 +42,13 @@ MelonInstance::MelonInstance(int instanceId, std::shared_ptr<EmulatorConfigurati
 
     net->RegisterInstance(instanceId);
 
-    std::string firmwarePathString;
     if (consoleType == 1)
     {
         melonDS::DSiArgs &dsiArgs = static_cast<melonDS::DSiArgs &>(*args);
-        firmwarePathString = configuration->dsiFirmwarePath;
         nds = new DSi(std::move(dsiArgs), this);
     }
     else
     {
-        firmwarePathString = configuration->dsFirmwarePath;
         nds = new NDS(std::move(*args), this);
     }
 
@@ -63,6 +60,12 @@ MelonInstance::MelonInstance(int instanceId, std::shared_ptr<EmulatorConfigurati
     }
     else
     {
+        std::string firmwarePathString;
+        if (consoleType == 1)
+            firmwarePathString = configuration->dsiFirmwarePath;
+        else
+            firmwarePathString = configuration->dsFirmwarePath;
+
         firmwareSave = std::make_unique<SaveManager>(firmwarePathString);
     }
 
