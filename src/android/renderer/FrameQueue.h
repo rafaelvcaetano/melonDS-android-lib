@@ -27,6 +27,7 @@ public:
     Frame* getPresentFrame();
     void validateRenderFrame(Frame* frame, int requiredWidth, int requiredHeight);
     void pushRenderedFrame(Frame* frame);
+    void discardRenderedFrame(Frame* frame);
     void clear();
 
 private:

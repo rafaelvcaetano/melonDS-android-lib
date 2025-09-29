@@ -349,9 +349,17 @@ u32 MelonInstance::runFrame()
         // Do nothing. Emulator already renders into the texture, which was set-up above
     }
 
-    renderFrame->renderFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    glFlush();
-    frameQueue.pushRenderedFrame(renderFrame);
+    bool isSleeping = nds->CPUStop & CPUStop_Sleep;
+    if (!isSleeping) [[likely]]
+    {
+        renderFrame->renderFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+        frameQueue.pushRenderedFrame(renderFrame);
+    }
+    else
+    {
+        frameQueue.discardRenderedFrame(renderFrame);
+    }
 
     screenshotRenderer.renderScreenshot(&nds->GPU, currentRenderer, renderFrame);
 

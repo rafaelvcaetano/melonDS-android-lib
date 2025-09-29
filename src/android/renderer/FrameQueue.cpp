@@ -87,6 +87,12 @@ void FrameQueue::pushRenderedFrame(Frame* frame)
     presentQueue.push_front(frame);
 }
 
+void FrameQueue::discardRenderedFrame(Frame* frame)
+{
+    std::unique_lock lock(frameLock);
+    freeQueue.push(frame);
+}
+
 void FrameQueue::clear()
 {
     std::unique_lock lock(frameLock);

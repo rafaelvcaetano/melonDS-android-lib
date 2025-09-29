@@ -343,22 +343,6 @@ namespace MelonDSAndroid
         }
 
         Platform::CloseFile(saveStateFile);
-
-        /*FileSavestate* savestate = new FileSavestate(path, true);
-        if (savestate->Error)
-        {
-            delete savestate;
-            return false;
-        }
-        else
-        {
-            bool result = NDS::DoSavestate(savestate);
-            if (result)
-                result = RetroAchievements::DoSavestate(savestate);
-
-            delete savestate;
-            return result;
-        }*/
         return true;
     }
 
