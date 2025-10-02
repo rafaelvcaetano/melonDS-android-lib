@@ -2,6 +2,7 @@
 #define MELONDS_MELONDS_H
 
 #include <list>
+#include <vector>
 #include "AndroidFileHandler.h"
 #include "AndroidCameraHandler.h"
 #include "Configuration.h"
@@ -18,8 +19,7 @@ using namespace melonDS;
 
 namespace MelonDSAndroid {
     typedef struct {
-        u32 codeLength;
-        u32 code[2*64];
+        std::vector<u32> code;
     } Cheat;
 
     typedef enum {

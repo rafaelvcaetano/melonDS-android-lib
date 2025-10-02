@@ -444,7 +444,7 @@ void MelonInstance::loadCheats(std::list<Cheat> cheats)
     {
         ARCode arCode {
             .Enabled = true,
-            .Code = std::vector<u32>(std::begin(cheat.code), std::end(cheat.code)),
+            .Code = cheat.code,
         };
         codeList.push_back(arCode);
     }
