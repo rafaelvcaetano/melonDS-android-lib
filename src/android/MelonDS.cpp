@@ -43,6 +43,7 @@ namespace MelonDSAndroid
     bool isMicInputEnabled = true;
     AndroidFileHandler* fileHandler;
     AndroidCameraHandler* cameraHandler;
+    AndroidRumbleManager* rumbleManager;
     std::string internalFilesDir;
     std::shared_ptr<EmulatorConfiguration> currentConfiguration;
     std::shared_ptr<Net> net;
@@ -74,8 +75,9 @@ namespace MelonDSAndroid
         }));
     }
 
-    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, long glContext, int instanceId) {
+    void setup(AndroidCameraHandler* androidCameraHandler, AndroidRumbleManager* androidRumbleManager, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, long glContext, int instanceId) {
         cameraHandler = androidCameraHandler;
+        rumbleManager = androidRumbleManager;
         RetroAchievements::RetroAchievementsManager::AchievementsCallback = raCallback;
         sharedGlContext = glContext;
 
@@ -174,6 +176,10 @@ namespace MelonDSAndroid
         else if (gbaSlotConfig->type == MEMORY_EXPANSION)
         {
             instance->loadGbaMemoryExpansion();
+        }
+        else if (gbaSlotConfig->type == RUMBLE_PAK)
+        {
+            instance->loadGbaRumblePak();
         }
 
         return 0;
@@ -585,4 +591,5 @@ namespace MelonDSAndroid
         openGlContext = nullptr;
     }
 }
+
 
