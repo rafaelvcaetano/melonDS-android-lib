@@ -590,12 +590,18 @@ namespace Platform
 
     void Addon_RumbleStart(u32 len, void* userdata)
     {
-        // TODO
+        if (MelonDSAndroid::rumbleManager)
+        {
+            MelonDSAndroid::rumbleManager->startRumble(len);
+        }
     }
 
     void Addon_RumbleStop(void* userdata)
     {
-        // TODO
+        if (MelonDSAndroid::rumbleManager)
+        {
+            MelonDSAndroid::rumbleManager->stopRumble();
+        }
     }
 
     float Addon_MotionQuery(MotionQueryType type, void* userdata)
