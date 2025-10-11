@@ -58,7 +58,7 @@ Frame* FrameQueue::getPresentFrame()
 
 void FrameQueue::validateRenderFrame(Frame* frame, int requiredWidth, int requiredHeight)
 {
-    if (frame->width != requiredHeight && frame->height != requiredHeight)
+    if (frame->width != requiredWidth || frame->height != requiredHeight)
     {
         // Update frame texture to have the required size
         if (!frame->frameTexture)
@@ -105,10 +105,11 @@ void FrameQueue::clear()
     presentQueue.clear();
     previousFrame = nullptr;
 
+    EGLDisplay currentDisplay = eglGetCurrentDisplay();
     for (auto& frame : frames) {
         glDeleteTextures(1, &frame.frameTexture);
-        glDeleteSync(frame.renderFence);
-        glDeleteSync(frame.presentFence);
+        eglDestroySyncKHR(currentDisplay, frame.renderFence);
+        eglDestroySyncKHR(currentDisplay, frame.presentFence);
         frame.frameTexture = 0;
         frame.width = 0;
         frame.height = 0;

@@ -1,5 +1,7 @@
 #include <ctime>
 #include <chrono>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <filesystem>
 #include <GLES3/gl3.h>
 #include "Args.h"
@@ -293,18 +295,19 @@ u32 MelonInstance::runFrame()
 
     Frame* renderFrame = frameQueue.getRenderFrame();
 
+    EGLDisplay currentDisplay = eglGetCurrentDisplay();
     // Delete old render fence
     if (renderFrame->renderFence)
     {
-        glDeleteSync(renderFrame->renderFence);
+        eglDestroySyncKHR(currentDisplay, renderFrame->renderFence);
         renderFrame->renderFence = 0;
     }
 
     // Ensure presentation is finished
     if (renderFrame->presentFence)
     {
-        glWaitSync(renderFrame->presentFence, 0, GL_TIMEOUT_IGNORED);
-        glDeleteSync(renderFrame->presentFence);
+        eglWaitSyncKHR(currentDisplay, renderFrame->presentFence, 0);
+        eglDestroySyncKHR(currentDisplay, renderFrame->presentFence);
         renderFrame->presentFence = 0;
     }
 
@@ -352,7 +355,7 @@ u32 MelonInstance::runFrame()
     bool isSleeping = nds->CPUStop & CPUStop_Sleep;
     if (!isSleeping) [[likely]]
     {
-        renderFrame->renderFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        renderFrame->renderFence = eglCreateSyncKHR(currentDisplay, EGL_SYNC_FENCE_KHR, nullptr);
         glFlush();
         frameQueue.pushRenderedFrame(renderFrame);
     }

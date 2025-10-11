@@ -3,7 +3,10 @@
 
 #include <array>
 #include <queue>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <GLES3/gl3.h>
+#include "OpenGLContext.h"
 #include "types.h"
 
 using namespace melonDS;
@@ -15,8 +18,8 @@ struct Frame {
     GLuint frameTexture{};
     u32 width{};
     u32 height{};
-    GLsync renderFence{};
-    GLsync presentFence{};
+    EGLSyncKHR renderFence{};
+    EGLSyncKHR presentFence{};
 };
 
 class FrameQueue
