@@ -119,7 +119,7 @@ bool MelonInstance::loadRom(std::string romPath, std::string sramPath)
     {
         return false;
     }
-    else if (!Platform::CheckFileWritable(romPath))
+    else if (!Platform::CheckFileWritable(sramPath))
     {
         return false;
     }
