@@ -190,22 +190,26 @@ namespace MelonDSAndroid
 
     void touchScreen(u16 x, u16 y)
     {
-        instance->touchScreen(x, y);
+        if (instance)
+            instance->touchScreen(x, y);
     }
 
     void releaseScreen()
     {
-        instance->releaseScreen();
+        if (instance)
+            instance->releaseScreen();
     }
 
     void pressKey(u32 key)
     {
-        instance->pressKey(key);
+        if (instance)
+            instance->pressKey(key);
     }
 
     void releaseKey(u32 key)
     {
-        instance->releaseKey(key);
+        if (instance)
+            instance->releaseKey(key);
     }
 
     void start()
