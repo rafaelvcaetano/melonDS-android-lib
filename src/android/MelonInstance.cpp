@@ -307,8 +307,6 @@ u32 MelonInstance::runFrame()
     if (renderFrame->presentFence)
     {
         eglWaitSyncKHR(currentDisplay, renderFrame->presentFence, 0);
-        eglDestroySyncKHR(currentDisplay, renderFrame->presentFence);
-        renderFrame->presentFence = 0;
     }
 
     // Validate frame after ensuring that the frame has finished presenting
