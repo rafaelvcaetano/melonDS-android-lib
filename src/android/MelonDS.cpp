@@ -1,4 +1,5 @@
 #include <cstring>
+#include <utility>
 #include <android/asset_manager.h>
 #include <oboe/Oboe.h>
 #include "EmulatorArgsBuilder.h"
@@ -34,13 +35,12 @@ oboe::AudioStreamErrorCallback *audioStreamErrorCallback;
 std::shared_ptr<oboe::AudioStream> micInputStream;
 OboeCallback *outputCallback;
 MicInputOboeCallback *micInputCallback;
-OpenGLContext *openGlContext;
 
 namespace MelonDSAndroid
 {
-    long sharedGlContext;
     int actualMicSource = 0;
     bool isMicInputEnabled = true;
+    OpenGLContext *openGlContext;
     AndroidFileHandler* fileHandler;
     AndroidCameraHandler* cameraHandler;
     std::string internalFilesDir;
@@ -74,10 +74,10 @@ namespace MelonDSAndroid
         }));
     }
 
-    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, long glContext, int instanceId) {
+    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, int instanceId)
+    {
         cameraHandler = androidCameraHandler;
         RetroAchievements::RetroAchievementsManager::AchievementsCallback = raCallback;
-        sharedGlContext = glContext;
 
         auto instanceArgs = BuildArgsFromConfiguration(*currentConfiguration, instanceId);
         if (!instanceArgs.has_value())
@@ -107,17 +107,17 @@ namespace MelonDSAndroid
 
     void setCodeList(std::list<Cheat> cheats)
     {
-        instance->loadCheats(cheats);
+        instance->loadCheats(std::move(cheats));
     }
 
     void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::optional<std::string> richPresenceScript)
     {
-        instance->setupAchievements(achievements, richPresenceScript);
+        instance->setupAchievements(std::move(achievements), std::move(richPresenceScript));
     }
 
     void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements)
     {
-        instance->unloadAchievements(achievements);
+        instance->unloadAchievements(std::move(achievements));
     }
 
     std::string getRichPresenceStatus()
@@ -162,7 +162,7 @@ namespace MelonDSAndroid
 
     int loadRom(std::string romPath, std::string sramPath, RomGbaSlotConfig* gbaSlotConfig)
     {
-        if (!instance->loadRom(romPath, sramPath))
+        if (!instance->loadRom(std::move(romPath), std::move(sramPath)))
             return 2;
 
         if (gbaSlotConfig->type == GBA_ROM)
@@ -487,8 +487,8 @@ namespace MelonDSAndroid
             fprintf(stderr, "Failed to init audio stream");
             delete outputCallback;
             delete audioStreamErrorCallback;
-            outputCallback = NULL;
-            audioStreamErrorCallback = NULL;
+            outputCallback = nullptr;
+            audioStreamErrorCallback = nullptr;
         }
     }
 
@@ -501,9 +501,9 @@ namespace MelonDSAndroid
             }
             delete outputCallback;
             delete audioStreamErrorCallback;
-            audioStream = NULL;
-            outputCallback = NULL;
-            audioStreamErrorCallback = NULL;
+            audioStream = nullptr;
+            outputCallback = nullptr;
+            audioStreamErrorCallback = nullptr;
         }
     }
 
@@ -526,7 +526,7 @@ namespace MelonDSAndroid
             actualMicSource = 1;
             fprintf(stderr, "Failed to init mic audio stream");
             delete micInputCallback;
-            micInputCallback = NULL;
+            micInputCallback = nullptr;
         }
     }
 
@@ -536,8 +536,8 @@ namespace MelonDSAndroid
             micInputStream->requestStop();
             micInputStream->close();
             delete micInputCallback;
-            micInputStream = NULL;
-            micInputCallback = NULL;
+            micInputStream = nullptr;
+            micInputCallback = nullptr;
         }
     }
 
@@ -552,26 +552,13 @@ namespace MelonDSAndroid
 
     bool setupOpenGlContext()
     {
-        if (openGlContext != nullptr)
-            return true;
-
-        openGlContext = new OpenGLContext();
-        if (!openGlContext->InitContext(sharedGlContext))
-        {
-            Platform::Log(Platform::LogLevel::Error, "Failed to init OpenGL context");
-            openGlContext->DeInit();
-            currentConfiguration->renderer = Renderer::Software;
+        if (openGlContext == nullptr)
             return false;
-        }
-        else
+
+        if (!openGlContext->Use())
         {
-            Platform::Log(Platform::LogLevel::Info, "OpenGL context initialised");
-            if (!openGlContext->Use())
-            {
-                Platform::Log(Platform::LogLevel::Error, "Failed to use OpenGL context");
-                cleanupOpenGlContext();
-                return false;
-            }
+            Platform::Log(Platform::LogLevel::Error, "Failed to use OpenGL context");
+            return false;
         }
 
         return true;
@@ -582,11 +569,7 @@ namespace MelonDSAndroid
         if (openGlContext == nullptr)
             return;
 
-        openGlContext->Use();
         openGlContext->Release();
-        openGlContext->DeInit();
-        delete openGlContext;
-        openGlContext = nullptr;
     }
 }
 
