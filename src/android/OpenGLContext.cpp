@@ -7,6 +7,8 @@ void logEglError()
     GLint error = eglGetError();
     switch(error)
     {
+        case EGL_SUCCESS:
+            return;
         case EGL_NOT_INITIALIZED:
             melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_NOT_INITIALIZED");
             break;
@@ -49,6 +51,9 @@ void logEglError()
         case EGL_CONTEXT_LOST:
             melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "EGL_CONTEXT_LOST");
             break;
+        default:
+            melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Unknown EGL error: 0x%x", error);
+            break;
     }
 }
 
@@ -73,7 +78,7 @@ bool OpenGLContext::InitContext(long sharedGlContext)
     }
 
     EGLint attributes[] = {
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR,
         EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
@@ -171,7 +176,12 @@ bool OpenGLContext::InitContext(long sharedGlContext)
         EGL_NONE
     };
 
-    EGLContext sharedContext = reinterpret_cast<EGLContext>(sharedGlContext);
+    EGLContext sharedContext;
+    if (sharedGlContext != 0)
+        sharedContext = reinterpret_cast<EGLContext>(sharedGlContext);
+    else
+        sharedContext = EGL_NO_CONTEXT;
+
     glContext = eglCreateContext(display, configs[selectedConfigNumber], sharedContext, contextAttributes);
     if (glContext == EGL_NO_CONTEXT)
     {
@@ -192,7 +202,7 @@ bool OpenGLContext::Use()
     else
     {
         melonDS::Platform::Log(melonDS::Platform::LogLevel::Error, "Failed to use OpenGL context");
-        glGetError();
+        logEglError();
         return false;
     }
 }

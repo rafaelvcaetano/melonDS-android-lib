@@ -3,6 +3,7 @@
 
 #include <GLES3/gl32.h>
 #include <EGL/egl.h>
+#include <EGL/eglext.h>
 
 class OpenGLContext
 {
@@ -11,6 +12,7 @@ public:
     bool Use();
     void Release();
     void DeInit();
+    [[nodiscard]] EGLContext GetContext() const { return glContext; }
 
 private:
     EGLDisplay display = EGL_NO_DISPLAY;
