@@ -221,6 +221,12 @@ void MelonInstance::loadGbaMemoryExpansion()
     nds->SetGBACart(std::move(memoryExpansionCart));
 }
 
+void MelonInstance::loadGbaRumblePak()
+{
+    auto rumbleCart = GBACart::LoadAddon(GBAAddon_RumblePak, this);
+    nds->SetGBACart(std::move(rumbleCart));
+}
+
 bool MelonInstance::bootFirmware()
 {
     if (nds->NeedsDirectBoot())
