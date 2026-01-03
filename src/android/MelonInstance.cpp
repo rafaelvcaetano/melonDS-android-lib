@@ -8,6 +8,7 @@
 #include "GPU3D_Compute.h"
 #include "Configuration.h"
 #include "DSi.h"
+#include "DSiSupport.h"
 #include "DSi_I2C.h"
 #include "GPU3D_OpenGL.h"
 #include "MelonDS.h"
@@ -237,7 +238,13 @@ bool MelonInstance::bootFirmware()
 
 void MelonInstance::start()
 {
-    if (!currentConfiguration->showBootScreen || nds->NeedsDirectBoot())
+    auto cart = nds->NDSCartSlot.GetCart();
+    if (nds->ConsoleType == 1 && cart != nullptr && cart->GetHeader().IsDSiWare() && !currentConfiguration->showBootScreen)
+    {
+        auto dsi = (DSi*) nds;
+        DSiSupport::SetupDSiDirectBoot(dsi);
+    }
+    else if (!currentConfiguration->showBootScreen || nds->NeedsDirectBoot())
     {
         // This seems to be unused, but it's required
         std::string romName;

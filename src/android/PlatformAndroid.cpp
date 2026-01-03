@@ -111,7 +111,7 @@ namespace Platform
         return modeString;
     }
 
-    FileHandle* OpenFile(const std::string& path,  FileMode mode)
+    FileHandle* OpenFile(const std::string& path, FileMode mode)
     {
         if ((mode & (FileMode::ReadWrite | FileMode::Append)) == FileMode::None)
         { // If we aren't reading or writing, then we can't open the file
@@ -124,12 +124,11 @@ namespace Platform
             return nullptr;
         }
 
-        bool fileExists = access(path.c_str(), F_OK) == 0;
-        std::string modeString = GetModeString(mode, fileExists);
-
         // If it's a standard absolute file path, open it a simple file. If not, delegate to the file handler
         if (path[0] == '/')
         {
+            bool fileExists = access(path.c_str(), F_OK) == 0;
+            std::string modeString = GetModeString(mode, fileExists);
             bool mustExist = (mode & FileMode::NoCreate) != 0;
             if (mustExist)
             {
@@ -143,7 +142,7 @@ namespace Platform
         }
         else
         {
-            return reinterpret_cast<FileHandle*>(MelonDSAndroid::fileHandler->open(path.c_str(), modeString.c_str()));
+            return reinterpret_cast<FileHandle*>(MelonDSAndroid::fileHandler->open(path.c_str(), mode));
         }
     }
 
