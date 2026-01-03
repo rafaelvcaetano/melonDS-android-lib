@@ -607,7 +607,15 @@ void MelonInstance::updateRenderer()
         case Renderer::OpenGl:
         {
             auto glRenderSettings = static_cast<OpenGlRenderSettings&>(*currentConfiguration->renderSettings);
-            static_cast<GLRenderer&>(nds->GPU.GetRenderer3D()).SetRenderSettings(glRenderSettings.betterPolygons, glRenderSettings.scale);
+            auto& renderer3d = static_cast<GLRenderer&>(nds->GPU.GetRenderer3D());
+            renderer3d.SetRenderSettings(glRenderSettings.betterPolygons, glRenderSettings.scale);
+            renderer3d.SetCoverageFixSettings(
+                glRenderSettings.conservativeCoverageEnabled,
+                glRenderSettings.conservativeCoveragePx,
+                glRenderSettings.conservativeCoverageDepthBias,
+                glRenderSettings.conservativeCoverageApplyRepeat,
+                glRenderSettings.conservativeCoverageApplyClamp,
+                glRenderSettings.debug3dClearMagenta);
             break;
         }
         case Renderer::Compute:

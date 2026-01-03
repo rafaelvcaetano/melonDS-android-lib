@@ -36,6 +36,13 @@ public:
     void SetRenderSettings(bool betterpolygons, int scale) noexcept;
     void SetBetterPolygons(bool betterpolygons) noexcept;
     void SetScaleFactor(int scale) noexcept;
+    void SetCoverageFixSettings(
+        bool enabled,
+        float coveragePx,
+        float depthBias,
+        bool applyRepeat,
+        bool applyClamp,
+        bool debug3dClearMagenta) noexcept;
     [[nodiscard]] bool GetBetterPolygons() const noexcept { return BetterPolygons; }
     [[nodiscard]] int GetScaleFactor() const noexcept { return ScaleFactor; }
 
@@ -81,6 +88,7 @@ private:
     void UseRenderShader(u32 flags);
     void SetupPolygon(RendererPolygon* rp, Polygon* polygon) const;
     u32* SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32* vptr) const;
+    u32* SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32 x, u32 y, u32* vptr) const;
     void BuildPolygons(RendererPolygon* polygons, int npolys);
     int RenderSinglePolygon(int i) const;
     int RenderPolygonBatch(int i) const;
@@ -116,7 +124,8 @@ private:
         float uFogDensity[34][4];   // float[34]  168 / 136
         u32 uFogOffset;             // int        304 / 1
         u32 uFogShift;              // int        305 / 1
-        u32 _pad1[2];               // int        306 / 2
+        float uCoverageFixDepthBias;// float      306 / 1
+        u32 _pad1;                  // int        307 / 1
     } ShaderConfig {};
 
     GLuint ShaderConfigUBO {};
@@ -136,6 +145,7 @@ private:
     // * bit16-20: Z shift
     // * bit8: front-facing (?)
     // * bit9: W-buffering (?)
+    // * bit10: coverage fix applied (depth bias)
 
     GLuint VertexBufferID {};
     u32 VertexBuffer[10240 * 7] {};
@@ -153,6 +163,12 @@ private:
 
     int ScaleFactor {};
     bool BetterPolygons {};
+    bool CoverageFixEnabled {};
+    bool CoverageFixApplyRepeat {true};
+    bool CoverageFixApplyClamp {};
+    float CoverageFixPx {};
+    float CoverageFixDepthBias {};
+    bool Debug3dClearMagenta {};
     int ScreenW {}, ScreenH {};
 
     GLuint ColorBufferTex {}, DepthBufferTex {}, AttrBufferTex {};
