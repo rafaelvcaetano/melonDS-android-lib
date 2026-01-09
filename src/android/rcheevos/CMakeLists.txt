@@ -6,8 +6,11 @@ add_library(rcheevos
         include/rc_runtime.h
         include/rc_runtime_types.h
         include/rc_url.h
+        src/rc_client.c
+        src/rc_compat.c
+        src/rc_util.c
+        src/rc_version.c
         src/rcheevos/alloc.c
-        src/rcheevos/compat.c
         src/rcheevos/condition.c
         src/rcheevos/condset.c
         src/rcheevos/consoleinfo.c
@@ -15,8 +18,8 @@ add_library(rcheevos
         src/rcheevos/lboard.c
         src/rcheevos/memref.c
         src/rcheevos/operand.c
-        src/rcheevos/rc_compat.h
         src/rcheevos/rc_internal.h
+        src/rcheevos/rc_validate.c
         src/rcheevos/richpresence.c
         src/rcheevos/runtime.c
         src/rcheevos/runtime_progress.c
@@ -26,7 +29,6 @@ add_library(rcheevos
         src/rhash/hash.c
         src/rhash/md5.c
         src/rhash/md5.h
-        src/rurl/url.c
         )
 
 target_include_directories(rcheevos PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
