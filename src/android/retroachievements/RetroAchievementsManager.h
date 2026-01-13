@@ -26,13 +26,19 @@ public:
     void Reset();
     void FrameUpdate();
 
+    static void CheevosEventHandler(const rc_runtime_event_t* runtime_event);
+
     static RACallback* AchievementsCallback;
 
 private:
 
     melonDS::NDS* nds;
     rc_runtime_t rcheevosRuntime;
+    std::mutex runtimeLock;
     bool isRichPresenceEnabled;
+
+    static RetroAchievementsManager* activeInstance;
+    static std::mutex activeInstanceLock;
 };
 
 }
