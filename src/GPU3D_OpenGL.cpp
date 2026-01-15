@@ -18,7 +18,9 @@
 
 #include "GPU3D_OpenGL.h"
 
+#include <algorithm>
 #include <assert.h>
+#include <cmath>
 #include <stdio.h>
 #include <string.h>
 #include "NDS.h"
@@ -327,6 +329,24 @@ void GLRenderer::SetScaleFactor(int scale) noexcept
     SetRenderSettings(BetterPolygons, scale);
 }
 
+void GLRenderer::SetCoverageFixSettings(
+    bool enabled,
+    float coveragePx,
+    float depthBias,
+    bool applyRepeat,
+    bool applyClamp,
+    bool debug3dClearMagenta) noexcept
+{
+    CoverageFixEnabled = enabled;
+    CoverageFixPx = std::clamp(coveragePx, 0.0f, 2.0f);
+    CoverageFixDepthBias = std::clamp(depthBias, 0.0f, 0.01f);
+    CoverageFixApplyRepeat = applyRepeat;
+    CoverageFixApplyClamp = applyClamp;
+    Debug3dClearMagenta = debug3dClearMagenta;
+
+    ShaderConfig.uCoverageFixDepthBias = CoverageFixDepthBias;
+}
+
 
 void GLRenderer::SetRenderSettings(bool betterpolygons, int scale) noexcept
 {
@@ -417,6 +437,35 @@ void GLRenderer::SetupPolygon(GLRenderer::RendererPolygon* rp, Polygon* polygon)
 
 u32* GLRenderer::SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32* vptr) const
 {
+    auto clampU16 = [](s32 v) -> u32
+    {
+        if (v < 0) return 0;
+        if (v > 0xFFFF) return 0xFFFF;
+        return (u32)v;
+    };
+
+    // vPosition.xy is 12.4 fixed (px*16).
+    // Keep scale==1 behavior the same as before (integer pixels).
+    s32 xFixed, yFixed;
+    if (ScaleFactor > 1)
+    {
+        xFixed = vtx->HiresPosition[0] * ScaleFactor;
+        yFixed = vtx->HiresPosition[1] * ScaleFactor;
+    }
+    else
+    {
+        xFixed = vtx->FinalPosition[0] << 4;
+        yFixed = vtx->FinalPosition[1] << 4;
+    }
+
+    return SetupVertex(poly, vid, vtx, vtxattr, clampU16(xFixed), clampU16(yFixed), vptr);
+}
+
+u32* GLRenderer::SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32 x, u32 y, u32* vptr) const
+{
+    if (x > 0xFFFF) x = 0xFFFF;
+    if (y > 0xFFFF) y = 0xFFFF;
+
     u32 z = poly->FinalZ[vid];
     u32 w = poly->FinalW[vid];
 
@@ -425,39 +474,6 @@ u32* GLRenderer::SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u3
     // Z should always fit within 16 bits, so it's okay to do this
     u32 zshift = 0;
     while (z > 0xFFFF) { z >>= 1; zshift++; }
-
-    u32 x, y;
-    if (ScaleFactor > 1)
-    {
-        x = (vtx->HiresPosition[0] * ScaleFactor) >> 4;
-        y = (vtx->HiresPosition[1] * ScaleFactor) >> 4;
-    }
-    else
-    {
-        x = vtx->FinalPosition[0];
-        y = vtx->FinalPosition[1];
-    }
-
-    // correct nearly-vertical edges that would look vertical on the DS
-    /*{
-        int vtopid = vid - 1;
-        if (vtopid < 0) vtopid = poly->NumVertices-1;
-        Vertex* vtop = poly->Vertices[vtopid];
-        if (vtop->FinalPosition[1] >= vtx->FinalPosition[1])
-        {
-            vtopid = vid + 1;
-            if (vtopid >= poly->NumVertices) vtopid = 0;
-            vtop = poly->Vertices[vtopid];
-        }
-        if ((vtop->FinalPosition[1] < vtx->FinalPosition[1]) &&
-            (vtx->FinalPosition[0] == vtop->FinalPosition[0]-1))
-        {
-            if (ScaleFactor > 1)
-                x = (vtop->HiresPosition[0] * ScaleFactor) >> 4;
-            else
-                x = vtop->FinalPosition[0];
-        }
-    }*/
 
     *vptr++ = x | (y << 16);
     *vptr++ = z | (w << 16);
@@ -503,6 +519,83 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
         if (poly->FacingView) vtxattr |= (1<<8);
         if (poly->WBuffer)    vtxattr |= (1<<9);
 
+        u32 expandedX[10] = {};
+        u32 expandedY[10] = {};
+
+        const bool allowCoverageFix = CoverageFixEnabled && (CoverageFixPx > 0.0f) && (poly->Type != 1);
+        bool applyCoverageFix = false;
+        if (allowCoverageFix)
+        {
+            const bool wrapS = (poly->TexParam & (1u<<16)) != 0;
+            const bool wrapT = (poly->TexParam & (1u<<17)) != 0;
+            const bool isRepeat = wrapS || wrapT;
+            applyCoverageFix = isRepeat ? CoverageFixApplyRepeat : CoverageFixApplyClamp;
+        }
+
+        if (applyCoverageFix)
+        {
+            vtxattr |= (1u<<10);
+
+            float cx = 0.0f;
+            float cy = 0.0f;
+
+            float baseX[10] = {};
+            float baseY[10] = {};
+
+            for (u32 j = 0; j < poly->NumVertices; j++)
+            {
+                const Vertex* vtx = poly->Vertices[j];
+
+                s32 xFixed, yFixed;
+                if (ScaleFactor > 1)
+                {
+                    xFixed = vtx->HiresPosition[0] * ScaleFactor;
+                    yFixed = vtx->HiresPosition[1] * ScaleFactor;
+                }
+                else
+                {
+                    xFixed = vtx->FinalPosition[0] << 4;
+                    yFixed = vtx->FinalPosition[1] << 4;
+                }
+
+                baseX[j] = (float)xFixed / 16.0f;
+                baseY[j] = (float)yFixed / 16.0f;
+                cx += baseX[j];
+                cy += baseY[j];
+            }
+
+            cx /= (float)poly->NumVertices;
+            cy /= (float)poly->NumVertices;
+
+            for (u32 j = 0; j < poly->NumVertices; j++)
+            {
+                float dx = baseX[j] - cx;
+                float dy = baseY[j] - cy;
+                float len2 = (dx * dx) + (dy * dy);
+
+                float outX = baseX[j];
+                float outY = baseY[j];
+
+                if (len2 > 0.000001f)
+                {
+                    float invLen = 1.0f / std::sqrt(len2);
+                    outX = baseX[j] + (dx * invLen) * CoverageFixPx;
+                    outY = baseY[j] + (dy * invLen) * CoverageFixPx;
+                }
+
+                s32 xFixedOut = (s32)std::lround(outX * 16.0f);
+                s32 yFixedOut = (s32)std::lround(outY * 16.0f);
+
+                if (xFixedOut < 0) xFixedOut = 0;
+                if (xFixedOut > 0xFFFF) xFixedOut = 0xFFFF;
+                if (yFixedOut < 0) yFixedOut = 0;
+                if (yFixedOut > 0xFFFF) yFixedOut = 0xFFFF;
+
+                expandedX[j] = (u32)xFixedOut;
+                expandedY[j] = (u32)yFixedOut;
+            }
+        }
+
         // assemble vertices
         if (poly->Type == 1) // line
         {
@@ -541,7 +634,10 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
             {
                 Vertex* vtx = poly->Vertices[j];
 
-                vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
+                if (applyCoverageFix)
+                    vptr = SetupVertex(poly, j, vtx, vtxattr, expandedX[j], expandedY[j], vptr);
+                else
+                    vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
                 vidx++;
             }
 
@@ -563,7 +659,10 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 {
                     Vertex* vtx = poly->Vertices[j];
 
-                    vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
+                    if (applyCoverageFix)
+                        vptr = SetupVertex(poly, j, vtx, vtxattr, expandedX[j], expandedY[j], vptr);
+                    else
+                        vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
 
                     if (j >= 2)
                     {
@@ -626,8 +725,10 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 cS *= cW;
                 cT *= cW;
 
-                cX = (cX * ScaleFactor) >> 4;
-                cY = (cY * ScaleFactor) >> 4;
+                cX = cX * ScaleFactor;
+                cY = cY * ScaleFactor;
+                if (cX > 0xFFFF) cX = 0xFFFF;
+                if (cY > 0xFFFF) cY = 0xFFFF;
 
                 u32 w = (u32)cW;
 
@@ -658,7 +759,10 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 {
                     Vertex* vtx = poly->Vertices[j];
 
-                    vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
+                    if (applyCoverageFix)
+                        vptr = SetupVertex(poly, j, vtx, vtxattr, expandedX[j], expandedY[j], vptr);
+                    else
+                        vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
 
                     if (j >= 1)
                     {
@@ -1125,6 +1229,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     ShaderConfig.uScreenSize[0] = ScreenW;
     ShaderConfig.uScreenSize[1] = ScreenH;
     ShaderConfig.uDispCnt = gpu.GPU3D.RenderDispCnt;
+    ShaderConfig.uCoverageFixDepthBias = CoverageFixDepthBias;
 
     for (int i = 0; i < 32; i++)
     {
@@ -1252,6 +1357,14 @@ void GLRenderer::RenderFrame(GPU& gpu)
         u32 a = (gpu.GPU3D.RenderClearAttr1 >> 16) & 0x1F;
         u32 polyid = (gpu.GPU3D.RenderClearAttr1 >> 24) & 0x3F;
         u32 z = ((gpu.GPU3D.RenderClearAttr2 & 0x7FFF) * 0x200) + 0x1FF;
+
+        if (Debug3dClearMagenta)
+        {
+            r = 31;
+            g = 0;
+            b = 31;
+            a = 31;
+        }
 
         glStencilFunc(GL_ALWAYS, 0xFF, 0xFF);
         glStencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE);

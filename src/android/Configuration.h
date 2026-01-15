@@ -20,6 +20,12 @@ struct OpenGlRenderSettings : public RenderSettings
 {
     bool betterPolygons;
     int scale;
+    bool conservativeCoverageEnabled;
+    float conservativeCoveragePx;
+    float conservativeCoverageDepthBias;
+    bool conservativeCoverageApplyRepeat;
+    bool conservativeCoverageApplyClamp;
+    bool debug3dClearMagenta;
 };
 
 struct ComputeRenderSettings : public RenderSettings
