@@ -155,7 +155,7 @@ void RetroAchievementsManager::CheevosEventHandler(const rc_runtime_event_t* run
             {
                 char buffer[32];
                 rc_runtime_format_achievement_measured(&activeInstance->rcheevosRuntime, runtime_event->id, buffer, sizeof(buffer));
-                RetroAchievementsManager::AchievementsCallback->onAchievementProgressUpdated(runtime_event->id, buffer);
+                RetroAchievementsManager::AchievementsCallback->onAchievementProgressUpdated(runtime_event->id, value, target, buffer);
             }
             break;
     }
