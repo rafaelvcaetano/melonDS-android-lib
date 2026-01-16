@@ -36,18 +36,44 @@ bool RetroAchievementsManager::LoadAchievements(std::list<RAAchievement> achieve
         int result = rc_runtime_activate_achievement(&rcheevosRuntime, achievement.id, achievement.memoryAddress.c_str(), nullptr, 0);
         if (result != RC_OK)
             return false;
+
+        loadedAchievements.push_back(achievement);
     }
 
     return true;
 }
 
-void RetroAchievementsManager::UnloadAchievements(std::list<RAAchievement> achievements)
+bool RetroAchievementsManager::LoadLeaderboards(std::list<RALeaderboard> leaderboards)
 {
     std::unique_lock lock(runtimeLock);
 
-    for (const auto &achievement : achievements) {
+    for (auto &leaderboard : leaderboards) {
+        int result = rc_runtime_activate_lboard(&rcheevosRuntime, leaderboard.id, leaderboard.memoryAddress.c_str(), nullptr, 0);
+        if (result != RC_OK)
+            return false;
+
+        int rcheevosLeaderboardType = rc_parse_format(leaderboard.format.c_str());
+        leaderboard.rcheevosFormat = rcheevosLeaderboardType;
+
+        loadedLeaderboards.push_back(leaderboard);
+    }
+
+    return true;
+}
+
+void RetroAchievementsManager::UnloadEverything()
+{
+    std::unique_lock lock(runtimeLock);
+
+    for (const auto &achievement : loadedAchievements) {
         rc_runtime_deactivate_achievement(&rcheevosRuntime, achievement.id);
     }
+    for (const auto &leaderboard : loadedLeaderboards) {
+        rc_runtime_deactivate_lboard(&rcheevosRuntime, leaderboard.id);
+    }
+
+    loadedAchievements.clear();
+    loadedLeaderboards.clear();
 }
 
 void RetroAchievementsManager::SetupRichPresence(std::string richPresenceScript)
@@ -156,6 +182,24 @@ void RetroAchievementsManager::CheevosEventHandler(const rc_runtime_event_t* run
                 char buffer[32];
                 rc_runtime_format_achievement_measured(&activeInstance->rcheevosRuntime, runtime_event->id, buffer, sizeof(buffer));
                 RetroAchievementsManager::AchievementsCallback->onAchievementProgressUpdated(runtime_event->id, value, target, buffer);
+            }
+            break;
+        case RC_RUNTIME_EVENT_LBOARD_STARTED:
+            RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptStarted(runtime_event->id);
+            break;
+        case RC_RUNTIME_EVENT_LBOARD_CANCELED:
+            RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptCanceled(runtime_event->id);
+            break;
+        case RC_RUNTIME_EVENT_LBOARD_TRIGGERED:
+            RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptCompleted(runtime_event->id, runtime_event->value);
+            break;
+        case RC_RUNTIME_EVENT_LBOARD_UPDATED:
+            auto leaderboard = std::find_if(activeInstance->loadedLeaderboards.begin(), activeInstance->loadedLeaderboards.end(), [=](RALeaderboard l){ return l.id == runtime_event->id; });
+            if (leaderboard != activeInstance->loadedLeaderboards.end())
+            {
+                char buffer[32];
+                rc_runtime_format_lboard_value(buffer, sizeof(buffer), runtime_event->value, leaderboard->rcheevosFormat);
+                RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptUpdated(runtime_event->id, buffer);
             }
             break;
     }

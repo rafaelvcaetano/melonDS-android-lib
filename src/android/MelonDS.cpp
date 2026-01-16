@@ -110,14 +110,18 @@ namespace MelonDSAndroid
         instance->loadCheats(std::move(cheats));
     }
 
-    void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::optional<std::string> richPresenceScript)
+    void setupAchievements(
+        std::list<RetroAchievements::RAAchievement> achievements,
+        std::list<RetroAchievements::RALeaderboard> leaderboards,
+        std::optional<std::string> richPresenceScript
+    )
     {
-        instance->setupAchievements(std::move(achievements), std::move(richPresenceScript));
+        instance->setupAchievements(std::move(achievements), std::move(leaderboards), std::move(richPresenceScript));
     }
 
-    void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements)
+    void unloadRetroAchievementsData()
     {
-        instance->unloadAchievements(std::move(achievements));
+        instance->unloadRetroAchievementsData();
     }
 
     std::string getRichPresenceStatus()

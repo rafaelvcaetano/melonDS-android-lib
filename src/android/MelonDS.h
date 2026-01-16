@@ -10,6 +10,7 @@
 #include "RomGbaSlotConfig.h"
 #include "retroachievements/RAAchievement.h"
 #include "retroachievements/RACallback.h"
+#include "retroachievements/RALeaderboard.h"
 #include "renderer/FrameQueue.h"
 #include "types.h"
 #include "../GPU.h"
@@ -35,8 +36,8 @@ namespace MelonDSAndroid {
     extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
     extern void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, int instanceId);
     extern void setCodeList(std::list<Cheat> cheats);
-    extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::optional<std::string> richPresenceScript);
-    extern void unloadAchievements(std::list<RetroAchievements::RAAchievement> achievements);
+    extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::list<RetroAchievements::RALeaderboard> leaderboards, std::optional<std::string> richPresenceScript);
+    extern void unloadRetroAchievementsData();
     extern std::string getRichPresenceStatus();
     extern void updateEmulatorConfiguration(std::unique_ptr<EmulatorConfiguration> emulatorConfiguration);
 
