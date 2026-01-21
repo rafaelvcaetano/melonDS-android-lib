@@ -40,9 +40,13 @@ namespace MelonDSAndroid
 {
     int actualMicSource = 0;
     bool isMicInputEnabled = true;
+    s16* micExternalBuffer = nullptr;
+    int micExternalBufferLength = 0;
+    int micExternalBufferReadPos = 0;
     OpenGLContext *openGlContext;
     AndroidFileHandler* fileHandler;
     AndroidCameraHandler* cameraHandler;
+    AndroidRumbleManager* rumbleManager;
     std::string internalFilesDir;
     std::shared_ptr<EmulatorConfiguration> currentConfiguration;
     std::shared_ptr<Net> net;
@@ -74,9 +78,10 @@ namespace MelonDSAndroid
         }));
     }
 
-    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, int instanceId)
+    void setup(AndroidCameraHandler* androidCameraHandler, AndroidRumbleManager* androidRumbleManager, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, int instanceId)
     {
         cameraHandler = androidCameraHandler;
+        rumbleManager = androidRumbleManager;
         RetroAchievements::RetroAchievementsManager::AchievementsCallback = raCallback;
 
         auto instanceArgs = BuildArgsFromConfiguration(*currentConfiguration, instanceId);
@@ -178,6 +183,10 @@ namespace MelonDSAndroid
         else if (gbaSlotConfig->type == MEMORY_EXPANSION)
         {
             instance->loadGbaMemoryExpansion();
+        }
+        else if (gbaSlotConfig->type == RUMBLE_PAK)
+        {
+            instance->loadGbaRumblePak();
         }
 
         return 0;
@@ -284,6 +293,31 @@ namespace MelonDSAndroid
         }
     }
 
+    void feedMicNoise()
+    {
+        static int sample_pos = 0;
+        const int sample_len = sizeof(mic_blow) / sizeof(u16);
+        s16 tmp[735];
+        constexpr int blowGain = 4;
+
+        for (int i = 0; i < 735; i++)
+        {
+            s32 sample = static_cast<s32>(static_cast<s16>(mic_blow[sample_pos] ^ 0x8000));
+            sample *= blowGain;
+            if (sample > 0x7FFF)
+                sample = 0x7FFF;
+            else if (sample < -0x8000)
+                sample = -0x8000;
+
+            tmp[i] = static_cast<s16>(sample);
+            sample_pos++;
+            if (sample_pos >= sample_len)
+                sample_pos = 0;
+        }
+
+        instance->feedMicAudio(tmp, 735);
+    }
+
     void updateMic()
     {
         if (!isMicInputEnabled)
@@ -298,26 +332,36 @@ namespace MelonDSAndroid
                 instance->feedMicAudio(nullptr, 0);
                 break;
             case 1: // white noise
+                feedMicNoise();
+                break;
+            case 2: // host mic
             {
-                int sample_len = sizeof(mic_blow) / sizeof(u16);
-                static int sample_pos = 0;
+                if (!micExternalBuffer || micExternalBufferLength == 0)
+                {
+                    instance->feedMicAudio(nullptr, 0);
+                    break;
+                }
 
                 s16 tmp[735];
-
-                for (int i = 0; i < 735; i++)
+                if ((micExternalBufferReadPos + 735) > micExternalBufferLength)
                 {
-                    tmp[i] = mic_blow[sample_pos] ^ 0x8000;
-                    sample_pos++;
-                    if (sample_pos >= sample_len)
-                        sample_pos = 0;
+                    int firstCopyAmount = micExternalBufferLength - micExternalBufferReadPos;
+                    int secondCopyAmount = 735 - firstCopyAmount;
+                    memcpy(&tmp[0], &micExternalBuffer[micExternalBufferReadPos], firstCopyAmount * sizeof(s16));
+                    memcpy(&tmp[firstCopyAmount], micExternalBuffer, secondCopyAmount * sizeof(s16));
+                    micExternalBufferReadPos = secondCopyAmount;
+                }
+                else
+                {
+                    memcpy(tmp, &micExternalBuffer[micExternalBufferReadPos], 735 * sizeof(s16));
+                    micExternalBufferReadPos += 735;
+                    if (micExternalBufferReadPos >= micExternalBufferLength)
+                        micExternalBufferReadPos -= micExternalBufferLength;
                 }
 
                 instance->feedMicAudio(tmp, 735);
                 break;
             }
-            case 2: // host mic
-                instance->feedMicAudio(micInputCallback->buffer, 735);
-                break;
         }
     }
 
@@ -531,6 +575,13 @@ namespace MelonDSAndroid
             fprintf(stderr, "Failed to init mic audio stream");
             delete micInputCallback;
             micInputCallback = nullptr;
+            micExternalBuffer = nullptr;
+            micExternalBufferLength = 0;
+            micExternalBufferReadPos = 0;
+        } else {
+            micExternalBuffer = micInputCallback->buffer;
+            micExternalBufferLength = MIC_BUFFER_SIZE;
+            micExternalBufferReadPos = 0;
         }
     }
 
@@ -542,6 +593,9 @@ namespace MelonDSAndroid
             delete micInputCallback;
             micInputStream = nullptr;
             micInputCallback = nullptr;
+            micExternalBuffer = nullptr;
+            micExternalBufferLength = 0;
+            micExternalBufferReadPos = 0;
         }
     }
 
@@ -576,4 +630,3 @@ namespace MelonDSAndroid
         openGlContext->Release();
     }
 }
-

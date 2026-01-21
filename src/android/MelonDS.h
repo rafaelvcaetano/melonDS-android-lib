@@ -5,6 +5,7 @@
 #include <vector>
 #include "AndroidFileHandler.h"
 #include "AndroidCameraHandler.h"
+#include "AndroidRumbleManager.h"
 #include "Configuration.h"
 #include "RewindManager.h"
 #include "RomGbaSlotConfig.h"
@@ -31,10 +32,11 @@ namespace MelonDSAndroid {
     extern OpenGLContext *openGlContext;
     extern AndroidFileHandler* fileHandler;
     extern AndroidCameraHandler* cameraHandler;
+    extern AndroidRumbleManager* rumbleManager;
     extern std::string internalFilesDir;
 
     extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
-    extern void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, int instanceId);
+    extern void setup(AndroidCameraHandler* androidCameraHandler, AndroidRumbleManager* androidRumbleManager, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, int instanceId);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::list<RetroAchievements::RALeaderboard> leaderboards, std::optional<std::string> richPresenceScript);
     extern void unloadRetroAchievementsData();
