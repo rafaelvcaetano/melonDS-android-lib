@@ -3,6 +3,7 @@ project(melonDS-lib)
 set(ANDROID_SOURCES
         MelonAudioStreamErrorCallback.cpp
         MelonDS.cpp
+        MelonEventMessenger.h
         OboeCallback.cpp
         MicInputOboeCallback.cpp
         OpenGLContext.cpp

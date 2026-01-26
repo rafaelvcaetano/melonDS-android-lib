@@ -65,9 +65,7 @@ namespace Platform
 
     void SignalStop(StopReason reason, void* userdata)
     {
-        MelonDSAndroid::MelonInstance* instance = (MelonDSAndroid::MelonInstance*) userdata;
-        // TODO: Notify frontend that emulator has stopped
-        //instance->emuStop(reason);
+        MelonDSAndroid::eventMessenger->onEmulatorStop(reason);
     }
 
     constexpr char AccessMode(FileMode mode, bool fileExists)
@@ -589,12 +587,12 @@ namespace Platform
 
     void Addon_RumbleStart(u32 len, void* userdata)
     {
-        // TODO
+        MelonDSAndroid::eventMessenger->onRumbleStart(len);
     }
 
     void Addon_RumbleStop(void* userdata)
     {
-        // TODO
+        MelonDSAndroid::eventMessenger->onRumbleStop();
     }
 
     float Addon_MotionQuery(MotionQueryType type, void* userdata)

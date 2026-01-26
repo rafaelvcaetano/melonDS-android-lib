@@ -216,6 +216,12 @@ bool MelonInstance::loadGbaRom(std::string romPath, std::string sramPath)
     return true;
 }
 
+void MelonInstance::loadRumblePak()
+{
+    auto rumblePakCart = GBACart::LoadAddon(GBAAddon_RumblePak, this);
+    nds->SetGBACart(std::move(rumblePakCart));
+}
+
 void MelonInstance::loadGbaMemoryExpansion()
 {
     auto memoryExpansionCart = GBACart::LoadAddon(GBAAddon_RAMExpansion, this);

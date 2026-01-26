@@ -44,6 +44,7 @@ namespace MelonDSAndroid
     AndroidFileHandler* fileHandler;
     AndroidCameraHandler* cameraHandler;
     std::string internalFilesDir;
+    MelonEventMessenger* eventMessenger;
     std::shared_ptr<EmulatorConfiguration> currentConfiguration;
     std::shared_ptr<Net> net;
 
@@ -74,9 +75,10 @@ namespace MelonDSAndroid
         }));
     }
 
-    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, u32* screenshotBufferPointer, int instanceId)
+    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, MelonEventMessenger* androidEventMessenger, u32* screenshotBufferPointer, int instanceId)
     {
         cameraHandler = androidCameraHandler;
+        eventMessenger = androidEventMessenger;
         RetroAchievements::RetroAchievementsManager::AchievementsCallback = raCallback;
 
         auto instanceArgs = BuildArgsFromConfiguration(*currentConfiguration, instanceId);
@@ -174,6 +176,10 @@ namespace MelonDSAndroid
             RomGbaSlotConfigGbaRom* gbaRomConfig = (RomGbaSlotConfigGbaRom*) gbaSlotConfig;
             if (!instance->loadGbaRom(gbaRomConfig->romPath, gbaRomConfig->savePath))
                 return 1;
+        }
+        else if (gbaSlotConfig->type == RUMBLE_PAK)
+        {
+            instance->loadRumblePak();
         }
         else if (gbaSlotConfig->type == MEMORY_EXPANSION)
         {
@@ -450,6 +456,9 @@ namespace MelonDSAndroid
     {
         cleanupAudioOutputStream();
         cleanupMicInputStream();
+
+        delete eventMessenger;
+        eventMessenger = nullptr;
 
         instance = nullptr;
     }

@@ -30,6 +30,7 @@ public:
 
     bool loadRom(std::string romPath, std::string sramPath);
     bool loadGbaRom(std::string romPath, std::string sramPath);
+    void loadRumblePak();
     void loadGbaMemoryExpansion();
     bool bootFirmware();
     void start();
