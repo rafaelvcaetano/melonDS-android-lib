@@ -10,7 +10,6 @@
 #include "RewindManager.h"
 #include "RomGbaSlotConfig.h"
 #include "retroachievements/RAAchievement.h"
-#include "retroachievements/RACallback.h"
 #include "retroachievements/RALeaderboard.h"
 #include "renderer/FrameQueue.h"
 #include "types.h"
@@ -33,10 +32,10 @@ namespace MelonDSAndroid {
     extern AndroidFileHandler* fileHandler;
     extern AndroidCameraHandler* cameraHandler;
     extern std::string internalFilesDir;
-    extern MelonEventMessenger* eventMessenger;
+    extern std::shared_ptr<MelonEventMessenger> eventMessenger;
 
     extern void setConfiguration(EmulatorConfiguration emulatorConfiguration);
-    extern void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, MelonEventMessenger* androidEventMessenger, u32* screenshotBufferPointer, int instanceId);
+    extern void setup(AndroidCameraHandler* androidCameraHandler, std::shared_ptr<MelonEventMessenger> androidEventMessenger, u32* screenshotBufferPointer, int instanceId);
     extern void setCodeList(std::list<Cheat> cheats);
     extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::list<RetroAchievements::RALeaderboard> leaderboards, std::optional<std::string> richPresenceScript);
     extern void unloadRetroAchievementsData();

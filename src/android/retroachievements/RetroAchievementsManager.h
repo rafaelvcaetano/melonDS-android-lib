@@ -2,9 +2,9 @@
 #define RETROACHIEVEMENTSMANAGER_H
 
 #include <list>
+#include "MelonEventMessenger.h"
 #include "NDS.h"
 #include "RAAchievement.h"
-#include "RACallback.h"
 #include "RALeaderboard.h"
 #include "rcheevos.h"
 #include "Savestate.h"
@@ -30,7 +30,7 @@ public:
 
     static void CheevosEventHandler(const rc_runtime_event_t* runtime_event);
 
-    static RACallback* AchievementsCallback;
+    static std::weak_ptr<MelonEventMessenger> EventMessenger;
 
 private:
 

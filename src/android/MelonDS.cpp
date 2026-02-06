@@ -24,7 +24,6 @@
 #include "renderer/ScreenshotRenderer.h"
 #include "renderer/FrameQueue.h"
 #include "retroachievements/RetroAchievementsManager.h"
-#include "retroachievements/RACallback.h"
 #include "net/Net.h"
 #include "net/Net_Slirp.h"
 
@@ -44,7 +43,7 @@ namespace MelonDSAndroid
     AndroidFileHandler* fileHandler;
     AndroidCameraHandler* cameraHandler;
     std::string internalFilesDir;
-    MelonEventMessenger* eventMessenger;
+    std::shared_ptr<MelonEventMessenger> eventMessenger;
     std::shared_ptr<EmulatorConfiguration> currentConfiguration;
     std::shared_ptr<Net> net;
 
@@ -75,11 +74,11 @@ namespace MelonDSAndroid
         }));
     }
 
-    void setup(AndroidCameraHandler* androidCameraHandler, RetroAchievements::RACallback* raCallback, MelonEventMessenger* androidEventMessenger, u32* screenshotBufferPointer, int instanceId)
+    void setup(AndroidCameraHandler* androidCameraHandler, std::shared_ptr<MelonEventMessenger> androidEventMessenger, u32* screenshotBufferPointer, int instanceId)
     {
         cameraHandler = androidCameraHandler;
         eventMessenger = androidEventMessenger;
-        RetroAchievements::RetroAchievementsManager::AchievementsCallback = raCallback;
+        RetroAchievements::RetroAchievementsManager::EventMessenger = androidEventMessenger;
 
         auto instanceArgs = BuildArgsFromConfiguration(*currentConfiguration, instanceId);
         if (!instanceArgs.has_value())
@@ -457,10 +456,8 @@ namespace MelonDSAndroid
         cleanupAudioOutputStream();
         cleanupMicInputStream();
 
-        delete eventMessenger;
-        eventMessenger = nullptr;
-
         instance = nullptr;
+        eventMessenger = nullptr;
     }
 
     void setupAudioOutputStream(int audioLatency, int volume)

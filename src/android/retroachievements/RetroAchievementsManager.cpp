@@ -11,7 +11,7 @@ namespace MelonDSAndroid
 namespace RetroAchievements
 {
 
-RACallback* RetroAchievementsManager::AchievementsCallback = nullptr;
+std::weak_ptr<MelonEventMessenger> RetroAchievementsManager::EventMessenger;
 RetroAchievementsManager* RetroAchievementsManager::activeInstance = nullptr;
 std::mutex RetroAchievementsManager::activeInstanceLock;
 
@@ -106,7 +106,7 @@ bool RetroAchievementsManager::DoSavestate(Savestate* savestate)
     {
         u32 rcheevosStateSize = (u32) rc_runtime_progress_size(&rcheevosRuntime, nullptr);
         u8* rcheevosStateBuffer = new u8[rcheevosStateSize];
-        int result = rc_runtime_serialize_progress(rcheevosStateBuffer, &rcheevosRuntime, nullptr);
+        int result = rc_runtime_serialize_progress_sized(rcheevosStateBuffer, rcheevosStateSize, &rcheevosRuntime, nullptr);
         if (result != RC_OK)
         {
             delete[] rcheevosStateBuffer;
@@ -157,19 +157,20 @@ void RetroAchievementsManager::FrameUpdate()
 
 void RetroAchievementsManager::CheevosEventHandler(const rc_runtime_event_t* runtime_event)
 {
-    if (!RetroAchievementsManager::AchievementsCallback)
+    auto eventMessenger = RetroAchievementsManager::EventMessenger.lock();
+    if (!eventMessenger)
         return;
 
     switch (runtime_event->type)
     {
         case RC_RUNTIME_EVENT_ACHIEVEMENT_TRIGGERED:
-            RetroAchievementsManager::AchievementsCallback->onAchievementTriggered(runtime_event->id);
+            eventMessenger->onAchievementTriggered(runtime_event->id);
             break;
         case RC_RUNTIME_EVENT_ACHIEVEMENT_PRIMED:
-            RetroAchievementsManager::AchievementsCallback->onAchievementPrimed(runtime_event->id);
+            eventMessenger->onAchievementPrimed(runtime_event->id);
             break;
         case RC_RUNTIME_EVENT_ACHIEVEMENT_UNPRIMED:
-            RetroAchievementsManager::AchievementsCallback->onAchievementUnprimed(runtime_event->id);
+            eventMessenger->onAchievementUnprimed(runtime_event->id);
             break;
         case RC_RUNTIME_EVENT_ACHIEVEMENT_PROGRESS_UPDATED:
             unsigned int value;
@@ -181,17 +182,17 @@ void RetroAchievementsManager::CheevosEventHandler(const rc_runtime_event_t* run
             {
                 char buffer[32];
                 rc_runtime_format_achievement_measured(&activeInstance->rcheevosRuntime, runtime_event->id, buffer, sizeof(buffer));
-                RetroAchievementsManager::AchievementsCallback->onAchievementProgressUpdated(runtime_event->id, value, target, buffer);
+                eventMessenger->onAchievementProgressUpdated(runtime_event->id, value, target, buffer);
             }
             break;
         case RC_RUNTIME_EVENT_LBOARD_STARTED:
-            RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptStarted(runtime_event->id);
+            eventMessenger->onLeaderboardAttemptStarted(runtime_event->id);
             break;
         case RC_RUNTIME_EVENT_LBOARD_CANCELED:
-            RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptCanceled(runtime_event->id);
+            eventMessenger->onLeaderboardAttemptCanceled(runtime_event->id);
             break;
         case RC_RUNTIME_EVENT_LBOARD_TRIGGERED:
-            RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptCompleted(runtime_event->id, runtime_event->value);
+            eventMessenger->onLeaderboardAttemptCompleted(runtime_event->id, runtime_event->value);
             break;
         case RC_RUNTIME_EVENT_LBOARD_UPDATED:
             auto leaderboard = std::find_if(activeInstance->loadedLeaderboards.begin(), activeInstance->loadedLeaderboards.end(), [=](RALeaderboard l){ return l.id == runtime_event->id; });
@@ -199,7 +200,7 @@ void RetroAchievementsManager::CheevosEventHandler(const rc_runtime_event_t* run
             {
                 char buffer[32];
                 rc_runtime_format_lboard_value(buffer, sizeof(buffer), runtime_event->value, leaderboard->rcheevosFormat);
-                RetroAchievementsManager::AchievementsCallback->onLeaderboardAttemptUpdated(runtime_event->id, buffer);
+                eventMessenger->onLeaderboardAttemptUpdated(runtime_event->id, buffer);
             }
             break;
     }
