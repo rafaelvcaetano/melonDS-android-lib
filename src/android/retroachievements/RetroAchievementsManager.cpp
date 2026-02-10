@@ -97,6 +97,20 @@ std::string RetroAchievementsManager::GetRichPresenceStatus()
     return buffer;
 }
 
+std::vector<RARuntimeAchievement> RetroAchievementsManager::GetRuntimeAchievements()
+{
+    std::vector<RARuntimeAchievement> achievements(loadedAchievements.size());
+    int index = 0;
+    for (const auto &item: loadedAchievements)
+    {
+        RARuntimeAchievement& runtimeAchievement = achievements[index++];
+        runtimeAchievement.id = item.id;
+        rc_runtime_get_achievement_measured(&rcheevosRuntime, item.id, &runtimeAchievement.value, &runtimeAchievement.target);
+    }
+
+    return achievements;
+}
+
 bool RetroAchievementsManager::DoSavestate(Savestate* savestate)
 {
     std::unique_lock lock(runtimeLock);

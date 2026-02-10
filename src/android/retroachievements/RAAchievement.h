@@ -14,6 +14,13 @@ typedef struct RAAchievement
     std::string memoryAddress;
 } RAAchievement;
 
+typedef struct RARuntimeAchievement
+{
+    long id;
+    unsigned int value;
+    unsigned int target;
+} RARuntimeAchievement;
+
 }
 }
 

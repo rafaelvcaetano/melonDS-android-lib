@@ -24,6 +24,7 @@ public:
     void UnloadEverything();
     void SetupRichPresence(std::string richPresenceScript);
     std::string GetRichPresenceStatus();
+    std::vector<RARuntimeAchievement> GetRuntimeAchievements();
     bool DoSavestate(melonDS::Savestate* savestate);
     void Reset();
     void FrameUpdate();

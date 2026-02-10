@@ -40,6 +40,7 @@ namespace MelonDSAndroid {
     extern void setupAchievements(std::list<RetroAchievements::RAAchievement> achievements, std::list<RetroAchievements::RALeaderboard> leaderboards, std::optional<std::string> richPresenceScript);
     extern void unloadRetroAchievementsData();
     extern std::string getRichPresenceStatus();
+    extern std::vector<RetroAchievements::RARuntimeAchievement> getRuntimeAchievements();
     extern void updateEmulatorConfiguration(std::unique_ptr<EmulatorConfiguration> emulatorConfiguration);
 
     /**

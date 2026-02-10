@@ -586,6 +586,14 @@ std::string MelonInstance::getRichPresenceStatus()
         return "";
 }
 
+std::vector<RetroAchievements::RARuntimeAchievement> MelonInstance::getRuntimeAchievements()
+{
+    if (instanceId == 0 && retroAchievementsManager)
+        return retroAchievementsManager->GetRuntimeAchievements();
+    else
+        return { };
+}
+
 void MelonInstance::updateRenderer()
 {
     Renderer newRenderer = currentConfiguration->renderer;

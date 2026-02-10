@@ -130,6 +130,11 @@ namespace MelonDSAndroid
         return instance->getRichPresenceStatus();
     }
 
+    std::vector<RetroAchievements::RARuntimeAchievement> getRuntimeAchievements()
+    {
+        return instance->getRuntimeAchievements();
+    }
+
     /**
      * Used to update the emulator's configuration during runtime. Will only update the configurations that can actually change during runtime without causing issues,
      *
