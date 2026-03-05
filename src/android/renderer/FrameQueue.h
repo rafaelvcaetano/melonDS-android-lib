@@ -2,6 +2,7 @@
 #define FRAMEQUEUE_H
 
 #include <array>
+#include <chrono>
 #include <queue>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -27,7 +28,7 @@ class FrameQueue
 public:
     FrameQueue();
     Frame* getRenderFrame();
-    Frame* getPresentFrame();
+    Frame* getPresentFrame(std::optional<std::chrono::time_point<std::chrono::steady_clock>> deadline);
     void validateRenderFrame(Frame* frame, int requiredWidth, int requiredHeight);
     void pushRenderedFrame(Frame* frame);
     void discardRenderedFrame(Frame* frame);
@@ -35,6 +36,7 @@ public:
 
 private:
     std::mutex frameLock;
+    std::condition_variable presentFrameReadyCondition;
     std::array<Frame, FRAME_QUEUE_SIZE> frames{};
     std::queue<Frame*> freeQueue{};
     std::deque<Frame*> presentQueue{};

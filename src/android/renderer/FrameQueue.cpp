@@ -1,4 +1,5 @@
 #include "FrameQueue.h"
+#include <Platform.h>
 
 FrameQueue::FrameQueue()
 {
@@ -29,12 +30,17 @@ Frame* FrameQueue::getRenderFrame()
     return frame;
 }
 
-Frame* FrameQueue::getPresentFrame()
+Frame* FrameQueue::getPresentFrame(std::optional<std::chrono::time_point<std::chrono::steady_clock>> deadline)
 {
     std::unique_lock lock(frameLock);
 
     if (presentQueue.empty()) {
-        return previousFrame;
+        bool hasNewFrame = false;
+        if (deadline.has_value())
+            hasNewFrame = presentFrameReadyCondition.wait_until(lock, *deadline, [&]{ return !presentQueue.empty(); });
+
+        if (!hasNewFrame)
+            return previousFrame;
     }
 
     if (previousFrame)
@@ -85,6 +91,7 @@ void FrameQueue::pushRenderedFrame(Frame* frame)
 {
     std::unique_lock lock(frameLock);
     presentQueue.push_front(frame);
+    presentFrameReadyCondition.notify_one();
 }
 
 void FrameQueue::discardRenderedFrame(Frame* frame)

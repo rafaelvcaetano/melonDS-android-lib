@@ -245,12 +245,12 @@ namespace MelonDSAndroid
         return instance->runFrame();
     }
 
-    Frame* getPresentationFrame()
+    Frame* getPresentationFrame(std::optional<std::chrono::time_point<std::chrono::steady_clock>> deadline)
     {
         if (!instance)
             return nullptr;
 
-        return instance->getPresentationFrame();
+        return instance->getPresentationFrame(deadline);
     }
 
     void pause()

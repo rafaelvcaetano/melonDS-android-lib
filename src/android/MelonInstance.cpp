@@ -476,9 +476,9 @@ int MelonInstance::receiveNetPacket(u8* data)
     return net->RecvPacket(data, instanceId);
 }
 
-Frame* MelonInstance::getPresentationFrame()
+Frame* MelonInstance::getPresentationFrame(std::optional<std::chrono::time_point<std::chrono::steady_clock>> deadline)
 {
-    return frameQueue.getPresentFrame();
+    return frameQueue.getPresentFrame(deadline);
 }
 
 void MelonInstance::updateConfiguration(std::shared_ptr<EmulatorConfiguration> newConfiguration)
