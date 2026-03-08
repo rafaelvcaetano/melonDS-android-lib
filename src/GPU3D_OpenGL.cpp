@@ -110,8 +110,8 @@ std::unique_ptr<GLRenderer> GLRenderer::New() noexcept
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_STENCIL_TEST);
 
-    glDepthRange(0, 1);
-    glClearDepth(1.0);
+    glDepthRangef(0.0f, 1.0f);
+    glClearDepthf(1.0f);
 
     if (!OpenGL::CompileVertexFragmentProgram(result->ClearShaderPlain,
             kClearVS, kClearFS,
@@ -276,7 +276,7 @@ std::unique_ptr<GLRenderer> GLRenderer::New() noexcept
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 1024, 48, 0, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, 1024, 48, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, NULL);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -469,9 +469,10 @@ u32* GLRenderer::SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u3
 
     *vptr++ = (u16)vtx->TexCoords[0] | ((u16)vtx->TexCoords[1] << 16);
 
+    // Split TexParam into 2 because some GPUs don't have 32 bit ints. TexPalette only uses 13 bits
     *vptr++ = vtxattr | (zshift << 16);
-    *vptr++ = poly->TexParam;
-    *vptr++ = poly->TexPalette;
+    *vptr++ = poly->TexParam & 0xFFFF;
+    *vptr++ = (poly->TexParam >> 16 ) | (poly->TexPalette << 16);
 
     return vptr;
 }
@@ -645,9 +646,10 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
 
                 *vptr++ = (u16)cS | ((u16)cT << 16);
 
+                // Split TexParam into 2 because some GPUs don't have 32 bit ints. TexPalette only uses 13 bits
                 *vptr++ = vtxattr | (zshift << 16);
-                *vptr++ = poly->TexParam;
-                *vptr++ = poly->TexPalette;
+                *vptr++ = poly->TexParam & 0xFFFF;
+                *vptr++ = (poly->TexParam >> 16 ) | (poly->TexPalette << 16);
 
                 vidx++;
 
@@ -1171,7 +1173,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     ShaderConfig.uFogShift = gpu.GPU3D.RenderFogShift;
 
     glBindBuffer(GL_UNIFORM_BUFFER, ShaderConfigUBO);
-    void* unibuf = glMapBuffer(GL_UNIFORM_BUFFER, GL_WRITE_ONLY);
+    void* unibuf = glMapBufferRange(GL_UNIFORM_BUFFER, 0, sizeof(ShaderConfig), GL_MAP_WRITE_BIT);
     if (unibuf) memcpy(unibuf, &ShaderConfig, sizeof(ShaderConfig));
     glUnmapBuffer(GL_UNIFORM_BUFFER);
 
@@ -1194,6 +1196,8 @@ void GLRenderer::RenderFrame(GPU& gpu)
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TexPalMemID);
+
+    u16* tempBuffer = (u16*) malloc(1024 * 8 * 2);
     for (int i = 0; i < 6; i++)
     {
         // 6 x 16K chunks
@@ -1204,8 +1208,22 @@ void GLRenderer::RenderFrame(GPU& gpu)
         else if (mask & (1<<5)) vram = gpu.VRAM_F;
         else if (mask & (1<<6)) vram = gpu.VRAM_G;
 
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, i*8, 1024, 8, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, vram);
+        memcpy(tempBuffer, vram, 1024 * 8 * 2);
+        for (int j = 0; j < 1024 * 8; j++)
+        {
+            u16 value = tempBuffer[j];
+
+            u8 a = (value >> 15) & 0x1;
+            u8 b = (value >> 10) & 0x1F;
+            u8 g = (value >> 5) & 0x1F;
+            u8 r = (value >> 0) & 0x1F;
+
+            tempBuffer[j] = (r << 11) | (g << 6) | (b << 1) | a;
+        }
+
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, i*8, 1024, 8, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, tempBuffer);
     }
+    free(tempBuffer);
 
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_DEPTH_TEST);
@@ -1296,17 +1314,23 @@ void GLRenderer::PrepareCaptureFrame()
     glBindFramebuffer(GL_READ_FRAMEBUFFER, MainFramebuffer);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, DownscaleFramebuffer);
-    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    GLenum bufferAttachment = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &bufferAttachment);
     glBlitFramebuffer(0, 0, ScreenW, ScreenH, 0, 0, 256, 192, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelbufferID);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, DownscaleFramebuffer);
-    glReadPixels(0, 0, 256, 192, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+    glReadPixels(0, 0, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 }
 
 void GLRenderer::Blit(const GPU& gpu)
 {
     CurGLCompositor.RenderFrame(gpu, *this);
+}
+
+void GLRenderer::SetOutputTexture(int buffer, u32 texture)
+{
+    CurGLCompositor.SetOutputTexture(buffer, (GLuint) texture);
 }
 
 void GLRenderer::BindOutputTexture(int buffer)
@@ -1321,7 +1345,7 @@ u32* GLRenderer::GetLine(int line)
     if (line == 0)
     {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelbufferID);
-        u8* data = (u8*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        u8* data = (u8*)glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4 * stride * 192, GL_MAP_READ_BIT);
         if (data) memcpy(&Framebuffer[stride*0], data, 4*stride*192);
         glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
     }
@@ -1329,7 +1353,11 @@ u32* GLRenderer::GetLine(int line)
     u64* ptr = (u64*)&Framebuffer[stride * line];
     for (int i = 0; i < stride; i+=2)
     {
-        u64 rgb = *ptr & 0x00FCFCFC00FCFCFC;
+        // Data is in BGRA format but we need to convert it to RGBA
+        u64 redBits = (*ptr & 0x000000FC000000FC) << 16;
+        u64 blueBits = (*ptr & 0x00FC000000FC0000) >> 16;
+
+        u64 rgb = (*ptr & 0x0000FC000000FC00) | redBits | blueBits;
         u64 a = *ptr & 0xF8000000F8000000;
 
         *ptr++ = (rgb >> 2) | (a >> 3);

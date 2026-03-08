@@ -54,6 +54,7 @@ public:
     void SetupAccelFrame() override;
     void PrepareCaptureFrame() override;
 
+    void SetOutputTexture(int buffer, u32 texture) override;
     void BindOutputTexture(int buffer) override;
 
     void Blit(const GPU& gpu) override;

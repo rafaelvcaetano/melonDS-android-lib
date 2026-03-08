@@ -341,10 +341,11 @@ bool CompileVertexFragmentProgram(GLuint& result,
     {
         glBindAttribLocation(result, target.Location, target.Name);
     }
-    for (const AttributeTarget& target : fragmentOutAttrs)
-    {
-        glBindFragDataLocation(result, target.Location, target.Name);
-    }
+    // ANDROID: Not supported by GLES. Shaders explicitly specify frag data location
+    // for (const AttributeTarget& target : fragmentOutAttrs)
+    // {
+    //     glBindFragDataLocation(result, target.Location, target.Name);
+    // }
 
     linkingSucess = LinkProgram(result, shaders, 2);
 

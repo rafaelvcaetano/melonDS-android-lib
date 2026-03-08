@@ -39,7 +39,7 @@ std::optional<GLCompositor> GLCompositor::New() noexcept
     GLuint CompShader {};
 
     if (!OpenGL::CompileVertexFragmentProgram(CompShader,
-            kCompositorVS, kCompositorFS_Nearest, 
+            kCompositorVS, kCompositorFS_Nearest,
             "CompositorShader",
             {{"vPosition", 0}, {"vTexcoord", 1}},
             {{"oColor", 0}}))
@@ -249,8 +249,6 @@ void GLCompositor::RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept
 
     glViewport(0, 0, ScreenW, ScreenH);
 
-    glClear(GL_COLOR_BUFFER_BIT);
-
     // TODO: select more shaders (filtering, etc)
     glUseProgram(CompShader);
     glUniform1ui(CompScaleLoc, Scale);
@@ -272,6 +270,14 @@ void GLCompositor::RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept
     glBindBuffer(GL_ARRAY_BUFFER, CompVertexBufferID);
     glBindVertexArray(CompVertexArrayID);
     glDrawArrays(GL_TRIANGLES, 0, 4*3);
+}
+
+void GLCompositor::SetOutputTexture(int buf, GLuint texture)
+{
+    GLenum fbassign[] = {GL_COLOR_ATTACHMENT0};
+    glBindFramebuffer(GL_FRAMEBUFFER, CompScreenOutputFB[buf]);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0);
+    glDrawBuffers(1, fbassign);
 }
 
 void GLCompositor::BindOutputTexture(int buf)

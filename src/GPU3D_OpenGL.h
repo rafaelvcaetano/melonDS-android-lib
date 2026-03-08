@@ -48,6 +48,7 @@ public:
     void PrepareCaptureFrame() override;
     void Blit(const GPU& gpu) override;
 
+    void SetOutputTexture(int buffer, u32 texture) override;
     void BindOutputTexture(int buffer) override;
 
     static std::unique_ptr<GLRenderer> New() noexcept;
@@ -128,7 +129,7 @@ private:
     // * XYZW: 4x16bit
     // * RGBA: 4x8bit
     // * ST: 2x16bit
-    // * polygon data: 3x32bit (polygon/texture attributes)
+    // * polygon data: 3x32bit (polygon attrib, texture VRAM offset, (texture attrib (low 16 bit), texture palette (high 16 bit))
     //
     // polygon attributes:
     // * bit4-7, 11, 14-15, 24-29: POLYGON_ATTR

@@ -44,6 +44,7 @@ public:
 
     void Stop(const GPU& gpu) noexcept;
     void RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept;
+    void SetOutputTexture(int buf, GLuint texture);
     void BindOutputTexture(int buf);
 private:
     GLCompositor(GLuint CompShader) noexcept;
