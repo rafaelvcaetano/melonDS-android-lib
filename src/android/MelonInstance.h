@@ -43,7 +43,7 @@ public:
     void pressKey(u32 key);
     void releaseKey(u32 key);
     int readAudioOutput(s16* buffer, int length);
-    void feedMicAudio(s16* buffer, int length);
+    void setAudioOutputSkew(double skew);
     void loadCheats(std::list<Cheat> cheats);
     int sendNetPacket(u8* data, int length);
     int receiveNetPacket(u8* data);

@@ -26,6 +26,7 @@
 #include "retroachievements/RetroAchievementsManager.h"
 #include "net/Net.h"
 #include "net/Net_Slirp.h"
+#include <fstream>
 
 #define MIC_BUFFER_SIZE 2048
 
@@ -39,6 +40,8 @@ namespace MelonDSAndroid
 {
     int actualMicSource = 0;
     bool isMicInputEnabled = true;
+    int micBufferReadPos = 0;
+    std::mutex micBufferMutex;
     OpenGLContext *openGlContext;
     AndroidFileHandler* fileHandler;
     AndroidCameraHandler* cameraHandler;
@@ -294,41 +297,66 @@ namespace MelonDSAndroid
         }
     }
 
-    void updateMic()
+    int readMic(s16* data, int maxlength)
     {
+        int micSource = actualMicSource;
         if (!isMicInputEnabled)
         {
-            instance->feedMicAudio(nullptr, 0);
-            return;
+            micSource = 0;
         }
 
-        switch (actualMicSource)
+        if (micSource == 0)
         {
-            case 0: // no mic
-                instance->feedMicAudio(nullptr, 0);
-                break;
-            case 1: // white noise
-            {
-                int sample_len = sizeof(mic_blow) / sizeof(u16);
-                static int sample_pos = 0;
-
-                s16 tmp[735];
-
-                for (int i = 0; i < 735; i++)
-                {
-                    tmp[i] = mic_blow[sample_pos] ^ 0x8000;
-                    sample_pos++;
-                    if (sample_pos >= sample_len)
-                        sample_pos = 0;
-                }
-
-                instance->feedMicAudio(tmp, 735);
-                break;
-            }
-            case 2: // host mic
-                instance->feedMicAudio(micInputCallback->buffer, 735);
-                break;
+            memset(data, 0, maxlength * sizeof(s16));
+            return maxlength;
         }
+
+        int micBufferLength;
+        s16* micBuffer;
+
+        if (micSource == 2)
+        {
+            micBufferLength = MIC_BUFFER_SIZE / sizeof(s16);
+            micBuffer = micInputCallback->buffer;
+            micBufferMutex.lock();
+        }
+        else
+        {
+            micBufferLength = sizeof(mic_blow) / sizeof(s16);
+            micBuffer = (s16*) &mic_blow[0];
+        }
+
+        int readlength = 0;
+        while (readlength < maxlength)
+        {
+            int thislen = maxlength - readlength;
+            if ((micBufferReadPos + thislen) > micBufferLength)
+                thislen = micBufferLength - micBufferReadPos;
+
+            if (micSource == 2)
+            {
+                if (thislen > micInputCallback->bufferCount)
+                    thislen = micInputCallback->bufferCount;
+
+                micInputCallback->bufferCount -= thislen;
+            }
+
+            if (!thislen)
+                break;
+
+            memcpy(data, &micBuffer[micBufferReadPos], thislen * sizeof(s16));
+            data += thislen;
+            micBufferReadPos += thislen;
+            if (micBufferReadPos >= micBufferLength)
+                micBufferReadPos -= micBufferLength;
+
+            readlength += thislen;
+        }
+
+        if (micSource == 2)
+            micBufferMutex.unlock();
+
+        return readlength;
     }
 
     bool saveState(const char* path)
@@ -488,18 +516,20 @@ namespace MelonDSAndroid
         audioStreamErrorCallback = new MelonAudioStreamErrorCallback(resetAudioOutputStream);
         oboe::AudioStreamBuilder streamBuilder;
         streamBuilder.setChannelCount(2);
-        streamBuilder.setFramesPerCallback(1024);
+        streamBuilder.setFramesPerCallback(512);
         streamBuilder.setSampleRate(48000);
         streamBuilder.setFormat(oboe::AudioFormat::I16);
+        streamBuilder.setFormatConversionAllowed(true);
         streamBuilder.setDirection(oboe::Direction::Output);
         streamBuilder.setPerformanceMode(performanceMode);
         streamBuilder.setSharingMode(oboe::SharingMode::Shared);
+        streamBuilder.setUsage(oboe::Usage::Game);
         streamBuilder.setCallback(outputCallback);
         streamBuilder.setErrorCallback(audioStreamErrorCallback);
 
         oboe::Result result = streamBuilder.openStream(audioStream);
         if (result != oboe::Result::OK) {
-            fprintf(stderr, "Failed to init audio stream");
+            Log(Error, "Failed to init audio stream");
             delete outputCallback;
             delete audioStreamErrorCallback;
             outputCallback = nullptr;
@@ -524,22 +554,24 @@ namespace MelonDSAndroid
 
     void setupMicInputStream()
     {
-        micInputCallback = new MicInputOboeCallback(MIC_BUFFER_SIZE);
+        micInputCallback = new MicInputOboeCallback(MIC_BUFFER_SIZE, micBufferMutex);
         oboe::AudioStreamBuilder micStreamBuilder;
         micStreamBuilder.setChannelCount(1);
         micStreamBuilder.setFramesPerCallback(1024);
-        micStreamBuilder.setSampleRate(44100);
+        micStreamBuilder.setSampleRate(48000);
         micStreamBuilder.setFormat(oboe::AudioFormat::I16);
+        micStreamBuilder.setFormatConversionAllowed(true);
         micStreamBuilder.setDirection(oboe::Direction::Input);
-        micStreamBuilder.setInputPreset(oboe::InputPreset::Generic);
-        micStreamBuilder.setPerformanceMode(oboe::PerformanceMode::PowerSaving);
+        micStreamBuilder.setInputPreset(oboe::InputPreset::VoiceRecognition);
+        micStreamBuilder.setPerformanceMode(oboe::PerformanceMode::None);
         micStreamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
+        micStreamBuilder.setUsage(oboe::Usage::Game);
         micStreamBuilder.setCallback(micInputCallback);
 
         oboe::Result micResult = micStreamBuilder.openStream(micInputStream);
         if (micResult != oboe::Result::OK) {
             actualMicSource = 1;
-            fprintf(stderr, "Failed to init mic audio stream");
+            Log(Error, "Failed to init mic audio stream");
             delete micInputCallback;
             micInputCallback = nullptr;
         }

@@ -231,6 +231,11 @@ namespace Platform
         else return false;
     }
 
+    u64 FilePosition(FileHandle* file)
+    {
+        return ftell(reinterpret_cast<FILE *>(file));
+    }
+
     bool FileSeek(FileHandle* file, s64 offset, FileSeekOrigin origin)
     {
         int stdorigin;
@@ -563,6 +568,21 @@ namespace Platform
     void Sleep(u64 usecs)
     {
         usleep(usecs);
+    }
+
+    void Mic_Start(void* userdata)
+    {
+        // TODO
+    }
+
+    void Mic_Stop(void* userdata)
+    {
+        // TODO
+    }
+
+    int Mic_ReadInput(s16* data, int maxlength, void* userdata)
+    {
+        return MelonDSAndroid::readMic(data, maxlength);
     }
 
     void Camera_Start(int num, void* userdata)

@@ -7,16 +7,22 @@
 using namespace melonDS;
 
 class MicInputOboeCallback : public oboe::AudioStreamCallback {
-private:
-    int bufferSize;
-    int bufferOffset = 0;
 
 public:
     s16* buffer;
+    int bufferSize;
+    int bufferOffset = 0;
+    int bufferCount = 0;
+    float micSampleFrac = 0;
 
-    MicInputOboeCallback(int bufferSize);
+    MicInputOboeCallback(int bufferSize, std::mutex& micBufferMutex) : MicInputOboeCallback(bufferSize, micBufferMutex, nullptr) { };
+    MicInputOboeCallback(int bufferSize, std::mutex& micBufferMutex, std::ostream* recordingStream);
     ~MicInputOboeCallback();
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t numFrames) override;
+
+private:
+    std::mutex& micBufferMutex;
+    std::ostream* _recordingStream;
 };
 
 #endif //MELONDS_ANDROID_MICINPUTOBOECALLBACK_H

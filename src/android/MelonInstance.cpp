@@ -445,9 +445,9 @@ int MelonInstance::readAudioOutput(s16* buffer, int length)
     return nds->SPU.ReadOutput(buffer, length);
 }
 
-void MelonInstance::feedMicAudio(s16* buffer, int length)
+void MelonInstance::setAudioOutputSkew(double skew)
 {
-    nds->MicInputFrame(buffer, length);
+    nds->SPU.SetOutputSkew(skew);
 }
 
 void MelonInstance::loadCheats(std::list<Cheat> cheats)

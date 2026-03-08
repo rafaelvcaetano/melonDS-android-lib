@@ -1,10 +1,13 @@
 #include "OboeCallback.h"
 #include "types.h"
-#include "../SPU.h"
+#include "Platform.h"
+#include "SPU.h"
 
 using namespace melonDS;
 
-OboeCallback::OboeCallback(int volume) : _volume(volume) {
+#define INTERNAL_FRAME_RATE 59.8260982880808f
+
+OboeCallback::OboeCallback(int volume, std::ostream* recordingStream) : _volume(volume), _recordingStream(recordingStream) {
     audioSampleFrac = 0;
 }
 
@@ -18,14 +21,16 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
 
     int len = numFrames;
 
-    // resample incoming audio to match the output sample rate
+    double skew = std::clamp(60.0 / INTERNAL_FRAME_RATE, 0.995, 1.005);
+    activeInstance->setAudioOutputSkew(skew);
 
-    int len_in = getNumSamplesOut(len, (int) stream->getSampleRate());
-    s16 buf_in[1024 * 2];
-    int num_in;
+    int len_in = getNumSamplesOut(len);
+    if (len_in > numFrames) len_in = numFrames;
 
-    // TODO: audio sync
-    num_in = activeInstance->readAudioOutput(buf_in, len_in);
+    int num_in = activeInstance->readAudioOutput((s16*) audioData, len_in);
+
+    //s16 bufferIn[512 * 2];
+    //audioResample(bufferIn, num_in, (s16*) audioData, len_in, _volume);
 
     if (num_in < 1)
     {
@@ -33,25 +38,32 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
         return oboe::DataCallbackResult::Continue;
     }
 
+    if (_volume < 256)
+    {
+        s16* samples = (s16*) audioData;
+        for (int i = 0; i < num_in * 2; i++)
+            samples[i] = ((s32) samples[i] * _volume) >> 8;
+    }
+
     int margin = 6;
     if (num_in < len_in - margin)
     {
-        int last = num_in-1;
+        int last = num_in - 1;
 
         for (int i = num_in; i < len_in - margin; i++)
-            ((u32*) buf_in)[i] = ((u32*) buf_in)[last];
-
-        num_in = len_in - margin;
+            ((u32*)audioData)[i] = ((u32*)audioData)[last];
     }
 
-    audioResample(buf_in, num_in, (s16*) audioData, len, _volume);
+    if (_recordingStream)
+        _recordingStream->write((char*) audioData, numFrames * sizeof(s16) * 2);
+
     return oboe::DataCallbackResult::Continue;
 }
 
-int OboeCallback::getNumSamplesOut(int len, int audioFreq)
+int OboeCallback::getNumSamplesOut(int len)
 {
     // TODO: adjust to game speed
-    float f_len_in = (len * 32823.6328125 /* * (curFPS/60.0)*/) / (float)audioFreq;
+    float f_len_in = len /* * (curFPS/60.0)*/;
     f_len_in += audioSampleFrac;
     int len_in = (int) floor(f_len_in);
     audioSampleFrac = f_len_in - len_in;

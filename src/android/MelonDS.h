@@ -66,7 +66,7 @@ namespace MelonDSAndroid {
     extern void reset();
     extern void enableMic();
     extern void disableMic();
-    extern void updateMic();
+    extern int readMic(s16* data, int maxlength);
     extern bool saveState(const char* path);
     extern bool loadState(const char* path);
     extern bool loadRewindState(melonDS::RewindSaveState rewindSaveState);

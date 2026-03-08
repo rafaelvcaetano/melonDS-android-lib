@@ -1,3 +1,7 @@
 [submodule "oboe"]
 	path = src/android/oboe
 	url = https://github.com/google/oboe.git
+
+[submodule "faad2"]
+	path = src/android/faad2
+	url = https://github.com/knik0/faad2.git

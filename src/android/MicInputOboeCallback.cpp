@@ -1,7 +1,9 @@
 #include "MicInputOboeCallback.h"
 #include "types.h"
 
-MicInputOboeCallback::MicInputOboeCallback(int bufferSize) : bufferSize(bufferSize) {
+#define MIC_GAIN 10
+
+MicInputOboeCallback::MicInputOboeCallback(int bufferSize, std::mutex& micBufferMutex, std::ostream* recordingStream) : bufferSize(bufferSize), micBufferMutex(micBufferMutex), _recordingStream(recordingStream) {
     this->buffer = new s16[bufferSize];
 }
 
@@ -9,37 +11,63 @@ oboe::DataCallbackResult
 MicInputOboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t numFrames) {
     s16* input = (s16*) audioData;
 
-    for (int i = 0; i < numFrames; ++i) {
-        int intVal = (int) input[i];
-        int newVal = intVal * 2;
-        if (newVal >= 32768)
-            newVal = 32767;
-        else if (newVal <= -32767)
-            newVal = -32766;
+    float f_len_out = (numFrames * 47743.4659091 * (60.0/60.0)) / (float)stream->getSampleRate();
+    f_len_out += micSampleFrac;
+    int len_out = (int)floor(f_len_out);
+    micSampleFrac = f_len_out - len_out;
 
-        input[i] = (s16) newVal;
-    }
+    std::unique_lock bufferLock(micBufferMutex);
+    int maxlen = bufferSize / sizeof(s16);
+    int outlen = len_out;
 
-    if (this->bufferOffset + numFrames > this->bufferSize) {
-        int firstCopyAmount = this->bufferSize - this->bufferOffset;
-        int secondCopyAmount = numFrames - firstCopyAmount;
+    // alter output length slightly to keep the buffer happy
+    if (bufferCount < (maxlen >> 2))
+        outlen += 6;
+    else if (bufferCount > (3 * (maxlen >> 2)))
+        outlen -= 6;
 
-        memcpy(&this->buffer[this->bufferOffset], input, firstCopyAmount * sizeof(s16));
-        memcpy(this->buffer, &input[firstCopyAmount], secondCopyAmount * sizeof(s16));
-        this->bufferOffset = secondCopyAmount;
-    } else {
-        memcpy(&this->buffer[this->bufferOffset], input, numFrames * sizeof(s16));
-        this->bufferOffset += numFrames;
-    }
+    float res_incr = numFrames / (float)outlen;
+    float res_timer = -0.5;
+    int res_pos = 0;
 
-    if (numFrames == 0)
+    int startBufferOffset = bufferOffset;
+    for (int i = 0; i < outlen; i++)
     {
-        memset(this->buffer, 0, sizeof(s16) * bufferSize);
+        if (bufferCount >= maxlen)
+            break;
+
+        s16 s1 = input[res_pos];
+        s16 s2 = input[res_pos + 1];
+
+        float s = (float)s1 + ((s2 - s1) * res_timer);
+
+        buffer[bufferOffset] = (s16)(round(s) * MIC_GAIN);
+        bufferOffset++;
+        if (bufferOffset >= maxlen)
+            bufferOffset = 0;
+
+        bufferCount++;
+
+        res_timer += res_incr;
+        while (res_timer >= 1.0)
+        {
+            res_timer -= 1.0;
+            res_pos++;
+        }
     }
-    else if (numFrames < 735)
+
+    if (_recordingStream)
     {
-        for (int i = numFrames; i < 735; i++)
-            this->buffer[i] = this->buffer[numFrames - 1];
+        if (bufferOffset > startBufferOffset)
+        {
+            int writeLen = outlen > maxlen ? maxlen : outlen;
+            _recordingStream->write((char*)&buffer[startBufferOffset], writeLen * sizeof(s16));
+        }
+        else
+        {
+            _recordingStream->write((char*)&buffer[startBufferOffset], (maxlen - startBufferOffset) * sizeof(s16));
+            _recordingStream->write((char*)buffer, bufferOffset * sizeof(s16));
+        }
     }
 
     return oboe::DataCallbackResult::Continue;

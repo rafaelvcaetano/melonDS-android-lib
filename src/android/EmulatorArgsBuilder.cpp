@@ -488,6 +488,7 @@ std::optional<std::unique_ptr<NDSArgs>> BuildArgsFromConfiguration(const Emulato
             std::move(*nand),
             std::move(sdcard),
             false,
+            true,
         };
 
         std::unique_ptr<DSiArgs> uniqueArgs = std::make_unique<DSiArgs>(std::move(_dsiArgs));
