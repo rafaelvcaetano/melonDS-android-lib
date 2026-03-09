@@ -1,5 +1,4 @@
 #include "MelonDSAudio.h"
-#include "MelonAudioStreamErrorCallback.h"
 #include "MicInputOboeCallback.h"
 #include "mic_blow.h"
 #include "OboeCallback.h"
@@ -10,11 +9,11 @@
 std::weak_ptr<MelonDSAndroid::MelonInstance> activeInstance;
 
 std::shared_ptr<oboe::AudioStream> audioStream;
-OboeCallback *outputCallback;
-oboe::AudioStreamErrorCallback *audioStreamErrorCallback;
+std::shared_ptr<OboeCallback> outputCallback;
+std::shared_ptr<oboe::StabilizedCallback> stabilizedOutputCallback;
 
 std::shared_ptr<oboe::AudioStream> micInputStream;
-MicInputOboeCallback *micInputCallback;
+std::shared_ptr<MicInputOboeCallback> micInputCallback;
 
 MelonDSAndroid::AudioSettings currentAudioSettings;
 std::mutex micBufferMutex;
@@ -46,30 +45,27 @@ namespace MelonDSAndroid
                 performanceMode = oboe::PerformanceMode::None;
         }
 
-        outputCallback = new OboeCallback(volume);
+        outputCallback = std::make_shared<OboeCallback>(volume, resetAudioOutputStream);
+        stabilizedOutputCallback = std::make_shared<oboe::StabilizedCallback>(outputCallback.get());
+
         outputCallback->activeInstance = activeInstance;
 
-        audioStreamErrorCallback = new MelonAudioStreamErrorCallback(resetAudioOutputStream);
         oboe::AudioStreamBuilder streamBuilder;
         streamBuilder.setChannelCount(2);
-        streamBuilder.setFramesPerCallback(512);
         streamBuilder.setSampleRate(48000);
         streamBuilder.setFormat(oboe::AudioFormat::I16);
         streamBuilder.setFormatConversionAllowed(true);
         streamBuilder.setDirection(oboe::Direction::Output);
         streamBuilder.setPerformanceMode(performanceMode);
-        streamBuilder.setSharingMode(oboe::SharingMode::Shared);
+        streamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
         streamBuilder.setUsage(oboe::Usage::Game);
-        streamBuilder.setCallback(outputCallback);
-        streamBuilder.setErrorCallback(audioStreamErrorCallback);
+        streamBuilder.setDataCallback(stabilizedOutputCallback);
 
         oboe::Result result = streamBuilder.openStream(audioStream);
         if (result != oboe::Result::OK) {
             Log(Error, "Failed to init audio stream");
-            delete outputCallback;
-            delete audioStreamErrorCallback;
             outputCallback = nullptr;
-            audioStreamErrorCallback = nullptr;
+            stabilizedOutputCallback = nullptr;
         }
     }
 
@@ -80,11 +76,10 @@ namespace MelonDSAndroid
                 audioStream->requestStop();
                 audioStream->close();
             }
-            delete outputCallback;
-            delete audioStreamErrorCallback;
+
             audioStream = nullptr;
             outputCallback = nullptr;
-            audioStreamErrorCallback = nullptr;
+            stabilizedOutputCallback = nullptr;
         }
     }
 
@@ -101,7 +96,7 @@ namespace MelonDSAndroid
 
     void setupMicInputStream()
     {
-        micInputCallback = new MicInputOboeCallback(MIC_BUFFER_SIZE, micBufferMutex);
+        micInputCallback = std::make_shared<MicInputOboeCallback>(MIC_BUFFER_SIZE, micBufferMutex);
         oboe::AudioStreamBuilder micStreamBuilder;
         micStreamBuilder.setChannelCount(1);
         micStreamBuilder.setFramesPerCallback(1024);
@@ -113,14 +108,13 @@ namespace MelonDSAndroid
         micStreamBuilder.setPerformanceMode(oboe::PerformanceMode::None);
         micStreamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
         micStreamBuilder.setUsage(oboe::Usage::Game);
-        micStreamBuilder.setCallback(micInputCallback);
+        micStreamBuilder.setDataCallback(micInputCallback);
 
         oboe::Result micResult = micStreamBuilder.openStream(micInputStream);
         if (micResult != oboe::Result::OK)
         {
             actualMicSource = 1;
             Log(Error, "Failed to init mic audio stream");
-            delete micInputCallback;
             micInputCallback = nullptr;
         }
     }
@@ -131,7 +125,7 @@ namespace MelonDSAndroid
         {
             micInputStream->requestStop();
             micInputStream->close();
-            delete micInputCallback;
+
             micInputStream = nullptr;
             micInputCallback = nullptr;
         }

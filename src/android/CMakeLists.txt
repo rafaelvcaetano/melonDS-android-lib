@@ -1,7 +1,6 @@
 project(melonDS-lib)
 
 set(ANDROID_SOURCES
-        MelonAudioStreamErrorCallback.cpp
         MelonDS.cpp
         MelonDSAudio.cpp
         MelonEventMessenger.h

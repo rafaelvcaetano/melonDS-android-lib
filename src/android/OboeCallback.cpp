@@ -7,7 +7,7 @@ using namespace melonDS;
 
 #define INTERNAL_FRAME_RATE 59.8260982880808f
 
-OboeCallback::OboeCallback(int volume, std::ostream* recordingStream) : _volume(volume), _recordingStream(recordingStream) {
+OboeCallback::OboeCallback(int volume, void (*onErrorCallback)(void), std::ostream* recordingStream) : _volume(volume), onErrorCallback(onErrorCallback), _recordingStream(recordingStream) {
     audioSampleFrac = 0;
 }
 
@@ -31,9 +31,6 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
 
     int num_in = currentInstance->readAudioOutput((s16*) audioData, len_in);
 
-    //s16 bufferIn[512 * 2];
-    //audioResample(bufferIn, num_in, (s16*) audioData, len_in, _volume);
-
     if (num_in < 1)
     {
         memset(audioData, 0, len * sizeof(s16) * 2);
@@ -56,10 +53,17 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
             ((u32*)audioData)[i] = ((u32*)audioData)[last];
     }
 
-    if (_recordingStream)
+    if (_recordingStream) [[unlikely]]
         _recordingStream->write((char*) audioData, numFrames * sizeof(s16) * 2);
 
     return oboe::DataCallbackResult::Continue;
+}
+
+void OboeCallback::onErrorAfterClose(oboe::AudioStream* stream, oboe::Result result)
+{
+    if (result == oboe::Result::ErrorDisconnected && onErrorCallback != nullptr) {
+        onErrorCallback();
+    }
 }
 
 int OboeCallback::getNumSamplesOut(int len)
@@ -71,32 +75,4 @@ int OboeCallback::getNumSamplesOut(int len)
     audioSampleFrac = f_len_in - len_in;
 
     return len_in;
-}
-
-void OboeCallback::audioResample(s16* inbuf, int inlen, s16* outbuf, int outlen, int volume)
-{
-    float res_incr = inlen / (float)outlen;
-    float res_timer = -0.5;
-    int res_pos = 0;
-
-    for (int i = 0; i < outlen; i++)
-    {
-        s16 l1 = inbuf[res_pos * 2];
-        s16 l2 = inbuf[res_pos * 2 + 2];
-        s16 r1 = inbuf[res_pos * 2 + 1];
-        s16 r2 = inbuf[res_pos * 2 + 3];
-
-        float l = (float) l1 + ((l2 - l1) * res_timer);
-        float r = (float) r1 + ((r2 - r1) * res_timer);
-
-        outbuf[i*2  ] = (s16) (((s32) round(l) * volume) >> 8);
-        outbuf[i*2+1] = (s16) (((s32) round(r) * volume) >> 8);
-
-        res_timer += res_incr;
-        while (res_timer >= 1.0)
-        {
-            res_timer -= 1.0;
-            res_pos++;
-        }
-    }
 }

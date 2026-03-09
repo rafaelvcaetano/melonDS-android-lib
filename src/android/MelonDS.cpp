@@ -6,7 +6,6 @@
 #include "MelonDS.h"
 #include "MelonDSAudio.h"
 #include "OboeCallback.h"
-#include "MelonAudioStreamErrorCallback.h"
 #include "MicInputOboeCallback.h"
 #include "OpenGLContext.h"
 #include "mic_blow.h"

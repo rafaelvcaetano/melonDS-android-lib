@@ -461,6 +461,7 @@ std::optional<std::unique_ptr<NDSArgs>> BuildArgsFromConfiguration(const Emulato
         .JIT = jitArgs,
         .BitDepth = static_cast<AudioBitDepth>(configuration.audioSettings.audioBitrate),
         .Interpolation = static_cast<AudioInterpolation>(configuration.audioSettings.audioInterpolation),
+        .OutputSampleRate = 48000.0,
         .GDB = std::nullopt,
     };
     std::unique_ptr<NDSArgs> ndsArgs = std::unique_ptr<NDSArgs>(_ndsArgs);
@@ -492,11 +493,11 @@ std::optional<std::unique_ptr<NDSArgs>> BuildArgsFromConfiguration(const Emulato
         };
 
         std::unique_ptr<DSiArgs> uniqueArgs = std::make_unique<DSiArgs>(std::move(_dsiArgs));
-        return std::move(uniqueArgs);
+        return uniqueArgs;
     }
     else
     {
-        return std::move(ndsArgs);
+        return ndsArgs;
     }
 }
 
