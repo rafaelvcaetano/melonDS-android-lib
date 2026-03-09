@@ -13,7 +13,9 @@ OboeCallback::OboeCallback(int volume, std::ostream* recordingStream) : _volume(
 
 oboe::DataCallbackResult
 OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t numFrames) {
-    if (!activeInstance)
+    auto currentInstance = activeInstance.lock();
+
+    if (!currentInstance)
     {
         memset(audioData, 0, numFrames * sizeof(u16) * 2);
         return oboe::DataCallbackResult::Continue;
@@ -22,12 +24,12 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
     int len = numFrames;
 
     double skew = std::clamp(60.0 / INTERNAL_FRAME_RATE, 0.995, 1.005);
-    activeInstance->setAudioOutputSkew(skew);
+    currentInstance->setAudioOutputSkew(skew);
 
     int len_in = getNumSamplesOut(len);
     if (len_in > numFrames) len_in = numFrames;
 
-    int num_in = activeInstance->readAudioOutput((s16*) audioData, len_in);
+    int num_in = currentInstance->readAudioOutput((s16*) audioData, len_in);
 
     //s16 bufferIn[512 * 2];
     //audioResample(bufferIn, num_in, (s16*) audioData, len_in, _volume);

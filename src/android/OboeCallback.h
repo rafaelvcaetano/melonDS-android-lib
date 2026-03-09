@@ -11,7 +11,7 @@ private:
     float audioSampleFrac;
 
 public:
-    std::shared_ptr<MelonDSAndroid::MelonInstance> activeInstance;
+    std::weak_ptr<MelonDSAndroid::MelonInstance> activeInstance;
 
     OboeCallback(int volume) : OboeCallback(volume, nullptr) { };
     OboeCallback(int volume, std::ostream* recordingStream);

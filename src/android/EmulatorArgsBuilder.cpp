@@ -459,8 +459,8 @@ std::optional<std::unique_ptr<NDSArgs>> BuildArgsFromConfiguration(const Emulato
         .ARM7BIOS = std::move(arm7bios),
         .Firmware = std::move(*firmware),
         .JIT = jitArgs,
-        .BitDepth = static_cast<AudioBitDepth>(configuration.audioBitrate),
-        .Interpolation = static_cast<AudioInterpolation>(configuration.audioInterpolation),
+        .BitDepth = static_cast<AudioBitDepth>(configuration.audioSettings.audioBitrate),
+        .Interpolation = static_cast<AudioInterpolation>(configuration.audioSettings.audioInterpolation),
         .GDB = std::nullopt,
     };
     std::unique_ptr<NDSArgs> ndsArgs = std::unique_ptr<NDSArgs>(_ndsArgs);

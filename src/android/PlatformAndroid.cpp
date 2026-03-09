@@ -28,6 +28,7 @@
 #include "pcap/pcap.h"
 #include "Platform.h"
 #include "MelonDS.h"
+#include "MelonDSAudio.h"
 #include "ROMManager.h"
 #include "PlatformAndroid.h"
 #include "MelonInstance.h"
@@ -572,12 +573,12 @@ namespace Platform
 
     void Mic_Start(void* userdata)
     {
-        // TODO
+        MelonDSAndroid::enableMic();
     }
 
     void Mic_Stop(void* userdata)
     {
-        // TODO
+        MelonDSAndroid::disableMic();
     }
 
     int Mic_ReadInput(s16* data, int maxlength, void* userdata)

@@ -485,8 +485,8 @@ void MelonInstance::updateConfiguration(std::shared_ptr<EmulatorConfiguration> n
 {
     if (nds)
     {
-        nds->SPU.SetInterpolation(static_cast<AudioInterpolation>(newConfiguration->audioInterpolation));
-        nds->SPU.SetDegrade10Bit(static_cast<AudioBitDepth>(newConfiguration->audioBitrate));
+        nds->SPU.SetInterpolation(static_cast<AudioInterpolation>(newConfiguration->audioSettings.audioInterpolation));
+        nds->SPU.SetDegrade10Bit(static_cast<AudioBitDepth>(newConfiguration->audioSettings.audioBitrate));
     }
 
     rewindManager.UpdateRewindSettings(newConfiguration->rewindEnabled, newConfiguration->rewindLengthSeconds, newConfiguration->rewindCaptureSpacingSeconds);

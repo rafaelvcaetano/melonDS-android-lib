@@ -28,6 +28,16 @@ struct ComputeRenderSettings : public RenderSettings
     bool highResCoordinates;
 };
 
+struct AudioSettings
+{
+    bool soundEnabled;
+    int volume;
+    int audioInterpolation;
+    int audioBitrate;
+    int audioLatency;
+    int micSource;
+};
+
 struct SdCardSettings
 {
     bool enabled;
@@ -65,12 +75,7 @@ typedef struct
     bool showBootScreen;
     bool useJit;
     int consoleType;
-    bool soundEnabled;
-    int volume;
-    int audioInterpolation;
-    int audioBitrate;
-    int audioLatency;
-    int micSource;
+    AudioSettings audioSettings;
     int rewindEnabled;
     int rewindCaptureSpacingSeconds;
     int rewindLengthSeconds;
