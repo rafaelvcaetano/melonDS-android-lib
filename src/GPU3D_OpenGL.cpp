@@ -1067,6 +1067,9 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
         glStencilFunc(GL_ALWAYS, 0, 0);
         glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
         glStencilMask(0);
+        // While depth and stencil writing operations are disabled by the commands above, the fact that the same texture is used as both input and output results in undefined
+        // behaviour, which manifests as visual artifacts on some devices. Depth/stencil texture is attached again after fog/edge rendering
+        glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, 0, 0);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, DepthBufferTex);
@@ -1111,6 +1114,8 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 
             glDrawArrays(GL_TRIANGLES, 0, 2*3);
         }
+
+        glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, DepthBufferTex, 0);
     }
 }
 
