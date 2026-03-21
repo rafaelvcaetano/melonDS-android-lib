@@ -57,7 +57,7 @@ namespace MelonDSAndroid
         streamBuilder.setFormatConversionAllowed(true);
         streamBuilder.setDirection(oboe::Direction::Output);
         streamBuilder.setPerformanceMode(performanceMode);
-        streamBuilder.setSharingMode(oboe::SharingMode::Exclusive);
+        streamBuilder.setSharingMode(oboe::SharingMode::Shared);
         streamBuilder.setUsage(oboe::Usage::Game);
         streamBuilder.setDataCallback(stabilizedOutputCallback);
 
