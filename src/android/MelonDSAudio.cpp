@@ -60,8 +60,11 @@ namespace MelonDSAndroid
         streamBuilder.setSharingMode(oboe::SharingMode::Shared);
         streamBuilder.setUsage(oboe::Usage::Game);
         streamBuilder.setDataCallback(stabilizedOutputCallback);
+        streamBuilder.setErrorCallback(stabilizedOutputCallback);
 
         oboe::Result result = streamBuilder.openStream(audioStream);
+        audioStream->setPerformanceHintEnabled(true);
+        audioStream->setBufferSizeInFrames(std::min(audioStream->getBufferCapacityInFrames(), 2048));
         if (result != oboe::Result::OK) {
             Log(Error, "Failed to init audio stream");
             outputCallback = nullptr;
