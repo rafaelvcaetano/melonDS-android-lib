@@ -223,24 +223,40 @@ void RetroAchievementsManager::CheevosEventHandler(const rc_runtime_event_t* run
 unsigned PeekMemory(unsigned address, unsigned numBytes, void* ud)
 {
     NDS* nds = (NDS*) ud;
-    u8* mainRam = nds->MainRAM;
-    u32 mainRamMask = nds->MainRAMMask;
+    u8* memoryRegion;
+    u32 memoryMask;
+
+    // Obtain target region as defined in consoleinfo.c
+    unsigned region = address & 0xFF000000;
+    switch (region)
+    {
+        case 0x00000000U: // Main RAM
+            memoryRegion = nds->MainRAM;
+            memoryMask = nds->MainRAMMask;
+            break;
+        case 0x01000000U: // Data TCM
+            memoryRegion = nds->ARM9.DTCM;
+            memoryMask = DTCMPhysicalSize - 1;
+            break;
+        default:
+            return 0;
+    }
 
     switch (numBytes)
     {
         case 1:
         {
-            u8 value = *(u8*) &mainRam[address & mainRamMask];
+            u8 value = *(u8*) &memoryRegion[address & memoryMask];
             return value;
         }
         case 2:
         {
-            u16 value  = *(u16*) &mainRam[address & mainRamMask];
+            u16 value  = *(u16*) &memoryRegion[address & memoryMask];
             return value;
         }
         case 4:
         {
-            u32 value = *(u32*) &mainRam[address & mainRamMask];
+            u32 value = *(u32*) &memoryRegion[address & memoryMask];
             return value;
         }
         default:
