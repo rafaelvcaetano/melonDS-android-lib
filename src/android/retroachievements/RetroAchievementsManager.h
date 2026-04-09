@@ -35,6 +35,8 @@ public:
 
 private:
 
+    static std::string GetLeaderboardFormattedValue(int leaderboardId, int value);
+
     melonDS::NDS* nds;
     rc_runtime_t rcheevosRuntime;
     std::mutex runtimeLock;

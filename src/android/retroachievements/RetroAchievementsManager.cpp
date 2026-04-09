@@ -206,18 +206,30 @@ void RetroAchievementsManager::CheevosEventHandler(const rc_runtime_event_t* run
             eventMessenger->onLeaderboardAttemptCanceled(runtime_event->id);
             break;
         case RC_RUNTIME_EVENT_LBOARD_TRIGGERED:
-            eventMessenger->onLeaderboardAttemptCompleted(runtime_event->id, runtime_event->value);
+        {
+            std::string formattedValue = GetLeaderboardFormattedValue(runtime_event->id, runtime_event->value);
+            eventMessenger->onLeaderboardAttemptCompleted(runtime_event->id, runtime_event->value, formattedValue);
             break;
+        }
         case RC_RUNTIME_EVENT_LBOARD_UPDATED:
-            auto leaderboard = std::find_if(activeInstance->loadedLeaderboards.begin(), activeInstance->loadedLeaderboards.end(), [=](RALeaderboard l){ return l.id == runtime_event->id; });
-            if (leaderboard != activeInstance->loadedLeaderboards.end())
-            {
-                char buffer[32];
-                rc_runtime_format_lboard_value(buffer, sizeof(buffer), runtime_event->value, leaderboard->rcheevosFormat);
-                eventMessenger->onLeaderboardAttemptUpdated(runtime_event->id, buffer);
-            }
+        {
+            std::string formattedValue = GetLeaderboardFormattedValue(runtime_event->id, runtime_event->value);
+            eventMessenger->onLeaderboardAttemptUpdated(runtime_event->id, formattedValue);
             break;
+        }
     }
+}
+
+std::string RetroAchievementsManager::GetLeaderboardFormattedValue(int leaderboardId, int value)
+{
+    auto leaderboard = std::find_if(activeInstance->loadedLeaderboards.begin(), activeInstance->loadedLeaderboards.end(), [=](RALeaderboard l){ return l.id == leaderboardId; });
+    char buffer[32];
+    if (leaderboard != activeInstance->loadedLeaderboards.end())
+        rc_runtime_format_lboard_value(buffer, sizeof(buffer), value, leaderboard->rcheevosFormat);
+    else
+        buffer[0] = '\0';
+
+    return buffer;
 }
 
 unsigned PeekMemory(unsigned address, unsigned numBytes, void* ud)
