@@ -8,12 +8,14 @@ namespace MelonDSAndroid
 ScreenshotRenderer::ScreenshotRenderer(u32* screenshotBuffer)
 {
     this->screenshotBuffer = screenshotBuffer;
-    this->currentBuffer = 0;
+    this->currentReadPbo = 0;
+    this->firstFrameRendered = false;
 }
 
 void ScreenshotRenderer::init()
 {
-    setupFrameBuffers();
+    setupFrameBuffer();
+    setupPbos();
     setupShaders();
     setupVertexBuffers();
 }
@@ -32,11 +34,11 @@ void ScreenshotRenderer::renderScreenshot(GPU* gpu, Renderer renderer, Frame* re
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_STENCIL_TEST);
         glDisable(GL_BLEND);
-        glViewport(0, 0, 256, 192 * 2);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, frameBuffers[currentBuffer]);
+        glViewport(0, 0, SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, frameBuffer);
         glUseProgram(screenshotRenderShader);
 
-        // Render to screenshot front buffer
+        // Render the frame texture into the FBO
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, renderFrame->frameTexture);
 
@@ -50,20 +52,35 @@ void ScreenshotRenderer::renderScreenshot(GPU* gpu, Renderer renderer, Frame* re
 
         glDrawArrays(GL_TRIANGLES, 0, 12);
 
-        // Update screenshotBuffer using back buffer. This is so that we don't have to wait for the GPU to finish rendering the current frame. This means that screenshots in
-        // OpenGL have a 1 frame delay, but at least we avoid slowdowns
-        int screenshotBackBuffer = currentBuffer ? 0 : 1;
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, frameBuffers[screenshotBackBuffer]);
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-        glReadPixels(0, 0, 256, 192 * 2, GL_RGBA, GL_UNSIGNED_BYTE, screenshotBuffer);
+        // Read the previously rendered PBO into the screenshot buffer (async readback from the last frame). Skip on first frame since there's no data
+        int readPbo = currentReadPbo;
+        int writePbo = (currentReadPbo + 1) % 2;
 
+        if (firstFrameRendered)
+        {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[readPbo]);
+            void* mappedBuffer = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, SCREENSHOT_BUFFER_SIZE, GL_MAP_READ_BIT);
+            if (mappedBuffer)
+            {
+                memcpy(screenshotBuffer, mappedBuffer, SCREENSHOT_BUFFER_SIZE);
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+        }
+
+        // Initiate async readback of the current frame into the write PBO
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[writePbo]);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, frameBuffer);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glReadPixels(0, 0, SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         glBindVertexArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-        currentBuffer = (currentBuffer + 1) % 2;
+        currentReadPbo = writePbo;
+        firstFrameRendered = true;
     }
 }
 
@@ -72,26 +89,34 @@ u32* ScreenshotRenderer::getScreenshot()
     return screenshotBuffer;
 }
 
-void ScreenshotRenderer::setupFrameBuffers()
+void ScreenshotRenderer::setupFrameBuffer()
 {
-    glGenFramebuffers(2, frameBuffers);
-    glGenTextures(2, bufferTextures);
+    glGenFramebuffers(1, &frameBuffer);
+    glGenTextures(1, &bufferTexture);
 
-    for (int i = 0; i < 2; i++)
-    {
-        glBindTexture(GL_TEXTURE_2D, bufferTextures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 192 * 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glBindTexture(GL_TEXTURE_2D, bufferTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, frameBuffers[i]);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bufferTextures[i], 0);
-    }
+    glBindFramebuffer(GL_FRAMEBUFFER, frameBuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bufferTexture, 0);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void ScreenshotRenderer::setupPbos()
+{
+    glGenBuffers(2, pbos);
+    for (int i = 0; i < 2; i++)
+    {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER, SCREENSHOT_BUFFER_SIZE, NULL, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 }
 
 void ScreenshotRenderer::setupShaders()
@@ -217,8 +242,9 @@ void ScreenshotRenderer::cleanup()
     glDeleteShader(screenshotRenderVertexShader);
     glDeleteShader(screenshotRenderFragmentShader);
     glDeleteProgram(screenshotRenderShader);
-    glDeleteTextures(2, bufferTextures);
-    glDeleteFramebuffers(2, frameBuffers);
+    glDeleteTextures(1, &bufferTexture);
+    glDeleteFramebuffers(1, &frameBuffer);
+    glDeleteBuffers(2, pbos);
     glDeleteBuffers(1, &vbo);
     glDeleteVertexArrays(1, &vao);
 }

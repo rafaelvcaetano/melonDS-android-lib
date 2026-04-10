@@ -12,9 +12,14 @@ namespace MelonDSAndroid
 
 class ScreenshotRenderer {
 private:
+    static const int SCREENSHOT_WIDTH = 256;
+    static const int SCREENSHOT_HEIGHT = 192 * 2;
+    static const int SCREENSHOT_BUFFER_SIZE = SCREENSHOT_WIDTH * SCREENSHOT_HEIGHT * 4;
+
     u32* screenshotBuffer;
-    GLuint frameBuffers[2];
-    GLuint bufferTextures[2];
+    GLuint frameBuffer;
+    GLuint bufferTexture;
+    GLuint pbos[2];
     GLuint vao;
     GLuint vbo;
     GLuint screenshotRenderVertexShader;
@@ -23,9 +28,11 @@ private:
     GLuint textureUniformLocation;
     GLuint posAttribLocation;
     GLuint texCoordAttribLocation;
-    int currentBuffer;
+    int currentReadPbo;
+    bool firstFrameRendered;
 
-    void setupFrameBuffers();
+    void setupFrameBuffer();
+    void setupPbos();
     void setupShaders();
     void setupVertexBuffers();
 
