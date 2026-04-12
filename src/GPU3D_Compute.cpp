@@ -36,11 +36,22 @@ ComputeRenderer::ComputeRenderer(GLCompositor&& compositor)
 
 bool ComputeRenderer::CompileShader(GLuint& shader, const std::string& source, const std::initializer_list<const char*>& defines)
 {
+    std::string shaderFileName = "shader_";
+    int i = 0;
+
     std::string shaderName;
     std::string shaderSource;
-    shaderSource += "#version 430 core\n";
+    shaderSource += "#version 320 es\n";
+    shaderSource += "precision highp float;\n";
+    shaderSource += "precision highp int;\n";
+    shaderSource += "precision highp usampler2DArray;\n";
+    shaderSource += "precision highp image2D;\n";
+    shaderSource += "precision highp uimage2D;\n";
     for (const char* define : defines)
     {
+        if (i++ > 0) shaderFileName += '_';
+        shaderFileName += define;
+
         shaderSource += "#define ";
         shaderSource += define;
         shaderSource += '\n';
@@ -64,6 +75,14 @@ bool ComputeRenderer::CompileShader(GLuint& shader, const std::string& source, c
 
     shaderSource += ComputeRendererShaders::Common;
     shaderSource += source;
+
+    std::string filePath = "/data/data/me.magnum.melonds.dev/files/" + shaderFileName + ".txt";
+    //FILE* f = fopen(filePath.c_str(), "w");
+    //if (f)
+    //{
+    //    fwrite(shaderSource.c_str(), shaderSource.size(), 1, f);
+    //    fclose(f);
+    //}
 
     return OpenGL::CompileComputeProgram(shader, shaderSource.c_str(), shaderName.c_str());
 }
@@ -1144,9 +1163,15 @@ void ComputeRenderer::SetupAccelFrame()
 void ComputeRenderer::PrepareCaptureFrame()
 {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelBuffer);
-    glBindTexture(GL_TEXTURE_2D, LowResFramebuffer);
-    // TODO: Read using glReadPixels. But target is null???
-    // glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+
+    // TODO: Reuse FBO
+    GLuint fbo;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, LowResFramebuffer, 0);
+    glReadPixels(0, 0, 256, 192, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
 }
 
 void ComputeRenderer::SetOutputTexture(int buffer, u32 texture)

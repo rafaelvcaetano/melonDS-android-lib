@@ -106,12 +106,12 @@ int CalcYFactorX(XSpanSetup span, int x)
     {
         uint numLo = uint(x) * uint(span.W0);
         uint numHi = 0U;
-        numHi |= numLo >> (32U-YFactorShift);
+        numHi |= numLo >> (32-YFactorShift);
         numLo <<= YFactorShift;
 
         uint den = uint(x) * uint(span.W0) + uint(span.X1 - span.X0 - x) * uint(span.W1);
 
-        if (den == 0)
+        if (den == 0U)
             return 0;
         else
             return int(Div64_32_32(numHi, numLo, den));
@@ -167,12 +167,12 @@ int CalcYFactorY(YSpanSetup span, int i)
     */
     uint numLo = uint(abs(i)) * uint(span.W0n);
     uint numHi = 0U;
-    numHi |= numLo >> (32U-YFactorShift);
+    numHi |= numLo >> (32-YFactorShift);
     numLo <<= YFactorShift;
 
-    uint den = uint(abs(i)) * uint(span.W0d) + uint(abs(span.I1 - span.I0 - i)) * span.W1d;
+    uint den = uint(abs(i)) * uint(span.W0d) + uint(abs(span.I1 - span.I0 - i)) * uint(span.W1d);
 
-    if (den == 0)
+    if (den == 0U)
     {
         return 0;
     }
@@ -305,8 +305,8 @@ layout (std430, binding = 7) buffer WorkDescBuffer
     uvec2 WorkDescs[];
 };
 
-const uint WorkDescsUnsortedStart = 0;
-const uint WorkDescsSortedStart = WorkDescsUnsortedStart+MaxWorkTiles;
+const uint WorkDescsUnsortedStart = 0u;
+const uint WorkDescsSortedStart = WorkDescsUnsortedStart+uint(MaxWorkTiles);
 
 )"};
 
@@ -332,9 +332,9 @@ layout (std430, binding = 5) buffer ResultBuffer
     uint ResultValue[];
 };
 
-const uint ResultColorStart = 0;
-const uint ResultDepthStart = ResultColorStart+ScreenWidth*ScreenHeight*2;
-const uint ResultAttrStart = ResultDepthStart+ScreenWidth*ScreenHeight*2;
+const uint ResultColorStart = 0u;
+const uint ResultDepthStart = ResultColorStart+uint(ScreenWidth)*uint(ScreenHeight)*2u;
+const uint ResultAttrStart = ResultDepthStart+uint(ScreenWidth)*uint(ScreenHeight)*2u;
 )"};
 
 const char* Common = R"(
@@ -386,18 +386,18 @@ uint Umulh(uint a, uint b)
 }
 
 const uint startTable[256] = uint[256](
-    254, 252, 250, 248, 246, 244, 242, 240, 238, 236, 234, 233, 231, 229, 227, 225, 224, 222, 220, 218, 217, 215, 213, 212, 210, 208, 207, 205, 203, 202, 200, 199, 197, 195, 194, 192, 191, 189, 188, 186, 185, 183, 182, 180, 179, 178, 176, 175, 173, 172, 170, 169, 168, 166, 165, 164, 162, 161, 160, 158, 
-157, 156, 154, 153, 152, 151, 149, 148, 147, 146, 144, 143, 142, 141, 139, 138, 137, 136, 135, 134, 132, 131, 130, 129, 128, 127, 126, 125, 123, 122, 121, 120, 119, 118, 117, 116, 115, 114, 113, 112, 111, 110, 109, 108, 107, 106, 105, 104, 103, 102, 101, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 88, 87, 86, 85, 84, 83, 82, 81, 80, 80, 79, 78, 77, 76, 75, 74, 74, 73, 72, 71, 70, 70, 69, 68, 67, 66, 66, 65, 64, 63, 62, 62, 61, 60, 59, 59, 58, 57, 56, 56, 55, 54, 53, 53, 52, 51, 50, 50, 49, 48, 48, 47, 46, 46, 45, 44, 43, 43, 42, 41, 41, 40, 39, 39, 38, 37, 37, 36, 35, 35, 34, 33, 33, 32, 32, 31, 30, 30, 29, 28, 28, 27, 27, 26, 25, 25, 24, 24, 23, 22, 22, 21, 21, 20, 19, 19, 18, 18, 17, 17, 16, 15, 15, 14, 14, 13, 13, 12, 12, 11, 10, 10, 9, 9, 8, 8, 7, 7, 6, 6, 5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0
+    254U, 252U, 250U, 248U, 246U, 244U, 242U, 240U, 238U, 236U, 234U, 233U, 231U, 229U, 227U, 225U, 224U, 222U, 220U, 218U, 217U, 215U, 213U, 212U, 210U, 208U, 207U, 205U, 203U, 202U, 200U, 199U, 197U, 195U, 194U, 192U, 191U, 189U, 188U, 186U, 185U, 183U, 182U, 180U, 179U, 178U, 176U, 175U, 173U, 172U, 170U, 169U, 168U, 166U, 165U, 164U, 162U, 161U, 160U, 158U, 
+157U, 156U, 154U, 153U, 152U, 151U, 149U, 148U, 147U, 146U, 144U, 143U, 142U, 141U, 139U, 138U, 137U, 136U, 135U, 134U, 132U, 131U, 130U, 129U, 128U, 127U, 126U, 125U, 123U, 122U, 121U, 120U, 119U, 118U, 117U, 116U, 115U, 114U, 113U, 112U, 111U, 110U, 109U, 108U, 107U, 106U, 105U, 104U, 103U, 102U, 101U, 100U, 99U, 98U, 97U, 96U, 95U, 94U, 93U, 92U, 91U, 90U, 89U, 88U, 88U, 87U, 86U, 85U, 84U, 83U, 82U, 81U, 80U, 80U, 79U, 78U, 77U, 76U, 75U, 74U, 74U, 73U, 72U, 71U, 70U, 70U, 69U, 68U, 67U, 66U, 66U, 65U, 64U, 63U, 62U, 62U, 61U, 60U, 59U, 59U, 58U, 57U, 56U, 56U, 55U, 54U, 53U, 53U, 52U, 51U, 50U, 50U, 49U, 48U, 48U, 47U, 46U, 46U, 45U, 44U, 43U, 43U, 42U, 41U, 41U, 40U, 39U, 39U, 38U, 37U, 37U, 36U, 35U, 35U, 34U, 33U, 33U, 32U, 32U, 31U, 30U, 30U, 29U, 28U, 28U, 27U, 27U, 26U, 25U, 25U, 24U, 24U, 23U, 22U, 22U, 21U, 21U, 20U, 19U, 19U, 18U, 18U, 17U, 17U, 16U, 15U, 15U, 14U, 14U, 13U, 13U, 12U, 12U, 11U, 10U, 10U, 9U, 9U, 8U, 8U, 7U, 7U, 6U, 6U, 5U, 5U, 4U, 4U, 3U, 3U, 2U, 2U, 1U, 1U, 0U, 0U
 );
 
 uint Div(uint x, uint y, out uint r)
 {
     // https://www.microsoft.com/en-us/research/publication/software-integer-division/
-    uint k = 31 - findMSB(y);
-    uint ty = (y << k) >> (32 - 9);
-    uint t = startTable[ty - 256] + 256;
-    uint z = (t << (32 - 9)) >> (32 - k - 1);
-    uint my = 0 - y;
+    uint k = uint(31 - findMSB(y));
+    uint ty = (y << k) >> (32U - 9U);
+    uint t = startTable[ty - 256U] + 256U;
+    uint z = (t << (32U - 9U)) >> (32U - k - 1U);
+    uint my = 0U - y;
 
     z += Umulh(z, my * z);
     z += Umulh(z, my * z);
@@ -407,11 +407,11 @@ uint Div(uint x, uint y, out uint r)
     if(r >= y)
     {
         r = r - y;
-        q = q + 1;
+        q = q + 1U;
         if(r >= y)
         {
             r = r - y;
-            q = q + 1;
+            q = q + 1U;
         }
     }
 
@@ -436,7 +436,7 @@ uint Div64_32_32(uint numHi, uint numLo, uint den)
     // We also shift numer by the same amount. This cannot overflow because numHi < den.
     // The expression (-shift & 63) is the same as (64 - shift), except it avoids the UB of shifting
     // by 64. (it's also UB in GLSL!!!!)
-    uint shift = 31 - findMSB(den);
+    uint shift = uint(31 - findMSB(den));
     den <<= shift;
     numHi <<= shift;
     numHi |= (numLo >> (-shift & 31U)) & uint(-int(shift) >> 31);
@@ -456,7 +456,7 @@ uint Div64_32_32(uint numHi, uint numLo, uint den)
     uint qhat = Div(numHi, den1, rhat);
     uint c1 = qhat * den0;
     uint c2 = rhat * b + num1;
-    if (c1 > c2) qhat -= (c1 - c2 > den) ? 2 : 1;
+    if (c1 > c2) qhat -= (c1 - c2 > den) ? 2U : 1U;
     uint q1 = qhat & 0xFFFFU;
 
     // Compute the true (partial) remainder.
@@ -467,7 +467,7 @@ uint Div64_32_32(uint numHi, uint numLo, uint den)
     qhat = Div(rem, den1, rhat);
     c1 = qhat * den0;
     c2 = rhat * b + num0;
-    if (c1 > c2) qhat -= (c1 - c2 > den) ? 2 : 1;
+    if (c1 > c2) qhat -= (c1 - c2 > den) ? 2U : 1U;
 
     return bitfieldInsert(qhat, q1, 16, 16);
 }
@@ -514,7 +514,7 @@ int InterpolateAttrLinear(int y0, int y1, int i, int irecip, int idiff)
         uint offset = uint(idiff-i);
 #endif
         umulExtended(uint(y0-y1)*offset, uint(irecip), mulHi, mulLo);
-        mulLo = uaddCarry(mulLo, 3<<24, carry);
+        mulLo = uaddCarry(mulLo, 3U<<24, carry);
         mulHi += carry;
         return y1 + int((mulLo >> 30) | (mulHi << (32 - 30)));
         //return y1 + int(((int64_t(y0-y1) * int64_t(offset) * int64_t(irecip)) + int64_t(3<<24)) >> 30);
@@ -524,7 +524,7 @@ int InterpolateAttrLinear(int y0, int y1, int i, int irecip, int idiff)
 uint InterpolateZZBuffer(int z0, int z1, int i, int irecip, int idiff)
 {
     if (z0 == z1)
-        return z0;
+        return uint(z0);
 
     uint base, disp, factor;
     if (z0 < z1)
@@ -543,7 +543,7 @@ uint InterpolateZZBuffer(int z0, int z1, int i, int irecip, int idiff)
 #ifdef InterpSpans
     int shiftl = 0;
     const int shiftr = 22;
-    if (disp > 0x3FF)
+    if (disp > 0x3FFu)
     {
         shiftl = findMSB(disp) - 9;
         disp >>= shiftl;
@@ -555,7 +555,7 @@ uint InterpolateZZBuffer(int z0, int z1, int i, int irecip, int idiff)
 #endif
     uint mulLo, mulHi;
 
-    umulExtended(disp * factor, abs(irecip) >> 8, mulHi, mulLo);
+    umulExtended(disp * factor, uint(abs(irecip)) >> 8, mulHi, mulLo);
 
     return base + (((mulLo >> shiftr) | (mulHi << (32 - shiftr))) << shiftl);
 /*
@@ -595,29 +595,29 @@ uint InterpolateZZBuffer(int z0, int z1, int i, int irecip, int idiff)
 uint InterpolateZWBuffer(int z0, int z1, int ifactor)
 {
     if (z0 == z1)
-        return z0;
+        return uint(z0);
 
 #ifdef Rasterise
     // since the precision along x spans is only 8 bit the result will always fit in 32-bit
     if (z0 < z1)
     {
-        return uint(z0) + (((z1-z0) * ifactor) >> YFactorShift);
+        return uint(z0) + uint(((z1-z0) * ifactor) >> YFactorShift);
     }
     else
     {
-        return uint(z1) + (((z0-z1) * ((1<<YFactorShift)-ifactor)) >> YFactorShift);
+        return uint(z1) + uint(((z0-z1) * ((1<<YFactorShift)-ifactor)) >> YFactorShift);
     }
 #else
     uint mulLo, mulHi;
     if (z0 < z1)
     {
-        umulExtended(z1-z0, ifactor, mulHi, mulLo);
+        umulExtended(uint(z1-z0), uint(ifactor), mulHi, mulLo);
         // 64-bit shift
         return uint(z0) + ((mulLo >> YFactorShift) | (mulHi << (32-YFactorShift)));
     }
     else
     {
-        umulExtended(z0-z1, (1<<YFactorShift)-ifactor, mulHi, mulLo);
+        umulExtended(uint(z0-z1), uint((1<<YFactorShift)-ifactor), mulHi, mulLo);
         return uint(z1) + ((mulLo >> YFactorShift) | (mulHi << (32-YFactorShift)));
     }
 #endif
@@ -640,7 +640,7 @@ const std::string InterpSpans =
     YSpanSetupBuffer + R"(
 layout (local_size_x = 32) in;
 
-layout (binding = 0, rgba16ui) uniform readonly uimageBuffer SetupIndices;
+layout (binding = 0, rgba16ui) uniform readonly highp uimageBuffer SetupIndices;
 
 void main()
 {
@@ -714,7 +714,7 @@ void main()
         xspan.InsideEnd = xspan.X1;
 
     bool isShadowMask = ((polygon.Attr & 0x3F000030U) == 0x00000030U);
-    bool fillAllEdges = polyalpha < 31 || (DispCnt & (3U<<4)) != 0U;
+    bool fillAllEdges = polyalpha < 31U || (DispCnt & (3U<<4)) != 0U;
 
     if (fillAllEdges || spanL.X1 < spanL.X0 || spanL.Increment <= 0x40000)
         xspan.Flags |= XSpanSetup_FillLeft;
@@ -850,8 +850,8 @@ layout (local_size_x = ClearCoarseBinMaskLocalSize) in;
 
 void main()
 {
-    BinningMaskAndOffset[BinningCoarseMaskStart + gl_GlobalInvocationID.x*CoarseBinStride+0] = 0;
-    BinningMaskAndOffset[BinningCoarseMaskStart + gl_GlobalInvocationID.x*CoarseBinStride+1] = 0;
+    BinningMaskAndOffset[BinningCoarseMaskStart + int(gl_GlobalInvocationID.x)*CoarseBinStride+0] = 0u;
+    BinningMaskAndOffset[BinningCoarseMaskStart + int(gl_GlobalInvocationID.x)*CoarseBinStride+1] = 0u;
 }
 
 )";
@@ -943,9 +943,10 @@ void main()
     ivec2 coarseBotRight = coarseTopLeft + ivec2(CoarseTileW-1, CoarseTileH-1);
 
     bool binned = false;
-    if (polygonIdx < NumPolygons)
+    if (uint(polygonIdx) < NumPolygons)
     {
-        binned = BinPolygon(Polygons[polygonIdx], coarseTopLeft, coarseBotRight);
+        Polygon polygon = Polygons[polygonIdx];
+        binned = BinPolygon(polygon, coarseTopLeft, coarseBotRight);
     }
 
 #if 0
@@ -970,7 +971,8 @@ void main()
 
         int polygonIdx = groupIdx * 32 + bit;
 
-        if (BinPolygon(Polygons[polygonIdx], fineTileTopLeft, fineTileBotRight))
+        Polygon polygon = Polygons[polygonIdx];
+        if (BinPolygon(polygon, fineTileTopLeft, fineTileBotRight))
             binnedMask |= 1U << bit;
     }
 
@@ -986,7 +988,7 @@ void main()
         uint workOffset = atomicAdd(VariantWorkCount[0].w, uint(bitCount(binnedMask)));
         BinningMaskAndOffset[BinningWorkOffsetsStart + linearTile * BinStride + groupIdx] = workOffset;
 
-        uint tilePositionCombined = bitfieldInsert(fineTileTopLeft.x, fineTileTopLeft.y, 16, 16);
+        uint tilePositionCombined = uint(bitfieldInsert(fineTileTopLeft.x, fineTileTopLeft.y, 16, 16));
 
         int idx = 0;
         while (binnedMask != 0U)
@@ -997,8 +999,8 @@ void main()
             int polygonIdx = groupIdx * 32 + bit;
             int variantIdx = Polygons[polygonIdx].Variant;
 
-            int inVariantOffset = int(atomicAdd(VariantWorkCount[variantIdx].z, 1));
-            WorkDescs[WorkDescsUnsortedStart + workOffset + idx] = uvec2(tilePositionCombined, bitfieldInsert(polygonIdx, inVariantOffset, 11, 21));
+            int inVariantOffset = int(atomicAdd(VariantWorkCount[variantIdx].z, 1u));
+            WorkDescs[WorkDescsUnsortedStart + workOffset + uint(idx)] = uvec2(tilePositionCombined, uint(bitfieldInsert(polygonIdx, inVariantOffset, 11, 21)));
 
             idx++;
         }
@@ -1016,10 +1018,10 @@ void main()
 {
     if (gl_GlobalInvocationID.x < NumVariants)
     {
-        if (gl_GlobalInvocationID.x == 0)
+        if (gl_GlobalInvocationID.x == 0u)
         {
             // a bit of a cheat putting this here, but this shader won't run that often
-            SortWorkWorkCount = uvec4((VariantWorkCount[0].w + 31) / 32, 1, 1, 0);
+            SortWorkWorkCount = uvec4((VariantWorkCount[0].w + 31u) / 32u, 1u, 1u, 0u);
         }
         SortedWorkOffset[gl_GlobalInvocationID.x] = atomicAdd(VariantWorkCount[1].w, VariantWorkCount[gl_GlobalInvocationID.x].z);
     }
@@ -1045,7 +1047,7 @@ void main()
         int variantIdx = Polygons[polygonIdx].Variant;
 
         int sortedIndex = int(SortedWorkOffset[variantIdx]) + inVariantOffset;
-        WorkDescs[WorkDescsSortedStart + sortedIndex] = uvec2(workDesc.x, bitfieldInsert(workDesc.y, gl_GlobalInvocationID.x, 11, 21));
+        WorkDescs[WorkDescsSortedStart + uint(sortedIndex)] = uvec2(workDesc.x, bitfieldInsert(workDesc.y, gl_GlobalInvocationID.x, 11, 21));
     }
 }
 
@@ -1069,7 +1071,7 @@ void main()
 {
     uvec2 workDesc = WorkDescs[WorkDescsSortedStart + SortedWorkOffset[CurVariant] + gl_WorkGroupID.z];
     Polygon polygon = Polygons[bitfieldExtract(workDesc.y, 0, 11)];
-    ivec2 position = ivec2(bitfieldExtract(workDesc.x, 0, 16), bitfieldExtract(workDesc.x, 16, 16)) + ivec2(gl_LocalInvocationID.xy);
+    ivec2 position = ivec2(int(bitfieldExtract(workDesc.x, 0, 16)), int(bitfieldExtract(workDesc.x, 16, 16))) + ivec2(gl_LocalInvocationID.xy);
     int tileOffset = int(bitfieldExtract(workDesc.y, 11, 21)) * TileSize * TileSize + TileSize * int(gl_LocalInvocationID.y) + int(gl_LocalInvocationID.x);
 
     uint color = 0U;
@@ -1086,7 +1088,7 @@ void main()
                 || (insideRightEdge && (xspan.Flags & XSpanSetup_FillRight) != 0U)
                 || (insidePolygonInside && (xspan.Flags & XSpanSetup_FillInside) != 0U)))
         {
-            uint attr = 0;
+            uint attr = 0U;
             if (position.y == polygon.YTop)
                 attr |= 0x4U;
             else if (position.y == polygon.YBot - 1)
@@ -1124,7 +1126,7 @@ void main()
 
             if (xspan.X0 == xspan.X1)
             {
-                z = xspan.Z0;
+                z = uint(xspan.Z0);
                 u = xspan.TexcoordU0;
                 v = xspan.TexcoordV0;
                 vr = xspan.ColorR0;
@@ -1183,51 +1185,51 @@ void main()
 #endif
 
 #ifdef NoTexture
-            a = int(polyalpha);
+            a = polyalpha;
 #endif
-            r = vr;
-            g = vg;
-            b = vb;
+            r = uint(vr);
+            g = uint(vg);
+            b = uint(vb);
 
 #ifdef UseTexture
             vec2 uvf = vec2(ivec2(u, v)) * vec2(1.0 / 16.0) * InvTextureSize;
 
             uvec4 texcolor = texture(CurrentTexture, vec3(uvf, polygon.TextureLayer));
 #ifdef Decal
-            if (texcolor.a == 31)
+            if (texcolor.a == 31U)
             {
-                r = int(texcolor.r);
-                g = int(texcolor.g);
-                b = int(texcolor.b);
+                r = texcolor.r;
+                g = texcolor.g;
+                b = texcolor.b;
             }
-            else if (texcolor.a > 0)
+            else if (texcolor.a > 0U)
             {
-                r = int((texcolor.r * texcolor.a) + (vr * (31-texcolor.a))) >> 5;
-                g = int((texcolor.g * texcolor.a) + (vg * (31-texcolor.a))) >> 5;
-                b = int((texcolor.b * texcolor.a) + (vb * (31-texcolor.a))) >> 5;
+                r = ((texcolor.r * texcolor.a) + (uint(vr) * (31U-texcolor.a))) >> 5;
+                g = ((texcolor.g * texcolor.a) + (uint(vg) * (31U-texcolor.a))) >> 5;
+                b = ((texcolor.b * texcolor.a) + (uint(vb) * (31U-texcolor.a))) >> 5;
             }
-            a = int(polyalpha);
+            a = polyalpha;
 #endif
 #if defined(Modulate) || defined(Toon) || defined(Highlight)
-            r = int((texcolor.r+1) * (vr+1) - 1) >> 6;
-            g = int((texcolor.g+1) * (vg+1) - 1) >> 6;
-            b = int((texcolor.b+1) * (vb+1) - 1) >> 6;
-            a = int((texcolor.a+1) * (polyalpha+1) - 1) >> 5;
+            r = ((texcolor.r+1U) * (uint(vr)+1U) - 1U) >> 6;
+            g = ((texcolor.g+1U) * (uint(vg)+1U) - 1U) >> 6;
+            b = ((texcolor.b+1U) * (uint(vb)+1U) - 1U) >> 6;
+            a = ((texcolor.a+1U) * (polyalpha+1U) - 1U) >> 5;
 #endif
 #endif
 
 #ifdef Highlight
             uint tooncolor = ToonTable[vr >> 1].r;
 
-            r = min(r + int(bitfieldExtract(tooncolor, 0, 8)), 63);
-            g = min(g + int(bitfieldExtract(tooncolor, 8, 8)), 63);
-            b = min(b + int(bitfieldExtract(tooncolor, 16, 8)), 63);
+            r = min(r + bitfieldExtract(tooncolor, 0, 8), 63U);
+            g = min(g + bitfieldExtract(tooncolor, 8, 8), 63U);
+            b = min(b + bitfieldExtract(tooncolor, 16, 8), 63U);
 #endif
 
-            if (polyalpha == 0)
-                a = 31;
+            if (polyalpha == 0U)
+                a = 31U;
 
-            if (a > AlphaRef)
+            if (a > uint(AlphaRef))
             {
                 color = r | (g << 8) | (b << 16) | (a << 24);
 
@@ -1235,7 +1237,7 @@ void main()
                 AttrTiles[tileOffset] = attr;
             }
 #else
-            color = 0xFFFFFFFF; // doesn't really matter as long as it's not 0
+            color = 0xFFFFFFFFU; // doesn't really matter as long as it's not 0
             DepthTiles[tileOffset] = z;
 #endif
         }
@@ -1266,7 +1268,7 @@ void PlotTranslucent(inout uint color, inout uint depth, inout uint attr, bool i
         if (writeDepth)
             depth = tileDepth;
 
-        if ((attr & (1U<<15)) == 0)
+        if ((attr & (1U<<15)) == 0U)
             blendAttr &= ~(1U<<15);
         attr = blendAttr;
 
@@ -1276,11 +1278,11 @@ void PlotTranslucent(inout uint color, inout uint depth, inout uint attr, bool i
         uint dstG = color & 0x003F00U;
         uint dstA = color & 0x1F000000U;
 
-        uint alpha = (srcA >> 24) + 1;
-        if (dstA != 0)
+        uint alpha = (srcA >> 24) + 1U;
+        if (dstA != 0U)
         {
-            srcRB = ((srcRB * alpha) + (dstRB * (32-alpha))) >> 5;
-            srcG = ((srcG * alpha) + (dstG * (32-alpha))) >> 5;
+            srcRB = ((srcRB * alpha) + (dstRB * (32U-alpha))) >> 5;
+            srcG = ((srcG * alpha) + (dstG * (32U-alpha))) >> 5;
         }
 
         color = (srcRB & 0x3F003FU) | (srcG & 0x003F00U) | max(dstA, srcA);
@@ -1295,24 +1297,24 @@ void ProcessCoarseMask(int linearTile, uint coarseMask, uint coarseOffset,
 
     while (coarseMask != 0U)
     {
-        uint coarseBit = findLSB(coarseMask);
+        uint coarseBit = uint(findLSB(coarseMask));
         coarseMask &= ~(1U << coarseBit);
 
-        uint tileOffset = linearTile * BinStride + coarseBit + coarseOffset;
+        uint tileOffset = uint(linearTile) * uint(BinStride) + coarseBit + coarseOffset;
 
-        uint fineMask = BinningMaskAndOffset[BinningMaskStart + tileOffset];
-        uint workIdx = BinningMaskAndOffset[BinningWorkOffsetsStart + tileOffset];
+        uint fineMask = BinningMaskAndOffset[BinningMaskStart + int(tileOffset)];
+        uint workIdx = BinningMaskAndOffset[BinningWorkOffsetsStart + int(tileOffset)];
 
         while (fineMask != 0U)
         {
-            uint fineIdx = findLSB(fineMask);
+            uint fineIdx = uint(findLSB(fineMask));
             fineMask &= ~(1U << fineIdx);
 
-            uint pixelindex = tileInnerOffset + workIdx * TileSize * TileSize;
+            uint pixelindex = uint(tileInnerOffset) + workIdx * uint(TileSize) * uint(TileSize);
             uint tileColor = ColorTiles[pixelindex];
             workIdx++;
 
-            uint polygonIdx = fineIdx + (coarseBit + coarseOffset) * 32;
+            uint polygonIdx = fineIdx + (coarseBit + coarseOffset) * 32U;
 
             if (tileColor != 0U)
             {
@@ -1348,10 +1350,10 @@ void ProcessCoarseMask(int linearTile, uint coarseMask, uint coarseOffset,
                     uint dstDepth = writeSecondLayer ? depth.y : depth.x;
                     if (!(equalDepthTest
 #ifdef WBuffer
-                        ? dstDepth - tileDepth + 0xFFU <= 0x1FE
+                        ? dstDepth - tileDepth + 0xFFU <= 0x1FEU
 #endif
 #ifdef ZBuffer
-                        ? dstDepth - tileDepth + 0x200 <= 0x400
+                        ? dstDepth - tileDepth + 0x200U <= 0x400U
 #endif
                         : tileDepth < dstDepth))
                     {
@@ -1362,10 +1364,10 @@ void ProcessCoarseMask(int linearTile, uint coarseMask, uint coarseOffset,
                         dstattr = attr.y;
                         if (!(equalDepthTest
 #ifdef WBuffer
-                            ? depth.y - tileDepth + 0xFFU <= 0x1FE
+                            ? depth.y - tileDepth + 0xFFU <= 0x1FEU
 #endif
 #ifdef ZBuffer
-                            ? depth.y - tileDepth + 0x200 <= 0x400
+                            ? depth.y - tileDepth + 0x200U <= 0x400U
 #endif
                             : tileDepth < depth.y))
                             continue;
@@ -1400,7 +1402,7 @@ void ProcessCoarseMask(int linearTile, uint coarseMask, uint coarseOffset,
                     }
                     else
                     {
-                        bool writeDepth = (polygonAttr & (1U<<11)) != 0;
+                        bool writeDepth = (polygonAttr & (1U<<11)) != 0U;
 
                         if (!writeSecondLayer)
                         {
@@ -1416,14 +1418,14 @@ void ProcessCoarseMask(int linearTile, uint coarseMask, uint coarseOffset,
                 else
                 {
                     if (!prevIsShadowMaskOld)
-                        stencil = 0;
+                        stencil = 0U;
 
                     if (!(equalDepthTest
 #ifdef WBuffer
-                        ? depth.x - tileDepth + 0xFFU <= 0x1FE
+                        ? depth.x - tileDepth + 0xFFU <= 0x1FEU
 #endif
 #ifdef ZBuffer
-                        ? depth.x - tileDepth + 0x200 <= 0x400
+                        ? depth.x - tileDepth + 0x200U <= 0x400U
 #endif
                         : tileDepth < depth.x))
                         stencil = 0x1U;
@@ -1432,10 +1434,10 @@ void ProcessCoarseMask(int linearTile, uint coarseMask, uint coarseOffset,
                     {
                         if (!(equalDepthTest
 #ifdef WBuffer
-                            ? depth.y - tileDepth + 0xFFU <= 0x1FE
+                            ? depth.y - tileDepth + 0xFFU <= 0x1FEU
 #endif
 #ifdef ZBuffer
-                            ? depth.y - tileDepth + 0x200 <= 0x400
+                            ? depth.y - tileDepth + 0x200U <= 0x400U
 #endif
                             : tileDepth < depth.y))
                             stencil |= 0x2U;
@@ -1448,7 +1450,7 @@ void ProcessCoarseMask(int linearTile, uint coarseMask, uint coarseOffset,
 
 void main()
 {
-    int linearTile = int(gl_WorkGroupID.x + (gl_WorkGroupID.y * TilesPerLine));
+    int linearTile = int(gl_WorkGroupID.x + (gl_WorkGroupID.y * uint(TilesPerLine)));
 
     uint coarseMaskLo = BinningMaskAndOffset[BinningCoarseMaskStart + linearTile*CoarseBinStride + 0];
     uint coarseMaskHi = BinningMaskAndOffset[BinningCoarseMaskStart + linearTile*CoarseBinStride + 1];
@@ -1459,16 +1461,16 @@ void main()
     uint stencil = 0U;
     bool prevIsShadowMask = false;
 
-    ProcessCoarseMask(linearTile, coarseMaskLo, 0, color, depth, attr, stencil, prevIsShadowMask);
-    ProcessCoarseMask(linearTile, coarseMaskHi, BinStride/2, color, depth, attr, stencil, prevIsShadowMask);
+    ProcessCoarseMask(linearTile, coarseMaskLo, 0u, color, depth, attr, stencil, prevIsShadowMask);
+    ProcessCoarseMask(linearTile, coarseMaskHi, uint(BinStride/2), color, depth, attr, stencil, prevIsShadowMask);
 
     int resultOffset = int(gl_GlobalInvocationID.x) + int(gl_GlobalInvocationID.y) * ScreenWidth;
-    ResultValue[ResultColorStart+resultOffset] = color.x;
-    ResultValue[ResultColorStart+resultOffset+FramebufferStride] = color.y;
-    ResultValue[ResultDepthStart+resultOffset] = depth.x;
-    ResultValue[ResultDepthStart+resultOffset+FramebufferStride] = depth.y;
-    ResultValue[ResultAttrStart+resultOffset] = attr.x;
-    ResultValue[ResultAttrStart+resultOffset+FramebufferStride] = attr.y;
+    ResultValue[ResultColorStart+uint(resultOffset)] = color.x;
+    ResultValue[ResultColorStart+uint(resultOffset)+uint(FramebufferStride)] = color.y;
+    ResultValue[ResultDepthStart+uint(resultOffset)] = depth.x;
+    ResultValue[ResultDepthStart+uint(resultOffset)+uint(FramebufferStride)] = depth.y;
+    ResultValue[ResultAttrStart+uint(resultOffset)] = attr.x;
+    ResultValue[ResultAttrStart+uint(resultOffset)+uint(FramebufferStride)] = attr.y;
 }
 
 )";
@@ -1483,7 +1485,7 @@ layout (binding = 1, rgba8ui) writeonly uniform uimage2D LowResFB;
 
 uint BlendFog(uint color, uint depth)
 {
-    uint densityid = 0, densityfrac = 0;
+    uint densityid = 0U, densityfrac = 0U;
 
     if (depth >= FogOffset)
     {
@@ -1491,10 +1493,10 @@ uint BlendFog(uint color, uint depth)
         depth = (depth >> 2) << FogShift;
 
         densityid = depth >> 17;
-        if (densityid >= 32)
+        if (densityid >= 32U)
         {
-            densityid = 32;
-            densityfrac = 0;
+            densityid = 32U;
+            densityfrac = 0U;
         }
         else
         {
@@ -1504,7 +1506,7 @@ uint BlendFog(uint color, uint depth)
 
     uint density =
         ((ToonTable[densityid].g * (0x20000U-densityfrac)) +
-         (ToonTable[densityid+1].g * densityfrac)) >> 17;
+         (ToonTable[densityid+1U].g * densityfrac)) >> 17;
     density = min(density, 128U);
 
     uint colorRB = color & 0x3F003FU;
@@ -1513,13 +1515,13 @@ uint BlendFog(uint color, uint depth)
     uint fogRB = FogColor & 0x3F003FU;
     uint fogGA = (FogColor >> 8) & 0x1F003FU;
 
-    uint finalColorRB = ((fogRB * density) + (colorRB * (128-density))) >> 7;
-    uint finalColorGA = ((fogGA * density) + (colorGA * (128-density))) >> 7;
+    uint finalColorRB = ((fogRB * density) + (colorRB * (128U-density))) >> 7;
+    uint finalColorGA = ((fogGA * density) + (colorGA * (128U-density))) >> 7;
 
     finalColorRB &= 0x3F003FU;
     finalColorGA &= 0x1F003FU;
 
-    return (DispCnt & (1U<<6)) != 0
+    return (DispCnt & (1U<<6)) != 0U
         ? (bitfieldInsert(color, finalColorGA >> 16, 24, 8))
         : (finalColorRB | (finalColorGA << 8));
 }
@@ -1529,9 +1531,9 @@ void main()
     int srcX = int(gl_GlobalInvocationID.x);
     int resultOffset = int(srcX) + int(gl_GlobalInvocationID.y) * ScreenWidth;
 
-    uvec2 color = uvec2(ResultValue[resultOffset+ResultColorStart], ResultValue[resultOffset+FramebufferStride+ResultColorStart]);
-    uvec2 depth = uvec2(ResultValue[resultOffset+ResultDepthStart], ResultValue[resultOffset+FramebufferStride+ResultDepthStart]);
-    uvec2 attr = uvec2(ResultValue[resultOffset+ResultAttrStart], ResultValue[resultOffset+FramebufferStride+ResultAttrStart]);
+    uvec2 color = uvec2(ResultValue[resultOffset+int(ResultColorStart)], ResultValue[resultOffset+FramebufferStride+int(ResultColorStart)]);
+    uvec2 depth = uvec2(ResultValue[resultOffset+int(ResultDepthStart)], ResultValue[resultOffset+FramebufferStride+int(ResultDepthStart)]);
+    uvec2 attr = uvec2(ResultValue[resultOffset+int(ResultAttrStart)], ResultValue[resultOffset+FramebufferStride+int(ResultAttrStart)]);
 
 #ifdef EdgeMarking
     if ((attr.x & 0xFU) != 0U)
@@ -1539,25 +1541,25 @@ void main()
         uvec4 otherAttr = uvec4(ClearAttr);
         uvec4 otherDepth = uvec4(ClearDepth);
 
-        if (srcX > 0U)
+        if (srcX > 0)
         {
-            otherAttr.x = ResultValue[resultOffset-1+ResultAttrStart];
-            otherDepth.x = ResultValue[resultOffset-1+ResultDepthStart];
+            otherAttr.x = ResultValue[resultOffset-1+int(ResultAttrStart)];
+            otherDepth.x = ResultValue[resultOffset-1+int(ResultDepthStart)];
         }
-        if (srcX < ScreenWidth-1)
+        if (uint(srcX) < uint(ScreenWidth)-1U)
         {
-            otherAttr.y = ResultValue[resultOffset+1+ResultAttrStart];
-            otherDepth.y = ResultValue[resultOffset+1+ResultDepthStart];
+            otherAttr.y = ResultValue[resultOffset+1+int(ResultAttrStart)];
+            otherDepth.y = ResultValue[resultOffset+1+int(ResultDepthStart)];
         }
         if (gl_GlobalInvocationID.y > 0U)
         {
-            otherAttr.z = ResultValue[resultOffset-ScreenWidth+ResultAttrStart];
-            otherDepth.z = ResultValue[resultOffset-ScreenWidth+ResultDepthStart];
+            otherAttr.z = ResultValue[resultOffset-ScreenWidth+int(ResultAttrStart)];
+            otherDepth.z = ResultValue[resultOffset-ScreenWidth+int(ResultDepthStart)];
         }
-        if (gl_GlobalInvocationID.y < ScreenHeight-1)
+        if (gl_GlobalInvocationID.y < uint(ScreenHeight)-1U)
         {
-            otherAttr.w = ResultValue[resultOffset+ScreenWidth+ResultAttrStart];
-            otherDepth.w = ResultValue[resultOffset+ScreenWidth+ResultDepthStart];
+            otherAttr.w = ResultValue[resultOffset+ScreenWidth+int(ResultAttrStart)];
+            otherDepth.w = ResultValue[resultOffset+ScreenWidth+int(ResultDepthStart)];
         }
 
         uint polyId = bitfieldExtract(attr.x, 24, 6);
@@ -1583,7 +1585,7 @@ void main()
         color.x = BlendFog(color.x, depth.x);
     }
 
-    if ((attr.x & 0xFU) != 0 && (attr.y & (1U<<15)) != 0U)
+    if ((attr.x & 0xFU) != 0U && (attr.y & (1U<<15)) != 0U)
     {
         color.y = BlendFog(color.y, depth.y);
     }
@@ -1591,11 +1593,11 @@ void main()
 
 #ifdef AntiAliasing
     // resolve anti-aliasing
-    if ((attr.x & 0x3U) != 0)
+    if ((attr.x & 0x3U) != 0U)
     {
         uint coverage = (attr.x >> 8) & 0x1FU;
 
-        if (coverage != 0)
+        if (coverage != 0U)
         {
             uint topRB = color.x & 0x3F003FU;
             uint topG = color.x & 0x003F00U;
@@ -1607,16 +1609,16 @@ void main()
 
             coverage++;
 
-            if (botA > 0)
+            if (botA > 0U)
             {
-                topRB = ((topRB * coverage) + (botRB * (32-coverage))) >> 5;
-                topG = ((topG * coverage) + (botG * (32-coverage))) >> 5;
+                topRB = ((topRB * coverage) + (botRB * (32U-coverage))) >> 5;
+                topG = ((topG * coverage) + (botG * (32U-coverage))) >> 5;
 
                 topRB &= 0x3F003FU;
                 topG &= 0x003F00U;
             }
 
-            topA = ((topA * coverage) + (botA * (32-coverage))) >> 5;
+            topA = ((topA * coverage) + (botA * (32U-coverage))) >> 5;
 
             color.x = topRB | topG | (topA << 24);
         }
@@ -1635,7 +1637,7 @@ void main()
     //if ((gl_GlobalInvocationID.y % 8) == 7 || (gl_GlobalInvocationID.y % 8) == 7)
     //    color.x = 0x1F00001FU | 0x40000000U;
 
-    vec4 result = vec4(bitfieldExtract(color.x, 16, 8), bitfieldExtract(color.x, 8, 8), color.x & 0x3FU, bitfieldExtract(color.x, 24, 8));
+    vec4 result = vec4(float(bitfieldExtract(color.x, 16, 8)), float(bitfieldExtract(color.x, 8, 8)), float(color.x & 0x3FU), float(bitfieldExtract(color.x, 24, 8)));
     result /= vec4(63.0, 63.0, 63.0, 31.0);
     imageStore(FinalFB, ivec2(gl_GlobalInvocationID.xy), result);
 
