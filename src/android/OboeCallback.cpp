@@ -44,12 +44,11 @@ OboeCallback::onAudioReady(oboe::AudioStream *stream, void *audioData, int32_t n
             samples[i] = ((s32) samples[i] * _volume) >> 8;
     }
 
-    int margin = 6;
-    if (num_in < len_in - margin)
+    if (num_in < len_in)
     {
         int last = num_in - 1;
 
-        for (int i = num_in; i < len_in - margin; i++)
+        for (int i = num_in; i < len_in; i++)
             ((u32*)audioData)[i] = ((u32*)audioData)[last];
     }
 
