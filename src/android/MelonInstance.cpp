@@ -535,7 +535,16 @@ bool MelonInstance::loadState(Savestate* state)
     if (!retroAchievementsManager->DoSavestate(state))
         return false;
 
-    return nds->DoSavestate(state);
+    if (nds->DoSavestate(state))
+    {
+        setBatteryLevels();
+        setDateTime();
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
 
 RewindWindow MelonInstance::getRewindWindow()
