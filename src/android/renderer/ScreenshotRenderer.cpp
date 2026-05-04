@@ -8,14 +8,13 @@ namespace MelonDSAndroid
 ScreenshotRenderer::ScreenshotRenderer(u32* screenshotBuffer)
 {
     this->screenshotBuffer = screenshotBuffer;
-    this->currentReadPbo = 0;
-    this->firstFrameRendered = false;
+    this->screenshotRequested = false;
+    this->stopped = false;
 }
 
 void ScreenshotRenderer::init()
 {
     setupFrameBuffer();
-    setupPbos();
     setupShaders();
     setupVertexBuffers();
 }
@@ -52,41 +51,39 @@ void ScreenshotRenderer::renderScreenshot(GPU* gpu, Renderer renderer, Frame* re
 
         glDrawArrays(GL_TRIANGLES, 0, 12);
 
-        // Read the previously rendered PBO into the screenshot buffer (async readback from the last frame). Skip on first frame since there's no data
-        int readPbo = currentReadPbo;
-        int writePbo = (currentReadPbo + 1) % 2;
-
-        if (firstFrameRendered)
-        {
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[readPbo]);
-            void* mappedBuffer = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, SCREENSHOT_BUFFER_SIZE, GL_MAP_READ_BIT);
-            if (mappedBuffer)
-            {
-                memcpy(screenshotBuffer, mappedBuffer, SCREENSHOT_BUFFER_SIZE);
-                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-            }
-        }
-
-        // Initiate async readback of the current frame into the write PBO
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[writePbo]);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, frameBuffer);
         glReadBuffer(GL_COLOR_ATTACHMENT0);
-        glReadPixels(0, 0, SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+        glReadPixels(0, 0, SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, screenshotBuffer);
 
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         glBindVertexArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-
-        currentReadPbo = writePbo;
-        firstFrameRendered = true;
     }
+
+    notifyScreenshotReady();
 }
 
 u32* ScreenshotRenderer::getScreenshot()
 {
     return screenshotBuffer;
+}
+
+bool ScreenshotRenderer::takeScreenshot()
+{
+    std::unique_lock lock(screenshotMutex);
+
+    screenshotRequested = true;
+    screenshotCondition.wait(lock);
+
+    return !stopped;
+}
+
+bool ScreenshotRenderer::isScreenshotPending()
+{
+    std::lock_guard lock(screenshotMutex);
+    return screenshotRequested;
 }
 
 void ScreenshotRenderer::setupFrameBuffer()
@@ -106,17 +103,6 @@ void ScreenshotRenderer::setupFrameBuffer()
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-void ScreenshotRenderer::setupPbos()
-{
-    glGenBuffers(2, pbos);
-    for (int i = 0; i < 2; i++)
-    {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbos[i]);
-        glBufferData(GL_PIXEL_PACK_BUFFER, SCREENSHOT_BUFFER_SIZE, NULL, GL_STREAM_READ);
-    }
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 }
 
 void ScreenshotRenderer::setupShaders()
@@ -237,14 +223,26 @@ void ScreenshotRenderer::setupVertexBuffers()
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 }
 
+void ScreenshotRenderer::notifyScreenshotReady()
+{
+    std::lock_guard lock(screenshotMutex);
+    screenshotRequested = false;
+    screenshotCondition.notify_all();
+}
+
 void ScreenshotRenderer::cleanup()
 {
+    {
+        std::lock_guard lock(screenshotMutex);
+        stopped = true;
+        // Prevent and screenshot listeners from being stuck
+        screenshotCondition.notify_all();
+    }
     glDeleteShader(screenshotRenderVertexShader);
     glDeleteShader(screenshotRenderFragmentShader);
     glDeleteProgram(screenshotRenderShader);
     glDeleteTextures(1, &bufferTexture);
     glDeleteFramebuffers(1, &frameBuffer);
-    glDeleteBuffers(2, pbos);
     glDeleteBuffers(1, &vbo);
     glDeleteVertexArrays(1, &vao);
 }

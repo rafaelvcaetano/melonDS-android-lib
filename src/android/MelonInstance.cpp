@@ -29,11 +29,11 @@ namespace MelonDSAndroid
 const int kRewindBufferSize = 1024 * 1024 * 20; // Use 20MB per savestate
 const int kRewindScreenshotSize = 256 * 384 * 4;
 
-MelonInstance::MelonInstance(int instanceId, std::shared_ptr<EmulatorConfiguration> configuration, std::unique_ptr<melonDS::NDSArgs> args, std::shared_ptr<Net> net, ScreenshotRenderer screenshotRenderer, int consoleType) :
+MelonInstance::MelonInstance(int instanceId, std::shared_ptr<EmulatorConfiguration> configuration, std::unique_ptr<melonDS::NDSArgs> args, std::shared_ptr<Net> net, std::unique_ptr<ScreenshotRenderer> screenshotRenderer, int consoleType) :
     instanceId(instanceId),
     currentConfiguration(configuration),
     net(net),
-    screenshotRenderer(screenshotRenderer),
+    screenshotRenderer(std::move(screenshotRenderer)),
     consoleType(consoleType),
     rewindManager(configuration->rewindEnabled, configuration->rewindLengthSeconds, configuration->rewindCaptureSpacingSeconds, kRewindBufferSize, kRewindScreenshotSize)
 {
@@ -252,7 +252,7 @@ void MelonInstance::start()
     }
     nds->Start();
 
-    screenshotRenderer.init();
+    screenshotRenderer->init();
 }
 
 void MelonInstance::reset()
@@ -375,8 +375,6 @@ u32 MelonInstance::runFrame()
         frameQueue.discardRenderedFrame(renderFrame);
     }
 
-    screenshotRenderer.renderScreenshot(&nds->GPU, currentRenderer, renderFrame);
-
     if (ndsSave)
         ndsSave->CheckFlush();
 
@@ -387,7 +385,13 @@ u32 MelonInstance::runFrame()
         firmwareSave->CheckFlush();
 
     frame++;
-    if (rewindManager.ShouldCaptureState(frame))
+    bool needsRewindCapture = rewindManager.ShouldCaptureState(frame);
+    bool needsScreenshot = screenshotRenderer->isScreenshotPending();
+
+    if (needsRewindCapture || needsScreenshot) [[unlikely]]
+        screenshotRenderer->renderScreenshot(&nds->GPU, currentRenderer, renderFrame);
+
+    if (needsRewindCapture)
     {
         auto nextRewindState = rewindManager.GetNextRewindSaveState(frame);
         saveRewindState(nextRewindState);
@@ -399,7 +403,7 @@ u32 MelonInstance::runFrame()
 void MelonInstance::stop()
 {
     retroAchievementsManager = nullptr;
-    screenshotRenderer.cleanup();
+    screenshotRenderer->cleanup();
 }
 
 void MelonInstance::touchScreen(u16 x, u16 y)
@@ -448,6 +452,11 @@ int MelonInstance::readAudioOutput(s16* buffer, int length)
 void MelonInstance::setAudioOutputSkew(double skew)
 {
     nds->SPU.SetOutputSkew(skew);
+}
+
+bool MelonInstance::takeScreenshot()
+{
+    return screenshotRenderer->takeScreenshot();
 }
 
 void MelonInstance::loadCheats(std::list<Cheat> cheats)
@@ -668,7 +677,7 @@ void MelonInstance::saveRewindState(RewindSaveState* rewindSaveState)
     if (saveState(savestate))
     {
         rewindSaveState->bufferContentSize = savestate->Length();
-        memcpy(rewindSaveState->screenshot, screenshotRenderer.getScreenshot(), rewindSaveState->screenshotSize);
+        memcpy(rewindSaveState->screenshot, screenshotRenderer->getScreenshot(), rewindSaveState->screenshotSize);
     }
 
     delete savestate;
