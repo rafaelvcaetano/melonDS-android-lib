@@ -130,6 +130,8 @@ namespace MelonDSAndroid
             micInputStream->close();
 
             micInputStream = nullptr;
+
+            std::lock_guard<std::mutex> lock(micBufferMutex);
             micInputCallback = nullptr;
         }
     }
@@ -185,9 +187,15 @@ namespace MelonDSAndroid
 
         if (micSource == 2)
         {
+            micBufferMutex.lock();
+            if (!micInputCallback)
+            {
+                micBufferMutex.unlock();
+                memset(data, 0, maxlength * sizeof(s16));
+                return maxlength;
+            }
             micBufferLength = MIC_BUFFER_SIZE / sizeof(s16);
             micBuffer = micInputCallback->buffer;
-            micBufferMutex.lock();
         }
         else
         {
