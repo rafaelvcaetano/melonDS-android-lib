@@ -17,6 +17,7 @@
 */
 
 #include <cassert>
+#include <chrono>
 #include <dlfcn.h>
 #include <filesystem>
 #include <stdio.h>
@@ -584,6 +585,11 @@ namespace Platform
     int Mic_ReadInput(s16* data, int maxlength, void* userdata)
     {
         return MelonDSAndroid::readMic(data, maxlength);
+    }
+
+    u64 GetMSCount()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
     void Camera_Start(int num, void* userdata)

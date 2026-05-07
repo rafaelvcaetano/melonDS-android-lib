@@ -18,7 +18,7 @@
 
 #include "MPInterface.h"
 #include "LocalMP.h"
-// #include "LAN.h"
+#include "LAN.h"
 
 namespace melonDS
 {
@@ -54,8 +54,7 @@ void MPInterface::Set(MPInterfaceType type)
         break;
 
     case MPInterface_LAN:
-        // TODO: Add LAN support
-        // Current = std::make_unique<LAN>();
+        Current = std::make_unique<LAN>();
         break;
 
     default:
