@@ -107,10 +107,6 @@ option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
 
 add_subdirectory(src)
 
-if (ANDROID)
-	add_subdirectory(src/android)
-else()
-	if (BUILD_QT_SDL)
-		add_subdirectory(src/frontend/qt_sdl)
-	endif()
+if (BUILD_QT_SDL)
+    add_subdirectory(src/frontend/qt_sdl)
 endif()

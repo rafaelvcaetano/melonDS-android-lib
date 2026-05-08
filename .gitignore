@@ -1,7 +1,6 @@
 build*/
 bin
 obj
-CMakeFiles
 *.depend
 *.layout
 *.o
