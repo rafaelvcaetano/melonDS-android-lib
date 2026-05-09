@@ -218,6 +218,7 @@ private:
     GLuint Framebuffer = 0;
     GLuint LowResFramebuffer;
     GLuint PixelBuffer;
+    GLuint CaptureFrameBuffer;
 
     u32 FramebufferCPU[256*192];
 

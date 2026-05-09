@@ -255,6 +255,8 @@ std::unique_ptr<ComputeRenderer> ComputeRenderer::New()
     glBindBuffer(GL_PIXEL_PACK_BUFFER, result->PixelBuffer);
     glBufferData(GL_PIXEL_PACK_BUFFER, 256*192*4, NULL, GL_DYNAMIC_READ);
 
+    glGenBuffers(1, &result->CaptureFrameBuffer);
+
     return result;
 }
 
@@ -276,6 +278,7 @@ ComputeRenderer::~ComputeRenderer()
 
     glDeleteSamplers(9, Samplers);
     glDeleteBuffers(1, &PixelBuffer);
+    glDeleteBuffers(1, &CaptureFrameBuffer);
 }
 
 void ComputeRenderer::DeleteShaders()
@@ -1163,15 +1166,10 @@ void ComputeRenderer::SetupAccelFrame()
 void ComputeRenderer::PrepareCaptureFrame()
 {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelBuffer);
-
-    // TODO: Reuse FBO
-    GLuint fbo;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, CaptureFrameBuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, LowResFramebuffer, 0);
     glReadPixels(0, 0, 256, 192, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, nullptr);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
 }
 
 void ComputeRenderer::SetOutputTexture(int buffer, u32 texture)
