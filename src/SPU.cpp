@@ -1072,11 +1072,16 @@ void SPU::InitOutput()
     blip_set_rates(BlipLeft, INTERNAL_SAMPLE_RATE * OutputSkew, OutputSampleRate);
     blip_set_rates(BlipRight, INTERNAL_SAMPLE_RATE * OutputSkew, OutputSampleRate);
 
+    // One frame of audio (1/60 s), rounded up to a power of two
     u32 needSamples = (u32) ceil(INTERNAL_SAMPLE_RATE / 60 / INTERNAL_SAMPLE_RATE * OutputSampleRate);
     u32 newBufferSize = 512;
     while (newBufferSize < needSamples)
         newBufferSize <<= 1;
-    newBufferSize <<= 1;
+    // Extra headroom for fast-forward with pitch preservation: the app drains this ring only
+    // once per audio callback (~48000/numFrames times per second, numFrames up to ~960), so at
+    // 8x speed production (8*48000) must fit between two drains. 8192 covers that worst case
+    // (384000 / (48000/960) = 7680) with margin. The app-side water marks scale with this size.
+    newBufferSize <<= 3;
 
     if (newBufferSize != OutputBufferSize)
     {
