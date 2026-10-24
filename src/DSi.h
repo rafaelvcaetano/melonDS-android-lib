@@ -191,6 +191,9 @@ private:
     bool FullBIOSBoot;
     void Set_SCFG_Clock9(u16 val);
     void Set_SCFG_MC(u32 val);
+
+    bool CheckIO9Access(u32 addr);
+    bool CheckIO7Access(u32 addr);
     void DecryptModcryptArea(u32 offset, u32 size, const u8* iv);
     void ApplyNewRAMSize(u32 size);
     void CheckDSiLoaderHack();

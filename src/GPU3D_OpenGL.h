@@ -85,6 +85,14 @@ private:
     int RenderSinglePolygon(int i) const;
     int RenderPolygonBatch(int i) const;
     int RenderPolygonEdgeBatch(int i) const;
+
+    // The edge marking pass in RenderSceneChunk() is commented out (see the
+    // "TODO BETTER EDGE MARKING" block), so RenderPolygonEdgeBatch() is never
+    // called and nothing ever reads the edge index list. Building and uploading
+    // that list every frame is therefore pure overhead. Both the build and the
+    // draw are gated on this one flag: flip it back to true in the same commit
+    // that restores the pass, so the two can never disagree.
+    static constexpr bool EdgeMarkingImplemented = false;
     void RenderSceneChunk(const GPU3D& gpu3d, int y, int h);
 
     enum

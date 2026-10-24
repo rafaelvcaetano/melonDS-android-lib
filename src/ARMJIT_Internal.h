@@ -70,6 +70,11 @@ struct FetchedInstr
     u16 CodeCycles;
     u32 DataRegion;
 
+    // only true if the literal's address was added to the block's address ranges.
+    // without it invalidation does not watch that address, so the value must not
+    // be folded into the compiled code.
+    bool LiteralRegistered;
+
     ARMInstrInfo::Info Info;
 };
 

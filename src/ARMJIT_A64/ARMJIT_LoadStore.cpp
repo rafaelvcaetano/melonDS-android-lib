@@ -112,7 +112,8 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
     if (size == 16)
         addressMask = ~1;
 
-    if (NDS.JIT.LiteralOptimizationsEnabled() && rn == 15 && rd != 15 && offset.IsImm && !(flags & (memop_Post|memop_Store|memop_Writeback)))
+    if (NDS.JIT.LiteralOptimizationsEnabled() && CurInstr.LiteralRegistered
+        && rn == 15 && rd != 15 && offset.IsImm && !(flags & (memop_Post|memop_Store|memop_Writeback)))
     {
         u32 addr = R15 + offset.Imm * ((flags & memop_SubtractOffset) ? -1 : 1);
         

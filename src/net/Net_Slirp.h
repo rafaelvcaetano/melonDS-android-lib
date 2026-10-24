@@ -26,6 +26,11 @@
 
 #include <libslirp.h>
 
+#include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
+
 #ifdef __WIN32__
     #include <ws2tcpip.h>
 #else
@@ -48,6 +53,15 @@ public:
 
     int SendPacket(u8* data, int len) noexcept override;
     void RecvCheck() noexcept override;
+
+    // Replaces the whole DNS override table (name -> IPv4 address, host byte order).
+    // Names are matched case-insensitively and without a trailing dot. Can be called
+    // from a different thread than the one driving the emulator, hence the mutex.
+    static void SetHostOverrides(std::vector<std::pair<std::string, u32>> overrides);
+
+    // Looks up `name` in the override table. On a hit, `addr` receives the IPv4
+    // address in host byte order and the function returns true.
+    static bool LookupHostOverride(const std::string& name, u32& addr);
 private:
     static constexpr int PollListMax = 64;
     static const SlirpCb cb;
@@ -62,6 +76,9 @@ private:
     FIFO<u32, (0x8000 >> 2)> RXBuffer {};
     u32 IPv4ID = 0;
     Slirp* Ctx = nullptr;
+
+    static std::mutex HostOverridesMutex;
+    static std::vector<std::pair<std::string, u32>> HostOverrides;
 };
 }
 #endif // NET_SLIRP_H

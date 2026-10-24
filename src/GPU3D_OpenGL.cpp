@@ -133,11 +133,9 @@ std::unique_ptr<GLRenderer> GLRenderer::New() noexcept
     if (!result->BuildRenderShader(RenderFlag_WBuffer, kRenderVS_W, kRenderFS_WO))
         return nullptr;
 
-    if (!result->BuildRenderShader(RenderFlag_Edge, kRenderVS_Z, kRenderFS_ZE))
-        return nullptr;
-
-    if (!result->BuildRenderShader(RenderFlag_Edge | RenderFlag_WBuffer, kRenderVS_W, kRenderFS_WE))
-        return nullptr;
+    // Edge-marking shaders (RenderFlag_Edge) are only used by the edge marking pass, which has been
+    // commented out since the index list it relied on was removed (769d61de). Leave those RenderShader
+    // slots at 0 (memset above); the cleanup loop already skips null entries.
 
     if (!result->BuildRenderShader(RenderFlag_Trans, kRenderVS_Z, kRenderFS_ZT))
         return nullptr;
@@ -682,17 +680,20 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
         rp->EdgeIndicesOffset = eidx;
         rp->NumEdgeIndices = 0;
 
-        u32 vidx_cur = vidx_first;
-        for (u32 j = 1; j < poly->NumVertices; j++)
+        if (EdgeMarkingImplemented)
         {
+            u32 vidx_cur = vidx_first;
+            for (u32 j = 1; j < poly->NumVertices; j++)
+            {
+                IndexBuffer[eidx++] = vidx_cur;
+                IndexBuffer[eidx++] = vidx_cur + 1;
+                vidx_cur++;
+                rp->NumEdgeIndices += 2;
+            }
             IndexBuffer[eidx++] = vidx_cur;
-            IndexBuffer[eidx++] = vidx_cur + 1;
-            vidx_cur++;
+            IndexBuffer[eidx++] = vidx_first;
             rp->NumEdgeIndices += 2;
         }
-        IndexBuffer[eidx++] = vidx_cur;
-        IndexBuffer[eidx++] = vidx_first;
-        rp->NumEdgeIndices += 2;
     }
 
     NumVertices = vidx;
@@ -800,7 +801,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 
     // if edge marking is enabled, mark all opaque edges
     // TODO BETTER EDGE MARKING!!! THIS SUCKS
-    /*if (RenderDispCnt & (1<<5))
+    /*if (EdgeMarkingImplemented && (RenderDispCnt & (1<<5)))
     {
         UseRenderShader(flags | RenderFlag_Edge);
         glLineWidth(1.5);
@@ -1303,7 +1304,8 @@ void GLRenderer::RenderFrame(GPU& gpu)
         // bind to access the index buffer
         glBindVertexArray(VertexArrayID);
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, NumIndices * 2, IndexBuffer);
-        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
+        if (NumEdgeIndices > 0)
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
 
         RenderSceneChunk(gpu.GPU3D, 0, 192);
     }

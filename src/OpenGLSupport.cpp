@@ -277,7 +277,9 @@ bool CompileComputeProgram(GLuint& result, const std::string& source, const std:
         {
         }
     }*/
-    Log(LogLevel::Error, "Shader %s from cache was rejected\n", name.c_str());
+    // Binary shader cache is disabled (commented out upstream in 043244a5; Load/SaveShaderCache have no
+    // callers), so this always runs and isn't really a "rejection" - just log the compile at debug level.
+    Log(LogLevel::Debug, "Compiling shader %s\n", name.c_str());
 
     GLuint shader;
     bool linkingSucess = false;

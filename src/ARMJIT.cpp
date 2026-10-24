@@ -603,6 +603,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         instrs[i].BranchFlags = 0;
         instrs[i].SetFlags = 0;
+        instrs[i].LiteralRegistered = false;
         instrs[i].Instr = nextInstr[0];
         nextInstr[0] = nextInstr[1];
 
@@ -710,7 +711,9 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             {
                 Log(LogLevel::Warn,"literal in non executable memory?\n");
             }
-            if (InvalidLiterals.Find(translatedAddr) == -1)
+            // Skip registering untranslatable literals (translatedAddr == 0): CodeMemRegions[0] is
+            // NULL and would be dereferenced below when patching the region for this address range.
+            if (translatedAddr && InvalidLiterals.Find(translatedAddr) == -1)
             {
                 u32 translatedAddrRounded = translatedAddr & ~0x1FF;
 
@@ -724,6 +727,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
                 JIT_DEBUGPRINT("literal loading %08x %08x %08x %08x\n", literalAddr, translatedAddr, addressMasks[j], addressRanges[j]);
                 cpu->DataRead32(literalAddr, &literalValues[numLiterals]);
                 literalLoadAddrs[numLiterals++] = translatedAddr;
+                instrs[i].LiteralRegistered = true;
             }
         }
         else if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_WriteMem)
@@ -940,7 +944,7 @@ void ARMJIT::InvalidateByAddr(u32 localAddr) noexcept
 
     AddressRange* region = CodeMemRegions[localAddr >> 27];
     AddressRange* range = &region[(localAddr & 0x7FFFFFF) / 512];
-    u32 mask = 1 << ((localAddr & 0x1FF) / 16);
+    u32 invalidationMask = 1 << ((localAddr & 0x1FF) / 16);
 
     range->Code = 0;
     for (int i = 0; i < range->Blocks.Length;)
@@ -954,7 +958,7 @@ void ARMJIT::InvalidateByAddr(u32 localAddr) noexcept
             if (block->AddressRanges()[j] == (localAddr & ~0x1FF))
             {
                 mask = block->AddressMasks()[j];
-                invalidated = block->AddressMasks()[j] & mask;
+                invalidated = block->AddressMasks()[j] & invalidationMask;
                 assert(mask);
                 break;
             }

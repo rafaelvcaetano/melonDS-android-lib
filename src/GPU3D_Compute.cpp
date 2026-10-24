@@ -332,6 +332,21 @@ void ComputeRenderer::SetRenderSettings(int scale, bool highResolutionCoordinate
 {
     u8 TileScale;
 
+    // Nothing below this point depends on anything but these two inputs: every other value is
+    // derived from ScaleFactor. Running it again when neither changed deletes and rebuilds all of
+    // the compute shaders and reallocates the tile/bin/framebuffer storage to produce an identical
+    // result -- observed on device as a full shader recompile triggered by video settings that have
+    // nothing to do with the 3D renderer. GLRenderer::SetRenderSettings guards itself the same way.
+    //
+    // ScaleFactor is initialised to -1 and never set back to it, so the first call always proceeds
+    // and a freshly constructed renderer (as created when the user switches renderers) still builds
+    // its shaders. It is also compared first so that HiresCoordinates, which only becomes
+    // meaningful once assigned below, is never the reason this returns early on that first call.
+    if (scale == ScaleFactor && highResolutionCoordinates == HiresCoordinates)
+        return;
+
+    // Idempotent for an unchanged scale (it early-outs on the same value), so skipping it above
+    // when neither input changed is not a missed update.
     CurGLCompositor.SetScaleFactor(scale);
 
     if (ScaleFactor != -1)

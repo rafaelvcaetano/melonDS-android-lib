@@ -226,7 +226,10 @@ private:
     int TilesPerLine, TileLines;
     int ScaleFactor = -1;
     int MaxWorkTiles;
-    bool HiresCoordinates;
+    // Assigned by SetRenderSettings before anything reads it, but it is also one half of that
+    // function's early-out test: an indeterminate bool there would be undefined behaviour the first
+    // time the comparison is reordered or the guard is copied elsewhere.
+    bool HiresCoordinates = false;
 
     GLCompositor CurGLCompositor;
 

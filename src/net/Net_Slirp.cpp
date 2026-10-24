@@ -25,6 +25,10 @@
 
 #include <libslirp.h>
 
+#include <algorithm>
+#include <cctype>
+#include <mutex>
+
 #ifdef __WIN32__
 	#include <ws2tcpip.h>
 #else
@@ -169,6 +173,47 @@ Net_Slirp::~Net_Slirp() noexcept
     }
 }
 
+std::mutex Net_Slirp::HostOverridesMutex {};
+std::vector<std::pair<std::string, u32>> Net_Slirp::HostOverrides {};
+
+// Normalizes a domain name for comparison: lowercased, with a single trailing
+// dot (if any) stripped, so "NAS.Kaeru.SGP." and "nas.kaeru.sgp" match.
+static std::string NormalizeHostName(const std::string& name)
+{
+    std::string out = name;
+    if (!out.empty() && out.back() == '.')
+        out.pop_back();
+    std::transform(out.begin(), out.end(), out.begin(),
+        [](unsigned char c) { return std::tolower(c); });
+    return out;
+}
+
+void Net_Slirp::SetHostOverrides(std::vector<std::pair<std::string, u32>> overrides)
+{
+    for (auto& entry : overrides)
+        entry.first = NormalizeHostName(entry.first);
+
+    std::lock_guard<std::mutex> lock(HostOverridesMutex);
+    HostOverrides = std::move(overrides);
+}
+
+bool Net_Slirp::LookupHostOverride(const std::string& name, u32& addr)
+{
+    std::string key = NormalizeHostName(name);
+
+    std::lock_guard<std::mutex> lock(HostOverridesMutex);
+    for (const auto& entry : HostOverrides)
+    {
+        if (entry.first == key)
+        {
+            addr = entry.second;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void FinishUDPFrame(u8* data, int len)
 {
     u8* ipheader = &data[0xE];
@@ -286,6 +331,7 @@ void Net_Slirp::HandleDNSFrame(u8* data, int len) noexcept
     memcpy(out, &dnsbody[12], qlen); out += qlen;
 
     curoffset = 12;
+    u16 actualAnswers = numquestions;
 	for (u16 i = 0; i < numquestions; i++)
 	{
 		// assemble the requested domain name
@@ -318,34 +364,61 @@ void Net_Slirp::HandleDNSFrame(u8* data, int len) noexcept
 		// get answer
 		struct addrinfo dns_hint;
 		struct addrinfo* dns_res;
-		u32 addr_res;
+		u32 addr_res = 0;
+		bool haveAnswer = true;
 
-		memset(&dns_hint, 0, sizeof(dns_hint));
-		dns_hint.ai_family = AF_INET; // TODO: other address types (INET6, etc)
-		if (getaddrinfo(domainname, "0", &dns_hint, &dns_res) == 0)
-        {
-            struct addrinfo* p = dns_res;
-            while (p)
-            {
-                struct sockaddr_in* addr = (struct sockaddr_in*)p->ai_addr;
-                addr_res = *(u32*)&addr->sin_addr;
+		u32 overrideAddr;
+		if (LookupHostOverride(domainname, overrideAddr))
+		{
+		    if (type == 1) // A
+		    {
+		        addr_res = htonl(overrideAddr);
+		        Log(LogLevel::Debug, "DNS override %s -> %d.%d.%d.%d\n", domainname,
+		            (overrideAddr >> 24) & 0xFF, (overrideAddr >> 16) & 0xFF,
+		            (overrideAddr >> 8) & 0xFF, overrideAddr & 0xFF);
+		    }
+		    else
+		    {
+		        // Overridden name but not an A query (eg. AAAA): answer with no
+		        // records for this question rather than a bogus 4-byte address.
+		        haveAnswer = false;
+		    }
+		}
+		else
+		{
+		    memset(&dns_hint, 0, sizeof(dns_hint));
+		    dns_hint.ai_family = AF_INET; // TODO: other address types (INET6, etc)
+		    if (getaddrinfo(domainname, "0", &dns_hint, &dns_res) == 0)
+	        {
+	            struct addrinfo* p = dns_res;
+	            while (p)
+	            {
+	                struct sockaddr_in* addr = (struct sockaddr_in*)p->ai_addr;
+	                addr_res = *(u32*)&addr->sin_addr;
 
-                printf(" -> %d.%d.%d.%d",
-                       addr_res & 0xFF, (addr_res >> 8) & 0xFF,
-                       (addr_res >> 16) & 0xFF, addr_res >> 24);
+	                printf(" -> %d.%d.%d.%d",
+	                       addr_res & 0xFF, (addr_res >> 8) & 0xFF,
+	                       (addr_res >> 16) & 0xFF, addr_res >> 24);
 
-                break;
-                p = p->ai_next;
-            }
-        }
-        else
-        {
-            printf(" shat itself :(");
-            addr_res = 0;
-        }
+	                break;
+	                p = p->ai_next;
+	            }
+	        }
+	        else
+	        {
+	            printf(" shat itself :(");
+	            addr_res = 0;
+	        }
+		}
 
 		printf("\n");
 		curoffset += 4;
+
+		if (!haveAnswer)
+		{
+		    actualAnswers--;
+		    continue;
+		}
 
 		// TODO: betterer support
 		// (under which conditions does the C00C marker work?)
@@ -356,6 +429,9 @@ void Net_Slirp::HandleDNSFrame(u8* data, int len) noexcept
 		*(u16*)out = htons(4); out += 2; // address length
 		*(u32*)out = addr_res; out += 4; // address
     }
+
+    if (actualAnswers != numquestions)
+        *(u16*)&resp_body[6] = htons(actualAnswers); // patch ANCOUNT for skipped (overridden non-A) answers
 
     u32 framelen = (u32)(out - &resp[0]);
     if (framelen & 1) { *out++ = 0; framelen++; }
