@@ -643,10 +643,16 @@ bool NANDMount::ImportFile(const char* path, const u8* data, size_t len)
 
         u32 nwrite;
         memcpy(buf, data + i, blocklen);
-        f_write(&file, buf, blocklen, &nwrite);
+        res = f_write(&file, buf, blocklen, &nwrite);
+        if (res != FR_OK || nwrite != blocklen)
+        {
+            f_close(&file);
+            return false;
+        }
     }
 
-    f_close(&file);
+    if (f_close(&file) != FR_OK)
+        return false;
     Log(LogLevel::Debug, "Imported file from memory to %s\n", path);
 
     return true;
@@ -680,12 +686,24 @@ bool NANDMount::ImportFile(const char* path, const char* in)
             blocklen = sizeof(buf);
 
         u32 nwrite;
-        FileRead(buf, blocklen, 1, fin);
-        f_write(&file, buf, blocklen, &nwrite);
+        if (FileRead(buf, blocklen, 1, fin) != 1)
+        {
+            CloseFile(fin);
+            f_close(&file);
+            return false;
+        }
+        res = f_write(&file, buf, blocklen, &nwrite);
+        if (res != FR_OK || nwrite != blocklen)
+        {
+            CloseFile(fin);
+            f_close(&file);
+            return false;
+        }
     }
 
     CloseFile(fin);
-    f_close(&file);
+    if (f_close(&file) != FR_OK)
+        return false;
 
     Log(LogLevel::Debug, "Imported file from %s to %s\n", in, path);
 
@@ -942,11 +960,9 @@ bool NANDMount::CreateTicket(const char* path, u32 titleid0, u32 titleid1, u8 ve
 
     Image->ESEncrypt(ticket, 0x2A4);
 
-    f_write(&file, ticket, 0x2C4, &nwrite);
-
-    f_close(&file);
-
-    return true;
+    res = f_write(&file, ticket, sizeof(ticket), &nwrite);
+    const FRESULT closeRes = f_close(&file);
+    return res == FR_OK && nwrite == sizeof(ticket) && closeRes == FR_OK;
 }
 
 bool NANDMount::CreateSaveFile(const char* path, u32 len)
@@ -1010,33 +1026,39 @@ bool NANDMount::CreateSaveFile(const char* path, u32 len)
 
     u8* data = new u8[len];
     memset(data, 0, len);
+    const auto write16 = [data](u32 offset, u16 value) {
+        data[offset] = value & 0xFF;
+        data[offset + 1] = value >> 8;
+    };
 
     // create FAT header
     data[0x000] = 0xE9;
     memcpy(&data[0x003], "MSWIN4.1", 8);
-    *(u16*)&data[0x00B] = sectorsize; // bytes per sector
+    write16(0x00B, sectorsize); // bytes per sector
     data[0x00D] = clustersize;
-    *(u16*)&data[0x00E] = 1; // reserved sectors
+    write16(0x00E, 1); // reserved sectors
     data[0x010] = 2; // num FATs
-    *(u16*)&data[0x011] = maxfiles;
-    *(u16*)&data[0x013] = totsec16;
+    write16(0x011, maxfiles);
+    write16(0x013, totsec16);
     data[0x015] = 0xF8;
-    *(u16*)&data[0x016] = fatsz16;
-    *(u16*)&data[0x018] = tracksize;
-    *(u16*)&data[0x01A] = headcount;
+    write16(0x016, fatsz16);
+    write16(0x018, tracksize);
+    write16(0x01A, headcount);
     data[0x024] = 0x05;
     data[0x026] = 0x29;
-    *(u32*)&data[0x027] = 0x12345678;
+    data[0x027] = 0x78;
+    data[0x028] = 0x56;
+    data[0x029] = 0x34;
+    data[0x02A] = 0x12;
     memcpy(&data[0x02B], "VOLUMELABEL", 11);
     memcpy(&data[0x036], "FAT12   ", 8);
-    *(u16*)&data[0x1FE] = 0xAA55;
+    write16(0x1FE, 0xAA55);
 
-    f_write(&file, data, len, &nwrite);
-
-    f_close(&file);
+    res = f_write(&file, data, len, &nwrite);
+    const FRESULT closeRes = f_close(&file);
     delete[] data;
 
-    return true;
+    return res == FR_OK && nwrite == len && closeRes == FR_OK;
 }
 
 bool NANDMount::InitTitleFileStructure(const NDSHeader& header, const DSi_TMD::TitleMetadata& tmd, bool readonly)
@@ -1095,9 +1117,10 @@ bool NANDMount::InitTitleFileStructure(const NDSHeader& header, const DSi_TMD::T
 
         u8 bannersav[0x4000];
         memset(bannersav, 0, sizeof(bannersav));
-        f_write(&file, bannersav, sizeof(bannersav), &nwrite);
-
-        f_close(&file);
+        res = f_write(&file, bannersav, sizeof(bannersav), &nwrite);
+        const FRESULT closeRes = f_close(&file);
+        if (res != FR_OK || nwrite != sizeof(bannersav) || closeRes != FR_OK)
+            return false;
     }
 
     // TMD
@@ -1110,9 +1133,10 @@ bool NANDMount::InitTitleFileStructure(const NDSHeader& header, const DSi_TMD::T
         return false;
     }
 
-    f_write(&file, &tmd, sizeof(DSi_TMD::TitleMetadata), &nwrite);
-
-    f_close(&file);
+    res = f_write(&file, &tmd, sizeof(tmd), &nwrite);
+    const FRESULT closeRes = f_close(&file);
+    if (res != FR_OK || nwrite != sizeof(tmd) || closeRes != FR_OK)
+        return false;
 
     if (readonly) f_chmod(fname, AM_RDO, AM_RDO);
 
@@ -1243,8 +1267,60 @@ bool NANDMount::ImportTitleData(u32 category, u32 titleid, int type, const char*
         return false;
     }
 
-    RemoveFile(fname);
-    return ImportFile(fname, file);
+    char staged[160], backup[160];
+    if (snprintf(staged, sizeof(staged), "%s.melonds-new", fname) >= sizeof(staged) ||
+        snprintf(backup, sizeof(backup), "%s.melonds-old", fname) >= sizeof(backup))
+        return false;
+
+    auto removeIfPresent = [](const char* path) {
+        FF_FILINFO info{};
+        const FRESULT status = f_stat(path, &info);
+        if (status == FR_NO_FILE) return true;
+        if (status != FR_OK || (info.fattrib & AM_DIR)) return false;
+        if ((info.fattrib & AM_RDO) && f_chmod(path, 0, AM_RDO) != FR_OK) return false;
+        return f_unlink(path) == FR_OK;
+    };
+
+    // Complete or roll back a replacement interrupted after moving the old save.
+    FF_FILINFO info{};
+    FRESULT current = f_stat(fname, &info);
+    const FRESULT old = f_stat(backup, &info);
+    if (old == FR_OK)
+    {
+        if (current == FR_NO_FILE)
+        {
+            if (f_rename(backup, fname) != FR_OK) return false;
+            current = FR_OK;
+        }
+        else if (current == FR_OK)
+        {
+            if (!removeIfPresent(backup)) return false;
+        }
+        else return false;
+    }
+    else if (old != FR_NO_FILE) return false;
+    if (current != FR_OK && current != FR_NO_FILE) return false;
+
+    if (!removeIfPresent(staged)) return false;
+    if (!ImportFile(staged, file))
+    {
+        removeIfPresent(staged);
+        return false;
+    }
+
+    if (current == FR_OK && f_rename(fname, backup) != FR_OK)
+    {
+        removeIfPresent(staged);
+        return false;
+    }
+    if (f_rename(staged, fname) != FR_OK)
+    {
+        if (current == FR_OK) f_rename(backup, fname);
+        removeIfPresent(staged);
+        return false;
+    }
+    if (current == FR_OK) removeIfPresent(backup);
+    return true;
 }
 
 bool NANDMount::ExportTitleData(u32 category, u32 titleid, int type, const char* file)
