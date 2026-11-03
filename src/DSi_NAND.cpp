@@ -1311,12 +1311,21 @@ bool NANDMount::ImportTitleData(u32 category, u32 titleid, int type, const char*
     if (current == FR_OK && f_rename(fname, backup) != FR_OK)
     {
         removeIfPresent(staged);
+        if (f_stat(fname, &info) == FR_NO_FILE && f_stat(backup, &info) == FR_OK)
+            f_rename(backup, fname);
         return false;
     }
     if (f_rename(staged, fname) != FR_OK)
     {
-        if (current == FR_OK) f_rename(backup, fname);
         removeIfPresent(staged);
+        if (current == FR_OK && f_stat(backup, &info) == FR_OK)
+        {
+            // A failed FatFs rename can still leave the destination entry visible.
+            const FRESULT destination = f_stat(fname, &info);
+            if (destination == FR_NO_FILE ||
+                (destination == FR_OK && removeIfPresent(fname)))
+                f_rename(backup, fname);
+        }
         return false;
     }
     if (current == FR_OK) removeIfPresent(backup);
