@@ -41,7 +41,11 @@ AREngine::AREngine(melonDS::NDS& nds) : NDS(nds)
 
 void AREngine::RunCheat(const ARCode& arcode)
 {
-    const u32* code = &arcode.Code[0];
+    if (arcode.Code.size() < 2)
+        return;
+
+    const u32* code = arcode.Code.data();
+    const u32* end = code + arcode.Code.size();
 
     u32 offset = 0;
     u32 datareg = 0;
@@ -58,14 +62,18 @@ void AREngine::RunCheat(const ARCode& arcode)
 
     for (;;)
     {
-        if (code > &arcode.Code[arcode.Code.size() - 1])
-            // If the instruction pointer is past the end of the cheat code...
+        if (end - code < 2)
+            // An instruction needs both its opcode and parameter.
             break;
 
         u32 a = *code++;
         u32 b = *code++;
 
         u8 op = a >> 24;
+
+        if ((op & 0xF0) == 0xE0 &&
+            ((static_cast<u64>(b) + 7) / 8) * 2 > static_cast<u64>(end - code))
+            return;
 
         if ((op < 0xD0 && op != 0xC5) || op > 0xD2)
         {
