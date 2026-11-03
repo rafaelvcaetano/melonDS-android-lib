@@ -261,6 +261,9 @@ int WifiAP::HandleManagementFrame(const u8* data, int len)
 
 int WifiAP::SendPacket(const u8* data, int len)
 {
+    if (len < 12 + 24)
+        return 0;
+
     if (data[9] != APChannel)
         return 0;
 
@@ -278,6 +281,10 @@ int WifiAP::SendPacket(const u8* data, int len)
 
     case 2: // data
         {
+            constexpr int MinDataLen = 12 + 24 + 8 + 4;
+            if (len < MinDataLen || len - MinDataLen > sizeof(LANBuffer) - 14)
+                return 0;
+
             if ((framectl & 0x0300) != 0x0100)
             {
                 Log(LogLevel::Error, "wifiAP: got data frame with bad fromDS/toDS bits %04X\n", framectl);
@@ -294,7 +301,7 @@ int WifiAP::SendPacket(const u8* data, int len)
                     return 0;
                 }
 
-                int lan_len = (len - 30 - 4) + 14;
+                int lan_len = len - MinDataLen + 14;
 
                 memcpy(&LANBuffer[0], &data[16], 6); // destination MAC
                 memcpy(&LANBuffer[6], &data[10], 6); // source MAC
