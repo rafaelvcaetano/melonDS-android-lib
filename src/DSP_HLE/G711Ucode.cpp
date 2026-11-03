@@ -43,7 +43,7 @@ bool G711Ucode::MemorySpanValid(u32 address, u32 byteLength, bool write) const
 
     for (u32 index = 0; index < 3; ++index)
     {
-        if (DSPHLEBounds::MappedSpanFits(
+        if (DSPHLEBounds::NWRAMSpanFits(
                 DSi.NWRAMStart[0][index], DSi.NWRAMEnd[0][index], address, byteLength))
             return true;
     }

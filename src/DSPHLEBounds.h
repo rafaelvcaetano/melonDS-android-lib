@@ -55,10 +55,14 @@ struct DSPHLEBounds
         return offset <= mask && byteLength <= static_cast<u64>(mask) + 1 - offset;
     }
 
-    static constexpr bool MappedSpanFits(u32 start, u32 end, u32 address, u32 byteLength)
+    static constexpr bool NWRAMSpanFits(u32 start, u32 end, u32 address, u32 byteLength)
     {
-        return start < end && address >= start && address < end &&
-            byteLength <= static_cast<u64>(end) - address;
+        constexpr u32 NWRAMStart = 0x03000000;
+        constexpr u32 NWRAMEnd = 0x04000000;
+        const u32 effectiveStart = start < NWRAMStart ? NWRAMStart : start;
+        const u32 effectiveEnd = end > NWRAMEnd ? NWRAMEnd : end;
+        return effectiveStart < effectiveEnd && address >= effectiveStart && address < effectiveEnd &&
+            byteLength <= static_cast<u64>(effectiveEnd) - address;
     }
 
     static constexpr bool ScalingValid(
