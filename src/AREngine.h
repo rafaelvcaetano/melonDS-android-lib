@@ -19,6 +19,7 @@
 #ifndef ARENGINE_H
 #define ARENGINE_H
 
+#include <cstddef>
 #include <vector>
 #include "ARCodeFile.h"
 #include "ARWorkBudget.h"
@@ -40,6 +41,7 @@ private:
     melonDS::NDS& NDS;
     u32 WorkBudgetFrame = UINT32_MAX;
     ARWorkBudget FrameWorkBudget;
+    std::size_t NextCheatIndex = 0;
 };
 
 }

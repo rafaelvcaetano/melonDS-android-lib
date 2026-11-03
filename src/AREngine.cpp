@@ -447,7 +447,11 @@ ARBudgetResult AREngine::RunCheat(const ARCode& arcode, ARWorkBudget& frameBudge
 
 void AREngine::RunCheats()
 {
-    if (Cheats.empty()) return;
+    if (Cheats.empty())
+    {
+        NextCheatIndex = 0;
+        return;
+    }
 
     if (WorkBudgetFrame != NDS.NumFrames)
     {
@@ -455,8 +459,15 @@ void AREngine::RunCheats()
         FrameWorkBudget = ARWorkBudget();
     }
 
-    for (ARCode& code : Cheats)
+    if (NextCheatIndex >= Cheats.size())
+        NextCheatIndex = 0;
+
+    const std::size_t firstCheat = NextCheatIndex;
+    bool deferred = false;
+    for (std::size_t visited = 0; visited < Cheats.size(); visited++)
     {
+        const std::size_t cheatIndex = (firstCheat + visited) % Cheats.size();
+        ARCode& code = Cheats[cheatIndex];
         if (!code.Enabled)
         {
             code.BudgetExceeded = false;
@@ -473,9 +484,14 @@ void AREngine::RunCheats()
         }
         else if (result == ARBudgetResult::FrameExhausted)
         {
+            NextCheatIndex = cheatIndex;
+            deferred = true;
             Log(LogLevel::Warn, "AR: deferred remaining cheats after exhausting the frame budget\n");
             break;
         }
     }
+
+    if (!deferred)
+        NextCheatIndex = 0;
 }
 }
