@@ -17,6 +17,7 @@
 */
 
 #include "SPI_Firmware.h"
+#include "FirmwareLayout.h"
 #include "SPI.h"
 #include "Platform.h"
 
@@ -202,6 +203,7 @@ u32 Firmware::FixFirmwareLength(u32 originalLength)
 
 Firmware::Firmware(int consoletype)
 {
+    Generated = true;
     FirmwareBufferLength = DEFAULT_FIRMWARE_LENGTH;
     FirmwareBuffer = new u8[FirmwareBufferLength];
     memset(FirmwareBuffer, 0xFF, FirmwareBufferLength);
@@ -244,20 +246,20 @@ Firmware::Firmware(int consoletype)
     }
 }
 
-Firmware::Firmware(Platform::FileHandle* file) : FirmwareBuffer(nullptr), FirmwareBufferLength(0), FirmwareMask(0)
+Firmware::Firmware(Platform::FileHandle* file) : FirmwareBuffer(nullptr), FirmwareBufferLength(0), FirmwareMask(0), Generated(false)
 {
     if (file)
     {
         u64 length = Platform::FileLength(file);
-        if (length > 0)
+        if (FirmwareLayout::IsSupportedLength(length))
         {
-            FirmwareBufferLength = FixFirmwareLength(length);
+            FirmwareBufferLength = static_cast<u32>(length);
             FirmwareBuffer = new u8[FirmwareBufferLength];
             FirmwareMask = FirmwareBufferLength - 1;
 
             memset(FirmwareBuffer, 0, FirmwareBufferLength);
             Platform::FileRewind(file);
-            if (!Platform::FileRead(FirmwareBuffer, length, 1, file))
+            if (!Platform::FileRead(FirmwareBuffer, FirmwareBufferLength, 1, file) || !IsLayoutValid())
             {
                 delete[] FirmwareBuffer;
                 FirmwareBuffer = nullptr;
@@ -270,7 +272,7 @@ Firmware::Firmware(Platform::FileHandle* file) : FirmwareBuffer(nullptr), Firmwa
     }
 }
 
-Firmware::Firmware(const u8* data, u32 length) : FirmwareBuffer(nullptr), FirmwareBufferLength(FixFirmwareLength(length))
+Firmware::Firmware(const u8* data, u32 length) : FirmwareBuffer(nullptr), FirmwareBufferLength(FixFirmwareLength(length)), FirmwareMask(0), Generated(false)
 {
     if (data)
     {
@@ -278,10 +280,17 @@ Firmware::Firmware(const u8* data, u32 length) : FirmwareBuffer(nullptr), Firmwa
         memset(FirmwareBuffer, 0, FirmwareBufferLength);
         memcpy(FirmwareBuffer, data, std::min(length, FirmwareBufferLength));
         FirmwareMask = FirmwareBufferLength - 1;
+        if (!IsLayoutValid())
+        {
+            delete[] FirmwareBuffer;
+            FirmwareBuffer = nullptr;
+            FirmwareBufferLength = 0;
+            FirmwareMask = 0;
+        }
     }
 }
 
-Firmware::Firmware(const Firmware& other) : FirmwareBuffer(nullptr), FirmwareBufferLength(other.FirmwareBufferLength)
+Firmware::Firmware(const Firmware& other) : FirmwareBuffer(nullptr), FirmwareBufferLength(other.FirmwareBufferLength), Generated(other.Generated)
 {
     FirmwareBuffer = new u8[FirmwareBufferLength];
     memcpy(FirmwareBuffer, other.FirmwareBuffer, FirmwareBufferLength);
@@ -293,9 +302,11 @@ Firmware::Firmware(Firmware&& other) noexcept
     FirmwareBuffer = other.FirmwareBuffer;
     FirmwareBufferLength = other.FirmwareBufferLength;
     FirmwareMask = other.FirmwareMask;
+    Generated = other.Generated;
     other.FirmwareBuffer = nullptr;
     other.FirmwareBufferLength = 0;
     other.FirmwareMask = 0;
+    other.Generated = false;
 }
 
 Firmware& Firmware::operator=(const Firmware& other)
@@ -307,6 +318,7 @@ Firmware& Firmware::operator=(const Firmware& other)
         FirmwareBuffer = new u8[other.FirmwareBufferLength];
         memcpy(FirmwareBuffer, other.FirmwareBuffer, other.FirmwareBufferLength);
         FirmwareMask = other.FirmwareMask;
+        Generated = other.Generated;
     }
 
     return *this;
@@ -320,9 +332,11 @@ Firmware& Firmware::operator=(Firmware&& other) noexcept
         FirmwareBuffer = other.FirmwareBuffer;
         FirmwareBufferLength = other.FirmwareBufferLength;
         FirmwareMask = other.FirmwareMask;
+        Generated = other.Generated;
         other.FirmwareBuffer = nullptr;
         other.FirmwareBufferLength = 0;
         other.FirmwareMask = 0;
+        other.Generated = false;
     }
 
     return *this;
@@ -337,8 +351,20 @@ bool Firmware::IsBootable() const
 {
     return
         FirmwareBufferLength != DEFAULT_FIRMWARE_LENGTH &&
-        GetHeader().Identifier != GENERATED_FIRMWARE_IDENTIFIER
+        !Generated
     ;
+}
+
+bool Firmware::IsLayoutValid() const
+{
+    if (!FirmwareBuffer || FirmwareBufferLength < sizeof(FirmwareHeader))
+        return false;
+    const FirmwareHeader& header = GetHeader();
+    return FirmwareLayout::Validate(
+        FirmwareBufferLength,
+        static_cast<u32>(header.UserSettingsOffset) << 3,
+        header.ConsoleType == FirmwareConsoleType::DSi,
+        header.WifiConfigLength);
 }
 
 const Firmware::UserData& Firmware::GetEffectiveUserData() const {
@@ -387,8 +413,9 @@ Firmware::UserData& Firmware::GetEffectiveUserData() {
     }
 }
 
-void Firmware::UpdateChecksums()
+bool Firmware::UpdateChecksums()
 {
+    if (!IsLayoutValid()) return false;
     GetHeader().UpdateChecksum();
 
     for (auto& ap : GetAccessPoints())
@@ -408,6 +435,7 @@ void Firmware::UpdateChecksums()
     {
         u.UpdateChecksum();
     }
+    return true;
 }
 
 }

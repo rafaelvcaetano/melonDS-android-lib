@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cctype>
 #include <mutex>
+#include <memory>
 
 #ifdef __WIN32__
 	#include <ws2tcpip.h>
@@ -154,12 +155,13 @@ Net_Slirp::Net_Slirp(const Platform::SendPacketCallback& callback) noexcept : Ca
     cfg.version = 1;
 
     cfg.in_enabled = true;
-    *(u32*)&cfg.vnetwork = htonl(kSubnet);
-    *(u32*)&cfg.vnetmask = htonl(0xFFFFFF00);
-    *(u32*)&cfg.vhost = htonl(kServerIP);
+    cfg.vnetwork.s_addr = htonl(kSubnet);
+    cfg.vnetmask.s_addr = htonl(0xFFFFFF00);
+    cfg.vhost.s_addr = htonl(kServerIP);
     cfg.vhostname = "melonServer";
-    *(u32*)&cfg.vdhcp_start = htonl(kClientIP);
-    *(u32*)&cfg.vnameserver = htonl(kDNSIP);
+    cfg.vdhcp_start.s_addr = htonl(kClientIP);
+    cfg.vnameserver.s_addr = htonl(kDNSIP);
+    cfg.disable_host_loopback = true;
 
     Ctx = slirp_new(&cfg, &cb, this);
 }
@@ -214,60 +216,126 @@ bool Net_Slirp::LookupHostOverride(const std::string& name, u32& addr)
     return false;
 }
 
+static u16 ReadBE16(const u8* source)
+{
+    u16 value;
+    memcpy(&value, source, sizeof(value));
+    return ntohs(value);
+}
+
+static u32 ReadBE32(const u8* source)
+{
+    u32 value;
+    memcpy(&value, source, sizeof(value));
+    return ntohl(value);
+}
+
+static void StoreBE16(u8* destination, u16 value)
+{
+    value = htons(value);
+    memcpy(destination, &value, sizeof(value));
+}
+
+static void StoreBE32(u8* destination, u32 value)
+{
+    value = htonl(value);
+    memcpy(destination, &value, sizeof(value));
+}
+
+static void StoreNetwork32(u8* destination, u32 value)
+{
+    memcpy(destination, &value, sizeof(value));
+}
+
+static void AppendBE16(u8*& destination, u16 value)
+{
+    StoreBE16(destination, value);
+    destination += sizeof(value);
+}
+
+static void AppendBE32(u8*& destination, u32 value)
+{
+    StoreBE32(destination, value);
+    destination += sizeof(value);
+}
+
+static void AppendNetwork32(u8*& destination, u32 value)
+{
+    StoreNetwork32(destination, value);
+    destination += sizeof(value);
+}
+
 void FinishUDPFrame(u8* data, int len)
 {
     u8* ipheader = &data[0xE];
     u8* udpheader = &data[0x22];
 
     // lengths
-    *(u16*)&ipheader[2] = htons(len - 0xE);
-    *(u16*)&udpheader[4] = htons(len - (0xE + 0x14));
+    StoreBE16(&ipheader[2], len - 0xE);
+    StoreBE16(&udpheader[4], len - (0xE + 0x14));
 
     // IP checksum
     u32 tmp = 0;
 
     for (int i = 0; i < 20; i += 2)
-        tmp += ntohs(*(u16*)&ipheader[i]);
+        tmp += ReadBE16(&ipheader[i]);
     while (tmp >> 16)
         tmp = (tmp & 0xFFFF) + (tmp >> 16);
     tmp ^= 0xFFFF;
-    *(u16*)&ipheader[10] = htons(tmp);
+    StoreBE16(&ipheader[10], tmp);
 
     // UDP checksum
     // (note: normally not mandatory, but some older sgIP versions require it)
     tmp = 0;
-    tmp += ntohs(*(u16*)&ipheader[12]);
-    tmp += ntohs(*(u16*)&ipheader[14]);
-    tmp += ntohs(*(u16*)&ipheader[16]);
-    tmp += ntohs(*(u16*)&ipheader[18]);
-    tmp += ntohs(0x1100);
+    tmp += ReadBE16(&ipheader[12]);
+    tmp += ReadBE16(&ipheader[14]);
+    tmp += ReadBE16(&ipheader[16]);
+    tmp += ReadBE16(&ipheader[18]);
+    tmp += 0x11;
     tmp += (len-0x22);
     for (u8* i = udpheader; i < &udpheader[len-0x23]; i += 2)
-        tmp += ntohs(*(u16*)i);
+        tmp += ReadBE16(i);
     if (len & 1)
-        tmp += ntohs((u_short)udpheader[len-0x23]);
+        tmp += static_cast<u16>(udpheader[len-0x23]) << 8;
     while (tmp >> 16)
         tmp = (tmp & 0xFFFF) + (tmp >> 16);
     tmp ^= 0xFFFF;
     if (tmp == 0) tmp = 0xFFFF;
-    *(u16*)&udpheader[6] = htons(tmp);
+    StoreBE16(&udpheader[6], tmp);
 }
 
 void Net_Slirp::HandleDNSFrame(u8* data, int len) noexcept
 {
-    u8* ipheader = &data[0xE];
-    u8* udpheader = &data[0x22];
-    u8* dnsbody = &data[0x2A];
+    if (!data || len < 14 + 20 + 8 + 12) return;
 
-    u32 srcip = ntohl(*(u32*)&ipheader[12]);
-    u16 srcport = ntohs(*(u16*)&udpheader[0]);
+    u8* ipheader = &data[14];
+    const u32 ipHeaderLength = (ipheader[0] & 0x0F) * 4;
+    if ((ipheader[0] >> 4) != 4 || ipHeaderLength < 20 ||
+        ipHeaderLength > static_cast<u32>(len - 14)) return;
 
-    u16 id = ntohs(*(u16*)&dnsbody[0]);
-    u16 flags = ntohs(*(u16*)&dnsbody[2]);
-    u16 numquestions = ntohs(*(u16*)&dnsbody[4]);
-    u16 numanswers = ntohs(*(u16*)&dnsbody[6]);
-    u16 numauth = ntohs(*(u16*)&dnsbody[8]);
-    u16 numadd = ntohs(*(u16*)&dnsbody[10]);
+    u16 ipLength;
+    memcpy(&ipLength, &ipheader[2], sizeof(ipLength));
+    ipLength = ntohs(ipLength);
+    if (ipLength < ipHeaderLength + 8 || ipLength > static_cast<u32>(len - 14)) return;
+
+    u8* udpheader = ipheader + ipHeaderLength;
+    u16 udpLength;
+    memcpy(&udpLength, &udpheader[4], sizeof(udpLength));
+    udpLength = ntohs(udpLength);
+    if (udpLength < 8 + 12 || udpLength > ipLength - ipHeaderLength) return;
+
+    u8* dnsbody = udpheader + 8;
+    const u32 dnsLength = udpLength - 8;
+
+    u32 srcip = ReadBE32(&ipheader[12]);
+    u16 srcport = ReadBE16(&udpheader[0]);
+
+    u16 id = ReadBE16(&dnsbody[0]);
+    u16 flags = ReadBE16(&dnsbody[2]);
+    u16 numquestions = ReadBE16(&dnsbody[4]);
+    u16 numanswers = ReadBE16(&dnsbody[6]);
+    u16 numauth = ReadBE16(&dnsbody[8]);
+    u16 numadd = ReadBE16(&dnsbody[10]);
 
     Log(LogLevel::Debug, "DNS: ID=%04X, flags=%04X, Q=%d, A=%d, auth=%d, add=%d\n",
            id, flags, numquestions, numanswers, numauth, numadd);
@@ -282,93 +350,82 @@ void Net_Slirp::HandleDNSFrame(u8* data, int len) noexcept
     // ethernet
     memcpy(out, &data[6], 6); out += 6;
     memcpy(out, kServerMAC, 6); out += 6;
-    *(u16*)out = htons(0x0800); out += 2;
+    AppendBE16(out, 0x0800);
 
     // IP
     u8* resp_ipheader = out;
     *out++ = 0x45;
     *out++ = 0x00;
-    *(u16*)out = 0; out += 2; // total length
-    *(u16*)out = htons(IPv4ID); out += 2; IPv4ID++;
+    AppendBE16(out, 0); // total length
+    AppendBE16(out, IPv4ID); IPv4ID++;
     *out++ = 0x00;
     *out++ = 0x00;
     *out++ = 0x80; // TTL
     *out++ = 0x11; // protocol (UDP)
-    *(u16*)out = 0; out += 2; // checksum
-    *(u32*)out = htonl(kDNSIP); out += 4; // source IP
-    *(u32*)out = htonl(srcip); out += 4; // destination IP
+    AppendBE16(out, 0); // checksum
+    AppendBE32(out, kDNSIP); // source IP
+    AppendBE32(out, srcip); // destination IP
 
     // UDP
     u8* resp_udpheader = out;
-    *(u16*)out = htons(53); out += 2; // source port
-    *(u16*)out = htons(srcport); out += 2; // destination port
-    *(u16*)out = 0; out += 2; // length
-    *(u16*)out = 0; out += 2; // checksum
+    AppendBE16(out, 53); // source port
+    AppendBE16(out, srcport); // destination port
+    AppendBE16(out, 0); // length
+    AppendBE16(out, 0); // checksum
 
     // DNS
     u8* resp_body = out;
-    *(u16*)out = htons(id); out += 2; // ID
-    *(u16*)out = htons(0x8000); out += 2; // flags
-    *(u16*)out = htons(numquestions); out += 2; // num questions
-    *(u16*)out = htons(numquestions); out += 2; // num answers
-    *(u16*)out = 0; out += 2; // num authority
-    *(u16*)out = 0; out += 2; // num additional
+    AppendBE16(out, id); // ID
+    AppendBE16(out, 0x8000); // flags
+    AppendBE16(out, numquestions); // num questions
+    AppendBE16(out, numquestions); // num answers
+    AppendBE16(out, 0); // num authority
+    AppendBE16(out, 0); // num additional
 
     u32 curoffset = 12;
-    for (u16 i = 0; i < numquestions; i++)
+    char domainname[256] = {};
+    u32 domainOffset = 0;
+    while (true)
     {
-        if (curoffset >= (len-0x2A)) return;
+        if (curoffset >= dnsLength) return;
+        const u8 labelLength = dnsbody[curoffset++];
+        if (labelLength == 0) break;
+        const u32 separatorLength = domainOffset ? 1U : 0U;
+        if ((labelLength & 0xC0) != 0 || labelLength > 63 ||
+            labelLength > dnsLength - curoffset || domainOffset > 255 ||
+            separatorLength + labelLength > 255 - domainOffset) return;
 
-        u8 bitlength = 0;
-        while ((bitlength = dnsbody[curoffset++]) != 0)
-            curoffset += bitlength;
-
-        curoffset += 4;
+        if (domainOffset) domainname[domainOffset++] = '.';
+        memcpy(&domainname[domainOffset], &dnsbody[curoffset], labelLength);
+        domainOffset += labelLength;
+        curoffset += labelLength;
     }
+    domainname[domainOffset] = '\0';
+    if (dnsLength - curoffset < 4) return;
 
-    u32 qlen = curoffset-12;
+    u16 type;
+    u16 cls;
+    memcpy(&type, &dnsbody[curoffset], sizeof(type));
+    memcpy(&cls, &dnsbody[curoffset + 2], sizeof(cls));
+    type = ntohs(type);
+    cls = ntohs(cls);
+    curoffset += 4;
+
+    u32 qlen = curoffset - 12;
     if (qlen > 512) return;
     memcpy(out, &dnsbody[12], qlen); out += qlen;
 
-    curoffset = 12;
     u16 actualAnswers = numquestions;
-	for (u16 i = 0; i < numquestions; i++)
-	{
-		// assemble the requested domain name
-		u8 bitlength = 0;
-		char domainname[256] = ""; int o = 0;
-		while ((bitlength = dnsbody[curoffset++]) != 0)
-		{
-		    if ((o+bitlength) >= 255)
-            {
-                // welp. atleast try not to explode.
-                domainname[o++] = '\0';
-                break;
-            }
-
-			strncpy(&domainname[o], (const char *)&dnsbody[curoffset], bitlength);
-			o += bitlength;
-
-			curoffset += bitlength;
-			if (dnsbody[curoffset] != 0)
-				domainname[o++] = '.';
-            else
-                domainname[o++] = '\0';
-		}
-
-		u16 type = ntohs(*(u16*)&dnsbody[curoffset]);
-		u16 cls = ntohs(*(u16*)&dnsbody[curoffset+2]);
-
-		printf("- q%d: %04X %04X %s", i, type, cls, domainname);
+	printf("- q0: %04X %04X %s", type, cls, domainname);
 
 		// get answer
 		struct addrinfo dns_hint;
-		struct addrinfo* dns_res;
+		struct addrinfo* dns_res = nullptr;
 		u32 addr_res = 0;
-		bool haveAnswer = true;
+		bool haveAnswer = (type == 1 && cls == 1);
 
 		u32 overrideAddr;
-		if (LookupHostOverride(domainname, overrideAddr))
+		if (haveAnswer && LookupHostOverride(domainname, overrideAddr))
 		{
 		    if (type == 1) // A
 		    {
@@ -384,54 +441,53 @@ void Net_Slirp::HandleDNSFrame(u8* data, int len) noexcept
 		        haveAnswer = false;
 		    }
 		}
-		else
+		else if (haveAnswer)
 		{
 		    memset(&dns_hint, 0, sizeof(dns_hint));
 		    dns_hint.ai_family = AF_INET; // TODO: other address types (INET6, etc)
 		    if (getaddrinfo(domainname, "0", &dns_hint, &dns_res) == 0)
 	        {
+	            std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> dnsOwner(dns_res, freeaddrinfo);
 	            struct addrinfo* p = dns_res;
-	            while (p)
+	            if (p && p->ai_addr && p->ai_addrlen >= sizeof(sockaddr_in))
 	            {
-	                struct sockaddr_in* addr = (struct sockaddr_in*)p->ai_addr;
-	                addr_res = *(u32*)&addr->sin_addr;
+                struct sockaddr_in* addr = (struct sockaddr_in*)p->ai_addr;
+                memcpy(&addr_res, &addr->sin_addr, sizeof(addr_res));
 
 	                printf(" -> %d.%d.%d.%d",
 	                       addr_res & 0xFF, (addr_res >> 8) & 0xFF,
 	                       (addr_res >> 16) & 0xFF, addr_res >> 24);
-
-	                break;
-	                p = p->ai_next;
 	            }
+	            else haveAnswer = false;
 	        }
 	        else
 	        {
 	            printf(" shat itself :(");
-	            addr_res = 0;
+	            haveAnswer = false;
 	        }
 		}
 
 		printf("\n");
-		curoffset += 4;
 
 		if (!haveAnswer)
 		{
 		    actualAnswers--;
-		    continue;
+		}
+		else
+		{
+
+		    // TODO: betterer support
+		    // (under which conditions does the C00C marker work?)
+            AppendBE16(out, 0xC00C);
+            AppendBE16(out, type);
+            AppendBE16(out, cls);
+            AppendBE32(out, 3600); // TTL (hardcoded for now)
+            AppendBE16(out, 4); // address length
+            AppendNetwork32(out, addr_res); // address
 		}
 
-		// TODO: betterer support
-		// (under which conditions does the C00C marker work?)
-		*(u16*)out = htons(0xC00C); out += 2;
-		*(u16*)out = htons(type); out += 2;
-		*(u16*)out = htons(cls); out += 2;
-		*(u32*)out = htonl(3600); out += 4; // TTL (hardcoded for now)
-		*(u16*)out = htons(4); out += 2; // address length
-		*(u32*)out = addr_res; out += 4; // address
-    }
-
     if (actualAnswers != numquestions)
-        *(u16*)&resp_body[6] = htons(actualAnswers); // patch ANCOUNT for skipped (overridden non-A) answers
+        StoreBE16(&resp_body[6], actualAnswers); // patch ANCOUNT for skipped (overridden non-A) answers
 
     u32 framelen = (u32)(out - &resp[0]);
     if (framelen & 1) { *out++ = 0; framelen++; }
@@ -443,7 +499,7 @@ void Net_Slirp::HandleDNSFrame(u8* data, int len) noexcept
 
 int Net_Slirp::SendPacket(u8* data, int len) noexcept
 {
-    if (!Ctx) return 0;
+    if (!Ctx || !data || len < 14) return 0;
 
     if (len > 2048)
     {
@@ -451,20 +507,76 @@ int Net_Slirp::SendPacket(u8* data, int len) noexcept
         return 0;
     }
 
-    u16 ethertype = ntohs(*(u16*)&data[0xC]);
+    u16 ethertype;
+    memcpy(&ethertype, &data[0xC], sizeof(ethertype));
+    ethertype = ntohs(ethertype);
 
     if (ethertype == 0x800)
     {
-        u8 protocol = data[0x17];
-        if (protocol == 0x11) // UDP
+        if (len < 14 + 20) return 0;
+        const u8* ipheader = &data[14];
+        const u32 ipHeaderLength = (ipheader[0] & 0x0F) * 4;
+        if ((ipheader[0] >> 4) != 4 || ipHeaderLength < 20 ||
+            ipHeaderLength > static_cast<u32>(len - 14)) return 0;
+
+        u16 ipLength;
+        memcpy(&ipLength, &ipheader[2], sizeof(ipLength));
+        ipLength = ntohs(ipLength);
+        if (ipLength < ipHeaderLength || ipLength > static_cast<u32>(len - 14)) return 0;
+
+        u16 fragmentField;
+        memcpy(&fragmentField, &ipheader[6], sizeof(fragmentField));
+        fragmentField = ntohs(fragmentField);
+        const bool fragmented = (fragmentField & 0x3FFF) != 0;
+
+        u8 protocol = ipheader[9];
+        if (protocol == 0x11 && !fragmented) // complete UDP datagram
         {
-            u16 dstport = ntohs(*(u16*)&data[0x24]);
-            if (dstport == 53 && htonl(*(u32*)&data[0x1E]) == kDNSIP) // DNS
+            if (ipLength < ipHeaderLength + 8) return 0;
+            const u8* udpheader = ipheader + ipHeaderLength;
+            u16 udpLength;
+            u16 dstport;
+            memcpy(&udpLength, &udpheader[4], sizeof(udpLength));
+            memcpy(&dstport, &udpheader[2], sizeof(dstport));
+            udpLength = ntohs(udpLength);
+            dstport = ntohs(dstport);
+            if (udpLength < 8 || udpLength > ipLength - ipHeaderLength) return 0;
+
+            u32 destination;
+            memcpy(&destination, &ipheader[16], sizeof(destination));
+            destination = ntohl(destination);
+            if (dstport == 53 && destination == kDNSIP) // DNS
             {
                 HandleDNSFrame(data, len);
                 return len;
             }
         }
+
+        u32 destination;
+        memcpy(&destination, &ipheader[16], sizeof(destination));
+        destination = ntohl(destination);
+        const bool privateDestination =
+            (destination >> 24) == 0 ||
+            (destination >> 24) == 10 ||
+            (destination >= 0x64400000 && destination <= 0x647FFFFF) ||
+            (destination >> 24) == 127 ||
+            (destination >= 0xA9FE0000 && destination <= 0xA9FEFFFF) ||
+            (destination >= 0xAC100000 && destination <= 0xAC1FFFFF) ||
+            (destination >= 0xC0A80000 && destination <= 0xC0A8FFFF) ||
+            (destination >= 0xC6120000 && destination <= 0xC613FFFF) ||
+            destination >= 0xE0000000;
+        const bool dhcpBroadcast = protocol == 0x11 && destination == 0xFFFFFFFF;
+        if (privateDestination && !dhcpBroadcast) return len;
+    }
+    else if (ethertype == 0x86DD)
+    {
+        if (len < 14 + 40) return 0;
+        const u8* destination = &data[14 + 24];
+        const bool unspecified = std::all_of(destination, destination + 16, [](u8 b) { return b == 0; });
+        const bool loopback = std::all_of(destination, destination + 15, [](u8 b) { return b == 0; }) && destination[15] == 1;
+        const bool uniqueLocal = (destination[0] & 0xFE) == 0xFC;
+        const bool linkLocal = destination[0] == 0xFE && (destination[1] & 0xC0) == 0x80;
+        if (unspecified || loopback || uniqueLocal || linkLocal) return len;
     }
 
     slirp_input(Ctx, data, len);

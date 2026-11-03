@@ -24,6 +24,8 @@
 #include "CRC32.h"
 #include "Platform.h"
 #include "Utils.h"
+#include "CartridgeImageBounds.h"
+#include "GBAFlashBounds.h"
 
 namespace melonDS
 {
@@ -139,14 +141,15 @@ void CartGame::DoSavestate(Savestate* file)
     file->Var16(&GPIO.data);
     file->Var16(&GPIO.direction);
 
-    u32 oldlen = SRAMLength;
+    u32 serializedLength = SRAMLength;
+    file->Var32(&serializedLength);
 
-    file->Var32(&SRAMLength);
-
-    if (SRAMLength != oldlen)
+    if (!file->Saving && serializedLength != SRAMLength)
     {
-        // reallocate save memory
-        SRAM = SRAMLength ? std::make_unique<u8[]>(SRAMLength) : nullptr;
+        Platform::Log(Platform::LogLevel::Error,
+            "savestate: GBA SRAM length mismatch %u != %u\n", serializedLength, SRAMLength);
+        file->Error = true;
+        return;
     }
     if (SRAMLength)
     {
@@ -167,6 +170,13 @@ void CartGame::DoSavestate(Savestate* file)
     file->Var8(&SRAMFlashState.device);
     file->Var8(&SRAMFlashState.manufacturer);
     file->Var8(&SRAMFlashState.state);
+
+    if (!file->Saving && (SRAMType == S_FLASH512K || SRAMType == S_FLASH1M) &&
+        !GBAFlashBounds::BankFits(SRAMFlashState.bank, SRAMLength))
+    {
+        file->Error = true;
+        return;
+    }
 
     file->Var8((u8*)&SRAMType);
 
@@ -350,7 +360,8 @@ u8 CartGame::SRAMRead_FLASH(u32 addr)
 {
     if (SRAMFlashState.cmd == 0) // no cmd
     {
-        return *(u8*)&SRAM[addr + 0x10000 * SRAMFlashState.bank];
+        const u32 offset = GBAFlashBounds::ByteOffset(SRAMFlashState.bank, addr, SRAMLength);
+        return offset == GBAFlashBounds::InvalidOffset ? 0xFF : SRAM[offset];
     }
 
     switch (SRAMFlashState.cmd)
@@ -401,7 +412,8 @@ void CartGame::SRAMWrite_FLASH(u32 addr, u8 val)
                 if (SRAMFlashState.cmd == 0xB0)
                 {
                     // bank switching
-                    SRAMFlashState.bank = val;
+                    if (GBAFlashBounds::BankFits(val, SRAMLength))
+                        SRAMFlashState.bank = val;
                     SRAMFlashState.cmd = 0;
                     return;
                 }
@@ -460,10 +472,14 @@ void CartGame::SRAMWrite_FLASH(u32 addr, u8 val)
         case 0x82:
             if (val == 0x30)
             {
-                u32 start_addr = addr + 0x10000 * SRAMFlashState.bank;
-                memset((u8*)&SRAM[start_addr], 0xFF, 0x1000);
-
-                Platform::WriteGBASave(SRAM.get(), SRAMLength, start_addr, 0x1000, UserData);
+                const u32 start_addr = GBAFlashBounds::SectorOffset(
+                    SRAMFlashState.bank, addr, SRAMLength);
+                if (start_addr != GBAFlashBounds::InvalidOffset)
+                {
+                    memset(&SRAM[start_addr], 0xFF, GBAFlashBounds::SectorSize);
+                    Platform::WriteGBASave(SRAM.get(), SRAMLength, start_addr,
+                        GBAFlashBounds::SectorSize, UserData);
+                }
             }
             SRAMFlashState.state = 0;
             SRAMFlashState.cmd = 0;
@@ -495,7 +511,9 @@ void CartGame::SRAMWrite_FLASH(u32 addr, u8 val)
 
     if (SRAMFlashState.cmd == 0xA0) // write
     {
-        SRAMWrite_SRAM(addr + 0x10000 * SRAMFlashState.bank, val);
+        const u32 offset = GBAFlashBounds::ByteOffset(SRAMFlashState.bank, addr, SRAMLength);
+        if (offset != GBAFlashBounds::InvalidOffset)
+            SRAMWrite_SRAM(offset, val);
         SRAMFlashState.state = 0;
         SRAMFlashState.cmd = 0;
         return;
@@ -862,13 +880,18 @@ std::unique_ptr<CartCommon> ParseROM(std::unique_ptr<u8[]>&& romdata, u32 romlen
         return nullptr;
     }
 
-    if (romlen == 0)
+    if (!CartridgeImageBounds::IsGBALengthSupported(romlen))
     {
-        Log(LogLevel::Error, "GBACart: romlen is zero\n");
+        Log(LogLevel::Error, "GBACart: unsupported ROM length %u\n", romlen);
         return nullptr;
     }
 
     auto [cartrom, cartromsize] = PadToPowerOf2(std::move(romdata), romlen);
+    if (!cartrom)
+    {
+        Log(LogLevel::Error, "GBACart: failed to allocate padded ROM\n");
+        return nullptr;
+    }
 
     char gamecode[5] = { '\0' };
     memcpy(&gamecode, cartrom.get() + 0xAC, 4);

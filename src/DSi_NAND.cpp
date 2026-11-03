@@ -22,6 +22,8 @@
 #include "DSi.h"
 #include "DSi_AES.h"
 #include "DSi_NAND.h"
+#include "DSiSaveGeometry.h"
+#include "DSiContentValidation.h"
 #include "FATIO.h"
 #include "Platform.h"
 
@@ -896,11 +898,14 @@ bool NANDMount::TitleExists(u32 category, u32 titleid)
     return (res == FR_OK);
 }
 
-void NANDMount::GetTitleInfo(u32 category, u32 titleid, u32& version, NDSHeader* header, NDSBanner* banner)
+bool NANDMount::GetTitleInfo(u32 category, u32 titleid, u32& version, NDSHeader* header, NDSBanner* banner)
 {
+    if (!header) return false;
+    memset(header, 0, sizeof(*header));
+    if (banner) memset(banner, 0, sizeof(*banner));
     version = GetTitleVersion(category, titleid);
     if (version == 0xFFFFFFFF)
-        return;
+        return false;
 
     FRESULT res;
 
@@ -909,26 +914,37 @@ void NANDMount::GetTitleInfo(u32 category, u32 titleid, u32& version, NDSHeader*
     FF_FIL file;
     res = f_open(&file, path, FA_OPEN_EXISTING | FA_READ);
     if (res != FR_OK)
-        return;
+        return false;
 
     u32 nread;
-    f_read(&file, header, sizeof(NDSHeader), &nread);
+    res = f_read(&file, header, sizeof(NDSHeader), &nread);
+    if (res != FR_OK || nread != sizeof(NDSHeader))
+    {
+        f_close(&file);
+        memset(header, 0, sizeof(*header));
+        return false;
+    }
 
     if (banner)
     {
         u32 banneraddr = header->BannerOffset;
-        if (!banneraddr)
+        if (banneraddr)
         {
-            memset(banner, 0, sizeof(NDSBanner));
-        }
-        else
-        {
-            f_lseek(&file, banneraddr);
-            f_read(&file, banner, sizeof(NDSBanner), &nread);
+            const FSIZE_t fileSize = f_size(&file);
+            if (banneraddr > fileSize || sizeof(NDSBanner) > fileSize - banneraddr ||
+                f_lseek(&file, banneraddr) != FR_OK ||
+                f_read(&file, banner, sizeof(NDSBanner), &nread) != FR_OK ||
+                nread != sizeof(NDSBanner))
+            {
+                f_close(&file);
+                memset(header, 0, sizeof(*header));
+                memset(banner, 0, sizeof(*banner));
+                return false;
+            }
         }
     }
 
-    f_close(&file);
+    return f_close(&file) == FR_OK;
 }
 
 
@@ -968,50 +984,9 @@ bool NANDMount::CreateTicket(const char* path, u32 titleid0, u32 titleid1, u8 ve
 bool NANDMount::CreateSaveFile(const char* path, u32 len)
 {
     if (len == 0) return true;
-    if (len < 0x200) return false;
-    if (len > 0x8000000) return false;
-
-    u32 clustersize, maxfiles, totsec16, fatsz16;
-
-    // CHECKME!
-    // code inspired from https://github.com/Epicpkmn11/NTM/blob/master/arm9/src/sav.c
-    const u16 sectorsize = 0x200;
-
-    // fit maximum sectors for the size
-    const u16 maxsectors = len / sectorsize;
-    u16 tracksize = 1;
-    u16 headcount = 1;
-    u16 totsec16next = 0;
-    while (totsec16next <= maxsectors)
-    {
-        totsec16next = tracksize * (headcount + 1) * (headcount + 1);
-        if (totsec16next <= maxsectors)
-        {
-            headcount++;
-            totsec16 = totsec16next;
-
-            tracksize++;
-            totsec16next = tracksize * headcount * headcount;
-            if (totsec16next <= maxsectors)
-            {
-                totsec16 = totsec16next;
-            }
-        }
-    }
-    totsec16next = (tracksize + 1) * headcount * headcount;
-    if (totsec16next <= maxsectors)
-    {
-        tracksize++;
-        totsec16 = totsec16next;
-    }
-
-    maxfiles = len < 0x8C000 ? 0x20 : 0x200;
-    clustersize = (totsec16 > (8 << 10)) ? 8 : (totsec16 > (1 << 10) ? 4 : 1);
-
-    #define ALIGN(v, a) (((v) % (a)) ? ((v) + (a) - ((v) % (a))) : (v))
-    u16 totalclusters = ALIGN(totsec16, clustersize) / clustersize;
-    u32 fatbytes = (ALIGN(totalclusters, 2) / 2) * 3; // 2 sectors -> 3 byte
-    fatsz16 = ALIGN(fatbytes, sectorsize) / sectorsize;
+    SaveGeometry geometry;
+    if (!CalculateSaveGeometry(len, geometry)) return false;
+    constexpr u16 sectorsize = 0x200;
 
     FF_FIL file;
     FRESULT res;
@@ -1035,15 +1010,15 @@ bool NANDMount::CreateSaveFile(const char* path, u32 len)
     data[0x000] = 0xE9;
     memcpy(&data[0x003], "MSWIN4.1", 8);
     write16(0x00B, sectorsize); // bytes per sector
-    data[0x00D] = clustersize;
+    data[0x00D] = geometry.sectorsPerCluster;
     write16(0x00E, 1); // reserved sectors
     data[0x010] = 2; // num FATs
-    write16(0x011, maxfiles);
-    write16(0x013, totsec16);
+    write16(0x011, geometry.rootEntries);
+    write16(0x013, geometry.totalSectors);
     data[0x015] = 0xF8;
-    write16(0x016, fatsz16);
-    write16(0x018, tracksize);
-    write16(0x01A, headcount);
+    write16(0x016, geometry.fatSectors);
+    write16(0x018, geometry.sectorsPerTrack);
+    write16(0x01A, geometry.headCount);
     data[0x024] = 0x05;
     data[0x026] = 0x29;
     data[0x027] = 0x78;
@@ -1145,49 +1120,44 @@ bool NANDMount::InitTitleFileStructure(const NDSHeader& header, const DSi_TMD::T
 
 bool NANDMount::ImportTitle(const char* appfile, const DSi_TMD::TitleMetadata& tmd, bool readonly)
 {
-    NDSHeader header {};
+    Platform::FileHandle* file = OpenLocalFile(appfile, FileMode::Read);
+    if (!file) return false;
+    const u64 fileLength = FileLength(file);
+    if (!DSiContentValidation::LengthSupported(tmd, fileLength))
     {
-        Platform::FileHandle* f = OpenLocalFile(appfile, FileMode::Read);
-        if (!f) return false;
-        FileRead(&header, sizeof(header), 1, f);
-        CloseFile(f);
-    }
-
-    u32 version = tmd.Contents.GetVersion();
-    Log(LogLevel::Info, ".app version: %08x\n", version);
-
-    u32 titleid0 = tmd.GetCategory();
-    u32 titleid1 = tmd.GetID();
-    Log(LogLevel::Info, "Title ID: %08x/%08x\n", titleid0, titleid1);
-
-    if (!InitTitleFileStructure(header, tmd, readonly))
-    {
-        Log(LogLevel::Error, "ImportTitle: failed to initialize file structure for imported title\n");
+        CloseFile(file);
         return false;
     }
 
-    // executable
+    std::vector<u8> snapshot;
+    try { snapshot.resize(static_cast<size_t>(fileLength)); }
+    catch (const std::bad_alloc&) { CloseFile(file); return false; }
+    const bool exactRead = FileSeek(file, 0, FileSeekOrigin::Start) &&
+        FileRead(snapshot.data(), snapshot.size(), 1, file) == 1;
+    CloseFile(file);
+    if (!exactRead) return false;
 
-    char fname[128];
-    snprintf(fname, sizeof(fname), "0:/title/%08x/%08x/content/%08x.app", titleid0, titleid1, version);
-    if (!ImportFile(fname, appfile))
-    {
-        Log(LogLevel::Error, "ImportTitle: failed to create executable\n");
-        return false;
-    }
-
-    if (readonly) f_chmod(fname, AM_RDO, AM_RDO);
-
-    return true;
+    // Validation and publication use the same immutable bytes. This avoids a
+    // provider/path swap between a header check and a second open for copying.
+    return ImportTitle(snapshot.data(), snapshot.size(), tmd, readonly);
 }
 
 bool NANDMount::ImportTitle(const u8* app, size_t appLength, const DSi_TMD::TitleMetadata& tmd, bool readonly)
 {
-    if (!app || appLength < sizeof(NDSHeader))
+    if (!app || appLength < sizeof(NDSHeader) ||
+        !DSiContentValidation::LengthSupported(tmd, appLength))
         return false;
 
     NDSHeader header {};
     memcpy(&header, app, sizeof(header));
+
+    u8 digest[20];
+    SHA1_CTX sha;
+    SHA1Init(&sha);
+    SHA1Update(&sha, app, static_cast<u32>(appLength));
+    SHA1Final(digest, &sha);
+    if (!DSiContentValidation::MetadataMatches(tmd, header, appLength, digest))
+        return false;
 
     u32 version = tmd.Contents.GetVersion();
     Log(LogLevel::Info, ".app version: %08x\n", version);
@@ -1233,8 +1203,7 @@ u32 NANDMount::GetTitleDataMask(u32 category, u32 titleid)
     u32 version;
     NDSHeader header;
 
-    GetTitleInfo(category, titleid, version, &header, nullptr);
-    if (version == 0xFFFFFFFF)
+    if (!GetTitleInfo(category, titleid, version, &header, nullptr))
         return 0;
 
     u32 ret = 0;

@@ -25,11 +25,20 @@
 #include "GPU3D_Soft.h"
 #include "Platform.h"
 #include "GPU3D.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
 using Platform::Log;
 using Platform::LogLevel;
+
+static void RejectGPUState(Savestate* file, SoftRenderer* softRenderer, const char* reason)
+{
+    Log(LogLevel::Error, "savestate: rejected invalid GPU3D state (%s)\n", reason);
+    file->Error = true;
+    if (softRenderer && softRenderer->IsThreaded())
+        softRenderer->EnableRenderThread();
+}
 
 // 3D engine notes
 //
@@ -321,6 +330,11 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
 
     CmdFIFO.DoSavestate(file);
     CmdPIPE.DoSavestate(file);
+    if (file->Error)
+    {
+        RejectGPUState(file, softRenderer, "command FIFO");
+        return;
+    }
 
     file->Var32(&NumCommands);
     file->Var32(&CurCommand);
@@ -394,6 +408,15 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
     file->Var32(&VertexNumInPoly);
     file->Var32(&NumConsecutivePolygons);
 
+    if (!file->Saving && !file->Error &&
+        !SavestateInvariant::GPUTransientValid(
+            NumCommands, ExecParamCount, ProjMatrixStackPointer,
+            PosMatrixStackPointer, TexMatrixStackPointer, VertexNumInPoly))
+    {
+        RejectGPUState(file, softRenderer, "transient counters");
+        return;
+    }
+
     for (Vertex& vtx : TempVertexBuffer)
     {
         vtx.DoSavestate(file);
@@ -408,6 +431,12 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
     {
         u32 index = UINT32_MAX;
         file->Var32(&index);
+        if (file->Error || !SavestateInvariant::IndexOrNullValid(index, 2048 * 2))
+        {
+            LastStripPolygon = nullptr;
+            RejectGPUState(file, softRenderer, "strip polygon index");
+            return;
+        }
         LastStripPolygon = (index == UINT32_MAX) ? nullptr : &PolygonRAM[index];
     }
 
@@ -415,6 +444,15 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
     file->Var32(&NumVertices);
     file->Var32(&NumPolygons);
     file->Var32(&NumOpaquePolygons);
+
+    if (!file->Saving && (!SavestateInvariant::GPUCountsValid(
+            CurRAMBank, NumVertices, NumPolygons, NumOpaquePolygons, 0) || file->Error))
+    {
+        CurRAMBank = 0;
+        NumVertices = NumPolygons = NumOpaquePolygons = 0;
+        RejectGPUState(file, softRenderer, "geometry counts");
+        return;
+    }
 
     file->Var32(&FlushRequest);
     file->Var32(&FlushAttributes);
@@ -441,12 +479,19 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
         }
         else
         {
+            u32 indices[10] {};
             for (int j = 0; j < 10; j++)
             {
-                u32 index = UINT32_MAX;
-                file->Var32(&index);
-                poly->Vertices[j] = index == UINT32_MAX ? nullptr : &VertexRAM[index];
+                indices[j] = UINT32_MAX;
+                file->Var32(&indices[j]);
+                if (file->Error || !SavestateInvariant::IndexOrNullValid(indices[j], 6144 * 2))
+                {
+                    RejectGPUState(file, softRenderer, "polygon vertex index");
+                    return;
+                }
             }
+            for (int j = 0; j < 10; j++)
+                poly->Vertices[j] = indices[j] == UINT32_MAX ? nullptr : &VertexRAM[indices[j]];
         }
 
         file->Var32(&poly->NumVertices);
@@ -481,6 +526,21 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
 
         if (!file->Saving)
         {
+            if (file->Error || !SavestateInvariant::PolygonValid(
+                    poly->NumVertices, poly->VTop, poly->VBottom))
+            {
+                RejectGPUState(file, softRenderer, "polygon vertex count");
+                return;
+            }
+            for (u32 j = 0; j < poly->NumVertices; j++)
+            {
+                if (poly->Vertices[j] == nullptr)
+                {
+                    RejectGPUState(file, softRenderer, "null active polygon vertex");
+                    return;
+                }
+            }
+
             poly->Degenerate = false;
 
             for (u32 j = 0; j < poly->NumVertices; j++)
@@ -494,6 +554,11 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
     }
 
     CmdStallQueue.DoSavestate(file);
+    if (file->Error)
+    {
+        RejectGPUState(file, softRenderer, "stall FIFO");
+        return;
+    }
 
     file->Var32((u32*)&VertexPipeline);
     file->Var32((u32*)&NormalPipeline);
@@ -511,6 +576,13 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
     }
 
     file->Var32(&RenderNumPolygons);
+    if (!file->Saving && (!SavestateInvariant::GPUCountsValid(
+            CurRAMBank, NumVertices, NumPolygons, NumOpaquePolygons, RenderNumPolygons) || file->Error))
+    {
+        RenderNumPolygons = 0;
+        RejectGPUState(file, softRenderer, "render polygon count");
+        return;
+    }
     if (file->Saving)
     {
         for (const Polygon* p : RenderPolygonRAM)
@@ -527,7 +599,28 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
             u32 index = UINT32_MAX;
             file->Var32(&index);
 
+            if (file->Error || !SavestateInvariant::IndexOrNullValid(index, 2048 * 2) ||
+                (static_cast<u32>(i) < RenderNumPolygons && index == UINT32_MAX))
+            {
+                RenderPolygonRAM.fill(nullptr);
+                RenderNumPolygons = 0;
+                RejectGPUState(file, softRenderer, "render polygon index");
+                return;
+            }
+
             RenderPolygonRAM[i] = index == UINT32_MAX ? nullptr : &PolygonRAM[index];
+        }
+        for (u32 i = 0; i < RenderNumPolygons; ++i)
+        {
+            Polygon* polygon = RenderPolygonRAM[i];
+            if (!polygon || !SavestateInvariant::RenderablePolygonValid(polygon->NumVertices) ||
+                !polygon->Vertices[0] || !polygon->Vertices[1])
+            {
+                RenderPolygonRAM.fill(nullptr);
+                RenderNumPolygons = 0;
+                RejectGPUState(file, softRenderer, "renderable polygon vertices");
+                return;
+            }
         }
     }
 

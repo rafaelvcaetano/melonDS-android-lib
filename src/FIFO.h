@@ -21,6 +21,7 @@
 
 #include "types.h"
 #include "Savestate.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -43,6 +44,14 @@ public:
         file->Var32(&NumOccupied);
         file->Var32(&ReadPos);
         file->Var32(&WritePos);
+
+        if (!file->Saving && !file->Error &&
+            !SavestateInvariant::CircularQueueValid(NumEntries, NumOccupied, ReadPos, WritePos))
+        {
+            Clear();
+            file->Error = true;
+            return;
+        }
 
         file->VarArray(Entries, sizeof(T)*NumEntries);
     }
@@ -94,7 +103,7 @@ public:
     bool IsEmpty() const { return NumOccupied == 0; }
     bool IsFull() const { return NumOccupied >= NumEntries; }
 
-    bool CanFit(u32 num) const { return ((NumOccupied + num) <= NumEntries); }
+    bool CanFit(u32 num) const { return NumOccupied <= NumEntries && num <= NumEntries - NumOccupied; }
 
 private:
     T Entries[NumEntries] = {0};
@@ -134,6 +143,14 @@ public:
         file->Var32(&NumOccupied);
         file->Var32(&ReadPos);
         file->Var32(&WritePos);
+
+        if (!file->Saving && !file->Error &&
+            !SavestateInvariant::CircularQueueValid(NumEntries, NumOccupied, ReadPos, WritePos))
+        {
+            Clear();
+            file->Error = true;
+            return;
+        }
 
         file->VarArray(Entries, sizeof(T)*NumEntries);
     }
@@ -184,7 +201,7 @@ public:
     bool IsEmpty() const { return NumOccupied == 0; }
     bool IsFull() const { return NumOccupied >= NumEntries; }
 
-    bool CanFit(u32 num) const { return ((NumOccupied + num) <= NumEntries); }
+    bool CanFit(u32 num) const { return NumOccupied <= NumEntries && num <= NumEntries - NumOccupied; }
 
 private:
     u32 NumEntries;
@@ -211,6 +228,14 @@ public:
         file->Var32(&NumOccupied);
         file->Var32(&ReadPos);
         file->Var32(&WritePos);
+
+        if (!file->Saving && !file->Error &&
+            !SavestateInvariant::CircularQueueValid(Size, NumOccupied, ReadPos, WritePos))
+        {
+            Clear();
+            file->Error = true;
+            return;
+        }
 
         file->VarArray(Buffer, Size);
     }
@@ -300,7 +325,7 @@ public:
     bool IsEmpty() const { return NumOccupied == 0; }
     bool IsFull() const { return NumOccupied >= Size; }
 
-    bool CanFit(u32 num) const { return ((NumOccupied + num) <= Size); }
+    bool CanFit(u32 num) const { return NumOccupied <= Size && num <= Size - NumOccupied; }
 
 private:
     u8 Buffer[Size] = {0};

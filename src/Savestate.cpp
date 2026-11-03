@@ -59,6 +59,7 @@ Savestate::Savestate(void *buffer, u32 size, bool save) :
     buffer(static_cast<u8 *>(buffer)),
     buffer_offset(0),
     buffer_length(size),
+    section_end(size),
     buffer_owned(false),
     finished(false)
 {
@@ -123,6 +124,7 @@ Savestate::Savestate(u32 initial_size) :
     buffer(nullptr),
     buffer_offset(0),
     buffer_length(initial_size),
+    section_end(initial_size),
     buffer_owned(true),
     finished(false)
 {
@@ -177,11 +179,13 @@ void Savestate::Section(const char* magic)
     }
     else
     {
-        u32 section_offset = FindSection(magic);
+        u32 selected_section_end = 0;
+        u32 section_offset = FindSection(magic, &selected_section_end);
 
         if (section_offset != NO_SECTION)
         {
             buffer_offset = section_offset;
+            section_end = selected_section_end;
         }
         else
         {
@@ -215,7 +219,7 @@ void Savestate::VarArray(void* data, u32 len)
 
     if (Saving)
     {
-        if (buffer_offset + len > buffer_length)
+        if (len > buffer_length - buffer_offset)
         { // If writing the given data would take us past the buffer's end...
             Log(LogLevel::Warn, "savestate: %u-byte write would exceed %u-byte savestate buffer\n", len, buffer_length);
 
@@ -233,7 +237,8 @@ void Savestate::VarArray(void* data, u32 len)
     }
     else
     {
-        if (buffer_offset + len > buffer_length)
+        const u32 read_limit = std::min(buffer_length, section_end);
+        if (buffer_offset > read_limit || len > read_limit - buffer_offset)
         { // If reading the requested amount of data would take us past the buffer's edge...
             Log(LogLevel::Error, "savestate: %u-byte read would exceed %u-byte savestate buffer\n", len, buffer_length);
             Error = true;
@@ -265,6 +270,7 @@ void Savestate::Rewind(bool save)
     CurSection = NO_SECTION;
 
     buffer_offset = 0;
+    section_end = buffer_length;
     finished = false;
 }
 
@@ -342,9 +348,9 @@ void Savestate::WriteStateLength()
     memcpy(buffer + 0x08, &state_length, sizeof(state_length));
 }
 
-u32 Savestate::FindSection(const char* magic) const
+u32 Savestate::FindSection(const char* magic, u32* selected_section_end) const
 {
-    if (!magic) return NO_SECTION;
+    if (!magic || !selected_section_end) return NO_SECTION;
 
     // Start looking at the savestate's beginning, right after its global header
     // (we can't start from the current offset because then we'd lose the ability to rearrange sections)
@@ -352,26 +358,32 @@ u32 Savestate::FindSection(const char* magic) const
     for (u32 offset = 0x10; offset < buffer_length;)
     { // Until we've found the desired section...
 
+        const u32 remaining = buffer_length - offset;
+        if (remaining < 16)
+        {
+            Log(LogLevel::Error, "savestate: truncated section header at %#x\n", offset);
+            return NO_SECTION;
+        }
+
         // Get this section's magic number
         char read_magic[4] = {0};
         memcpy(read_magic, buffer + offset, sizeof(read_magic));
 
-        if (memcmp(read_magic, magic, sizeof(read_magic)) == 0)
-        { // If this is the right section...
-            return offset + 16; // ...return the offset of the first byte of the section after the header
-        }
-
-        // Haven't found our section yet. Let's move on to the next one.
-
-        u32 section_length_offset = offset + sizeof(read_magic);
-        if (section_length_offset >= buffer_length)
-        { // If trying to read the section length would take us past the file's end...
-            break;
-        }
-
         // First we need to find out how big this section is...
         u32 section_length = 0;
-        memcpy(&section_length, buffer + section_length_offset, sizeof(section_length));
+        memcpy(&section_length, buffer + offset + sizeof(read_magic), sizeof(section_length));
+        if (section_length < 16 || section_length > remaining)
+        {
+            Log(LogLevel::Error, "savestate: invalid section length %u at %#x (%u bytes remain)\n",
+                section_length, offset, remaining);
+            return NO_SECTION;
+        }
+
+        if (memcmp(read_magic, magic, sizeof(read_magic)) == 0)
+        { // If this is the right section...
+            *selected_section_end = offset + section_length;
+            return offset + 16; // ...return the offset of the first byte of the section after the header
+        }
 
         // ...then skip it. (The section length includes the 16-byte header.)
         offset += section_length;

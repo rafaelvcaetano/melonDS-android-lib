@@ -110,7 +110,8 @@ void TitleManagerDialog::createTitleItem(u32 category, u32 titleid)
     NDSHeader header;
     NDSBanner banner;
 
-    nandmount.GetTitleInfo(category, titleid, version, &header, &banner);
+    if (!nandmount.GetTitleInfo(category, titleid, version, &header, &banner))
+        return;
 
     u32 icondata[32*32];
     emuInstance->romIcon(banner.Icon, banner.Palette, icondata);
@@ -397,6 +398,8 @@ TitleImportDialog::TitleImportDialog(QWidget* parent, QString& apppath, const DS
     grpTmdSource = new QButtonGroup(this);
     grpTmdSource->addButton(ui->rbTmdFromFile, 0);
     grpTmdSource->addButton(ui->rbTmdFromNUS, 1);
+    ui->rbTmdFromNUS->setEnabled(false);
+    ui->rbTmdFromNUS->setToolTip("Online metadata download is disabled because the legacy NUS endpoint is not authenticated. Select a local TMD file.");
 #if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
     connect(grpTmdSource, SIGNAL(buttonClicked(int)), this, SLOT(onChangeTmdSource(int)));
 #else
@@ -427,11 +430,11 @@ void TitleImportDialog::accept()
         return;
     }
 
-    fseek(f, 0x230, SEEK_SET);
-    fread(titleid, 8, 1, f);
+    const bool titleIdRead = fseek(f, 0x230, SEEK_SET) == 0 &&
+        fread(titleid, sizeof(titleid), 1, f) == 1;
     fclose(f);
 
-    if (titleid[1] != 0x00030004)
+    if (!titleIdRead || titleid[1] != 0x00030004)
     {
         QMessageBox::critical(this,
                               "Import title - melonDS",
@@ -451,8 +454,18 @@ void TitleImportDialog::accept()
             return;
         }
 
-        fread((void *) tmdData, sizeof(DSi_TMD::TitleMetadata), 1, f);
+        DSi_TMD::TitleMetadata loadedTmd{};
+        const bool metadataRead = fread(&loadedTmd, sizeof(loadedTmd), 1, f) == 1;
         fclose(f);
+
+        if (!metadataRead)
+        {
+            QMessageBox::critical(this,
+                                  "Import title - melonDS",
+                                  "Metadata file is truncated or malformed.");
+            return;
+        }
+        memcpy((void*)tmdData, &loadedTmd, sizeof(loadedTmd));
 
         u32 tmdtitleid[2];
         tmdtitleid[0] = tmdData->GetCategory();
@@ -479,18 +492,10 @@ void TitleImportDialog::accept()
 
     if (!tmdfromfile)
     {
-        network = new QNetworkAccessManager(this);
-
-        char url[256];
-        snprintf(url, sizeof(url), "http://nus.cdn.t.shop.nintendowifi.net/ccs/download/%08x%08x/tmd", titleid[1], titleid[0]);
-
-        QNetworkRequest req;
-        req.setUrl(QUrl(url));
-
-        netreply = network->get(req);
-        connect(netreply, &QNetworkReply::finished, this, &TitleImportDialog::tmdDownloaded);
-
-        setEnabled(false);
+        QMessageBox::critical(this,
+                              "Import title - melonDS",
+                              "Online metadata download is disabled because the legacy NUS endpoint is not authenticated. Select a local TMD file.");
+        return;
     }
     else
     {

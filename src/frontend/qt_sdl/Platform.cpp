@@ -434,12 +434,12 @@ void WriteFirmware(const Firmware& firmware, u32 writeoffset, u32 writelen, void
     if (!inst->firmwareSave)
         return;
 
-    if (firmware.GetHeader().Identifier != GENERATED_FIRMWARE_IDENTIFIER)
+    if (firmware.IsLayoutValid() && !firmware.IsGenerated())
     { // If this is not the default built-in firmware...
         // ...then write the whole thing back.
         inst->firmwareSave->RequestFlush(firmware.Buffer(), firmware.Length(), writeoffset, writelen);
     }
-    else
+    else if (firmware.IsLayoutValid())
     {
         u32 eapstart = firmware.GetExtendedAccessPointOffset();
         u32 eapend = eapstart + sizeof(firmware.GetExtendedAccessPoints());

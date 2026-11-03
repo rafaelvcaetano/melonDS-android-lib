@@ -35,6 +35,7 @@
 #include "Platform.h"
 #include "FreeBIOS.h"
 #include "Args.h"
+#include "SavestateInvariant.h"
 #include "version.h"
 
 #include "DSi.h"
@@ -679,6 +680,7 @@ bool NDS::DoSavestate(Savestate* file)
     file->Var16(&IPCFIFOCnt7);
     IPCFIFO9.DoSavestate(file);
     IPCFIFO7.DoSavestate(file);
+    if (file->Error) return false;
 
     file->Var16(&DivCnt);
     file->Var16(&SqrtCnt);
@@ -708,6 +710,26 @@ bool NDS::DoSavestate(Savestate* file)
         file->Var32(&evt.Param);
     }
     file->Var32(&SchedListMask);
+    if (!file->Saving && !file->Error)
+    {
+        bool valid = SavestateInvariant::EventMaskValid(SchedListMask, Event_MAX);
+        for (u32 i = 0; valid && i < Event_MAX; i++)
+        {
+            if (!(SchedListMask & (1U << i))) continue;
+            const SchedEvent& evt = SchedList[i];
+            const bool registered = evt.FuncID < MaxEventFunctions &&
+                evt.Funcs[evt.FuncID] != nullptr && evt.That != nullptr;
+            valid = SavestateInvariant::EventFunctionValid(
+                evt.FuncID, MaxEventFunctions, registered);
+        }
+        if (!valid)
+        {
+            Log(LogLevel::Error, "savestate: rejected invalid scheduler state\n");
+            SchedListMask = 0;
+            file->Error = true;
+            return false;
+        }
+    }
     file->Var64(&ARM9Timestamp);
     file->Var64(&ARM9Target);
     file->Var64(&ARM7Timestamp);
@@ -749,7 +771,9 @@ bool NDS::DoSavestate(Savestate* file)
     if (ConsoleType == 0)
         GBACartSlot.DoSavestate(file);
     GPU.DoSavestate(file);
+    if (file->Error) return false;
     SPU.DoSavestate(file);
+    if (file->Error) return false;
     Mic.DoSavestate(file);
     SPI.DoSavestate(file);
     RTC.DoSavestate(file);
@@ -771,7 +795,7 @@ bool NDS::DoSavestate(Savestate* file)
 
     file->Finish();
 
-    return true;
+    return !file->Error;
 }
 
 void NDS::SetNDSCart(std::unique_ptr<NDSCart::CartCommon>&& cart)
@@ -855,6 +879,11 @@ void NDS::RunSystem(u64 timestamp)
             {
                 SchedListMask &= ~(1<<i);
 
+                if (evt.FuncID >= MaxEventFunctions || evt.Funcs[evt.FuncID] == nullptr || evt.That == nullptr)
+                {
+                    Log(LogLevel::Error, "scheduler: rejected invalid event callback %u for event %d\n", evt.FuncID, i);
+                    continue;
+                }
                 EventFunc func = evt.Funcs[evt.FuncID];
                 func(evt.That, evt.Param);
             }
@@ -906,6 +935,11 @@ void NDS::RunSystemSleep(u64 timestamp)
                 {
                     SchedListMask &= ~(1<<i);
 
+                    if (evt.FuncID >= MaxEventFunctions || evt.Funcs[evt.FuncID] == nullptr || evt.That == nullptr)
+                    {
+                        Log(LogLevel::Error, "scheduler: rejected invalid event callback %u for event %d\n", evt.FuncID, i);
+                        continue;
+                    }
                     EventFunc func = evt.Funcs[evt.FuncID];
                     func(evt.That, evt.Param);
                 }
@@ -1131,7 +1165,14 @@ void NDS::UnregisterEventFuncs(u32 id)
 
 void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
 {
-    if (SchedListMask & (1<<id))
+    if (id >= Event_MAX || funcid >= MaxEventFunctions ||
+        SchedList[id].Funcs[funcid] == nullptr || SchedList[id].That == nullptr)
+    {
+        Log(LogLevel::Error, "scheduler: rejected invalid event %u callback %u\n", id, funcid);
+        return;
+    }
+
+    if (SchedListMask & (1U<<id))
     {
         Log(LogLevel::Debug, "!! EVENT %d ALREADY SCHEDULED\n", id);
         return; 
@@ -1152,7 +1193,7 @@ void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
     evt.FuncID = funcid;
     evt.Param = param;
 
-    SchedListMask |= (1<<id);
+    SchedListMask |= (1U<<id);
 
     Reschedule(evt.Timestamp);
 }

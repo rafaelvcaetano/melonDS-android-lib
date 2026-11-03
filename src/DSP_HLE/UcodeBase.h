@@ -103,7 +103,7 @@ protected:
     bool MicSampling;
     FIFO<s16, 8> MicInFIFO;
 
-    u16* GetDataMemPointer(u32 addr);
+    u16* GetDataMemPointer(u32 addr, u32 wordCount = 1);
 
     void SendReply(u8 index, u16 val);
     void SetReplyReadCallback(u8 index, u8 callback, u32 param);
@@ -112,6 +112,7 @@ protected:
     void SetSemaphoreOut(u16 val);
 
     u16* LoadPipe(u8 index);
+    bool PipeValid(const u16* pipe);
     u32 GetPipeLength(u16* pipe);
     u32 ReadPipe(u16* pipe, u16* data, u32 len);
     u32 WritePipe(u16* pipe, const u16* data, u32 len);

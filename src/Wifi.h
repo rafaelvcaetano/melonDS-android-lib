@@ -270,8 +270,8 @@ private:
     void ReportMPReplyErrors(u16 clientfail);
 
     void TXSendFrame(const TXSlot* slot, int num);
-    void StartTX_LocN(int nslot, int loc);
-    void StartTX_Cmd();
+    bool StartTX_LocN(int nslot, int loc);
+    bool StartTX_Cmd();
     void StartTX_Beacon();
     void FireTX();
     void SendMPDefaultReply();

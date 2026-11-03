@@ -20,6 +20,7 @@
 
 #include "../DSi.h"
 #include "GraphicsUcode.h"
+#include "../DSPHLEBounds.h"
 #include "../Platform.h"
 
 
@@ -123,37 +124,51 @@ void GraphicsUcode::TryStartCmd()
 
             u32 srcwidth = CmdParams[11];
             u32 srcheight = CmdParams[12];
+            const u32 filter = CmdParams[4];
+            const u32 dstwidth = filter == 10 ? srcwidth / 3 :
+                DSPHLEBounds::ScaledDimension(srcwidth, CmdParams[7]);
+            const u32 dstheight = filter == 10 ? srcheight / 3 :
+                DSPHLEBounds::ScaledDimension(srcheight, CmdParams[8]);
+            const u32 imageWidth = CmdParams[5];
+            const u32 imageHeight = CmdParams[6];
+            const u32 xOffset = CmdParams[9];
+            const u32 yOffset = CmdParams[10];
 
-            if (CmdParams[4] == 10)
+            if (!DSPHLEBounds::ScalingValid(filter, srcwidth, srcheight, dstwidth, dstheight) ||
+                xOffset > imageWidth || srcwidth > imageWidth - xOffset ||
+                yOffset > imageHeight || srcheight > imageHeight - yOffset)
+            {
+                SendReply(1, 0);
+                CmdState = 0;
+                return;
+            }
+
+            u64 calculatedTime = 0;
+            if (filter == 10)
             {
                 // 1/3 scaling
 
-                // fails if source width/height aren't multiple of 3
-                if ((srcwidth % 3) || (srcheight % 3))
-                {
-                    SendReply(1, 0);
-                    CmdState = 0;
-                    return;
-                }
-
-                cmdtime = 30 * srcwidth * srcheight;
+                calculatedTime = 30ULL * srcwidth * srcheight;
             }
             else
             {
                 // nearest/bilinear/bicubic scaling
 
-                u32 dstwidth = (srcwidth * CmdParams[7]) / 1000;
-                u32 dstheight = (srcheight * CmdParams[8]) / 1000;
+                calculatedTime = 4ULL * srcwidth * srcheight;
 
-                cmdtime = 4 * srcwidth * srcheight;
-
-                switch (CmdParams[4]) // filtering
+                switch (filter) // filtering
                 {
-                case 2: cmdtime += (58 * dstwidth * dstheight); break;
-                case 3: cmdtime += (605 * dstwidth * dstheight); break;
-                default: cmdtime += (26 * dstwidth * dstheight); break;
+                case 2: calculatedTime += 58ULL * dstwidth * dstheight; break;
+                case 3: calculatedTime += 605ULL * dstwidth * dstheight; break;
+                default: calculatedTime += 26ULL * dstwidth * dstheight; break;
                 }
             }
+            if (calculatedTime > UINT32_MAX - 200) {
+                SendReply(1, 0);
+                CmdState = 0;
+                return;
+            }
+            cmdtime = static_cast<u32>(calculatedTime);
         }
         break;
 
@@ -163,7 +178,13 @@ void GraphicsUcode::TryStartCmd()
             ReadPipe(pipe, CmdParams, 6);
 
             u32 len = (CmdParams[1] << 16) | CmdParams[0];
-            cmdtime = 24 * (len >> 1);
+            if (!DSPHLEBounds::YuvTransferValid(len))
+            {
+                SendReply(1, 0);
+                CmdState = 0;
+                return;
+            }
+            cmdtime = 12 * len;
         }
         break;
 
@@ -218,14 +239,13 @@ void GraphicsUcode::CmdScalingNearest()
     u16 rect_width = CmdParams[11];
     u16 rect_height = CmdParams[12];
 
-    u32 dst_width = (rect_width * width_scale) / 1000;
-    u32 dst_height = (rect_height * height_scale) / 1000;
+    u32 dst_width = DSPHLEBounds::ScaledDimension(rect_width, width_scale);
+    u32 dst_height = DSPHLEBounds::ScaledDimension(rect_height, height_scale);
 
     // sanity checks
-    if ((dst_width == 0) ||
-        (dst_height == 0) ||
-        (rect_width > 16384) ||
-        (dst_width > 16384))
+    if (!DSPHLEBounds::ScalingValid(0, rect_width, rect_height, dst_width, dst_height) ||
+        rect_xoffset > src_width || rect_width > src_width - rect_xoffset ||
+        rect_yoffset > src_height || rect_height > src_height - rect_yoffset)
     {
         printf("DSP_HLE: incorrect parameters for nearest scaling\n");
         return;
@@ -238,8 +258,9 @@ void GraphicsUcode::CmdScalingNearest()
     src_addr += (((rect_yoffset * src_width) + rect_xoffset) << 1);
     sy = 0x3FF;
 
-    u16* src_mem = GetDataMemPointer(0x4000);
-    u16* dst_mem = GetDataMemPointer(0xC000);
+    u16* src_mem = GetDataMemPointer(0x4000, rect_width);
+    u16* dst_mem = GetDataMemPointer(0xC000, dst_width);
+    if (!src_mem || !dst_mem) return;
 
     // load first line
     ReadARM9Mem(src_mem, src_addr, rect_width << 1);
@@ -283,14 +304,13 @@ void GraphicsUcode::CmdScalingBilinear()
     u16 rect_width = CmdParams[11];
     u16 rect_height = CmdParams[12];
 
-    u32 dst_width = (rect_width * width_scale) / 1000;
-    u32 dst_height = (rect_height * height_scale) / 1000;
+    u32 dst_width = DSPHLEBounds::ScaledDimension(rect_width, width_scale);
+    u32 dst_height = DSPHLEBounds::ScaledDimension(rect_height, height_scale);
 
     // sanity checks
-    if ((dst_width == 0) ||
-        (dst_height == 0) ||
-        (rect_width > 8192) ||
-        (dst_width > 8192))
+    if (!DSPHLEBounds::ScalingValid(2, rect_width, rect_height, dst_width, dst_height) ||
+        rect_xoffset > src_width || rect_width > src_width - rect_xoffset ||
+        rect_yoffset > src_height || rect_height > src_height - rect_yoffset)
     {
         printf("DSP_HLE: incorrect parameters for bilinear scaling\n");
         return;
@@ -303,8 +323,9 @@ void GraphicsUcode::CmdScalingBilinear()
     src_addr += (((rect_yoffset * src_width) + rect_xoffset) << 1);
     sy = 0x200;
 
-    u16* src_mem = GetDataMemPointer(0x4000);
-    u16* dst_mem = GetDataMemPointer(0xC000);
+    u16* src_mem = GetDataMemPointer(0x4000, 2 * rect_width);
+    u16* dst_mem = GetDataMemPointer(0xC000, dst_width);
+    if (!src_mem || !dst_mem) return;
 
     // load first lines
     // for bilinear scaling, we keep the current line and the next one
@@ -411,14 +432,13 @@ void GraphicsUcode::CmdScalingBicubic()
     u16 rect_width = CmdParams[11];
     u16 rect_height = CmdParams[12];
 
-    u32 dst_width = (rect_width * width_scale) / 1000;
-    u32 dst_height = (rect_height * height_scale) / 1000;
+    u32 dst_width = DSPHLEBounds::ScaledDimension(rect_width, width_scale);
+    u32 dst_height = DSPHLEBounds::ScaledDimension(rect_height, height_scale);
 
     // sanity checks
-    if ((dst_width == 0) ||
-        (dst_height == 0) ||
-        (rect_width > 4096) ||
-        (dst_width > 4096))
+    if (!DSPHLEBounds::ScalingValid(3, rect_width, rect_height, dst_width, dst_height) ||
+        rect_xoffset > src_width || rect_width > src_width - rect_xoffset ||
+        rect_yoffset > src_height || rect_height > src_height - rect_yoffset)
     {
         printf("DSP_HLE: incorrect parameters for bicubic scaling\n");
         return;
@@ -431,8 +451,9 @@ void GraphicsUcode::CmdScalingBicubic()
     src_addr += (((rect_yoffset * src_width) + rect_xoffset) << 1);
     sy = 0x200;
 
-    u16* src_mem = GetDataMemPointer(0x4000);
-    u16* dst_mem = GetDataMemPointer(0xC000);
+    u16* src_mem = GetDataMemPointer(0x4000, 4 * rect_width);
+    u16* dst_mem = GetDataMemPointer(0xC000, dst_width);
+    if (!src_mem || !dst_mem) return;
 
     // load first lines
     // for bicubic scaling, we keep 4 lines around the current line
@@ -524,7 +545,9 @@ void GraphicsUcode::CmdScalingOneThird()
     u32 dst_height = rect_height / 3;
 
     // sanity checks
-    if (rect_width > 16384)
+    if (!DSPHLEBounds::ScalingValid(10, rect_width, rect_height, dst_width, dst_height) ||
+        rect_xoffset > src_width || rect_width > src_width - rect_xoffset ||
+        rect_yoffset > src_height || rect_height > src_height - rect_yoffset)
     {
         printf("DSP_HLE: incorrect parameters for one-third scaling\n");
         return;
@@ -534,8 +557,9 @@ void GraphicsUcode::CmdScalingOneThird()
     src_addr += (((rect_yoffset * src_width) + rect_xoffset) << 1);
     sy = 0;
 
-    u16* src_mem = GetDataMemPointer(0x4000);
-    u16* dst_mem = GetDataMemPointer(0xC000);
+    u16* src_mem = GetDataMemPointer(0x4000, 3 * rect_width);
+    u16* dst_mem = GetDataMemPointer(0xC000, dst_width);
+    if (!src_mem || !dst_mem) return;
 
     for (u32 dy = 0; dy < dst_height; dy++)
     {
@@ -586,6 +610,8 @@ void GraphicsUcode::CmdYuvToRgb()
     u32 len = (CmdParams[1] << 16) | CmdParams[0];
     u32 src_addr = (CmdParams[3] << 16) | CmdParams[2];
     u32 dst_addr = (CmdParams[5] << 16) | CmdParams[4];
+
+    if (!DSPHLEBounds::YuvTransferValid(len)) return;
 
     for (u32 i = 0; i < len; i += 4)
     {

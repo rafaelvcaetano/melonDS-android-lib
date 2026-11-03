@@ -21,6 +21,9 @@
 #include "NDS.h"
 #include "SPI.h"
 #include "Wifi.h"
+#include "WifiMemory.h"
+#include "WifiTxBounds.h"
+#include "SavestateInvariant.h"
 #include "WifiAP.h"
 #include "Platform.h"
 
@@ -313,6 +316,44 @@ void Wifi::DoSavestate(Savestate* file)
     file->Bool32(&IsMPClient);
     file->Var64(&NextSync);
     file->Var64(&RXTimestamp);
+
+    if (!file->Saving && !file->Error)
+    {
+        bool valid = SavestateInvariant::WifiRuntimeValid(
+            ComStatus, TXCurSlot, RXBufferPtr, sizeof(RXBuffer));
+        for (const TXSlot& slot : TXSlots)
+        {
+            if (slot.Valid && (!WifiTxBounds::FrameFits(slot.Addr, slot.Length) ||
+                !WifiTxBounds::ContainsFrameBytes(slot.Length, 0, 2)))
+                valid = false;
+        }
+        if (ComStatus & 2U)
+        {
+            if (TXCurSlot >= 6 || !WifiTxBounds::RuntimeSlotValid(
+                    TXCurSlot, TXSlots[TXCurSlot].Valid, TXSlots[TXCurSlot].CurPhase) ||
+                (TXSlots[TXCurSlot].Valid &&
+                    !WifiTxBounds::FrameFits(TXSlots[TXCurSlot].Addr, TXSlots[TXCurSlot].Length)))
+                valid = false;
+            else if (!SavestateInvariant::CountdownCanTick(
+                TXSlots[TXCurSlot].CurPhaseTime, kTimerInterval))
+                valid = false;
+            else if (TXSlots[TXCurSlot].CurPhase == 2 && MPClientMask != 0 &&
+                !SavestateInvariant::CountdownCanTick(MPReplyTimer, kTimerInterval))
+                valid = false;
+        }
+        if (!SavestateInvariant::WifiClientMaskValid(MPClientMask))
+            valid = false;
+        if ((ComStatus & 1U) && !SavestateInvariant::CountdownCanTick(RXTime, kTimerInterval))
+            valid = false;
+        if (!valid)
+        {
+            ComStatus = 0;
+            TXCurSlot = UINT32_MAX;
+            RXBufferPtr = 0;
+            IOPORT(W_TXBusy) = 0;
+            file->Error = true;
+        }
+    }
 }
 
 
@@ -586,6 +627,7 @@ u32 Wifi::NumClients(u16 bitmask) const
 
 void Wifi::IncrementTXCount(const TXSlot* slot)
 {
+    if (!slot || !WifiTxBounds::DescriptorFits(slot->Addr)) return;
     u8 cnt = RAM[slot->Addr + 0x4];
     if (cnt < 0xFF) cnt++;
     *(u16*)&RAM[slot->Addr + 0x4] = cnt;
@@ -606,9 +648,16 @@ void Wifi::ReportMPReplyErrors(u16 clientfail)
 
 void Wifi::TXSendFrame(const TXSlot* slot, int num)
 {
+    if (!slot) return;
+    const u32 address = slot->Addr;
+    const u32 frameLength = slot->Length;
+    if (!WifiTxBounds::FrameFits(address, frameLength) ||
+        !WifiTxBounds::ContainsFrameBytes(frameLength, 0, 2))
+        return;
+
     u32 noseqno = 0;
 
-    if (RAM[slot->Addr + 0x4])
+    if (RAM[address + 0x4])
     {
         noseqno = 2;
     }
@@ -619,12 +668,13 @@ void Wifi::TXSendFrame(const TXSlot* slot, int num)
 
     if (!noseqno)
     {
+        if (!WifiTxBounds::ContainsFrameBytes(frameLength, 22, 2)) return;
         if (!(IOPORT(W_TXHeaderCnt) & (1<<2)))
-            *(u16*)&RAM[slot->Addr + 0xC + 22] = IOPORT(W_TXSeqNo) << 4;
+            *(u16*)&RAM[address + 0xC + 22] = IOPORT(W_TXSeqNo) << 4;
         IOPORT(W_TXSeqNo) = (IOPORT(W_TXSeqNo) + 1) & 0x0FFF;
     }
 
-    u16 framectl = *(u16*)&RAM[slot->Addr + 0xC];
+    u16 framectl = *(u16*)&RAM[address + 0xC];
     if (framectl & (1<<14))
     {
         // WEP frame
@@ -634,16 +684,14 @@ void Wifi::TXSendFrame(const TXSlot* slot, int num)
 
         if (IOPORT(W_WEPCnt) & (1<<15))
         {
-            u32 wep_fcs = (slot->Addr + 0xC + slot->Length - 7) & ~0x1;
-            *(u32*)&RAM[wep_fcs] = 0x22334466;
+            if (!WifiTxBounds::ContainsFrameBytes(frameLength, 0, 7)) return;
+            u32 wep_fcs = (address + 0xC + frameLength - 7) & ~0x1;
+            WifiMemory::Write32(&RAM[wep_fcs], 0x22334466);
         }
     }
 
-    int len = slot->Length;
-    if ((slot->Addr + len) > 0x1FF4)
-        len = 0x1FF4 - slot->Addr;
-
-    memcpy(TXBuffer, &RAM[slot->Addr], 12+len);
+    const int len = static_cast<int>(frameLength);
+    memcpy(TXBuffer, &RAM[address], 12+len);
 
     if (noseqno == 2)
         *(u16*)&TXBuffer[0xC] |= (1<<11);
@@ -661,6 +709,7 @@ void Wifi::TXSendFrame(const TXSlot* slot, int num)
         break;
 
     case 1:
+        if (!WifiTxBounds::ContainsFrameBytes(frameLength, 26, 2)) return;
         *(u16*)&TXBuffer[12 + 24+2] = MPClientMask;
         Platform::MP_SendCmd(TXBuffer, 12+len, USTimestamp, NDS.UserData);
         break;
@@ -671,23 +720,33 @@ void Wifi::TXSendFrame(const TXSlot* slot, int num)
         break;
 
     case 4:
-        *(u64*)&TXBuffer[0xC + 24] = USCounter;
+        if (!WifiTxBounds::ContainsFrameBytes(frameLength, 24, 8)) return;
+        WifiMemory::Write64(&TXBuffer[0xC + 24], USCounter);
         Platform::MP_SendPacket(TXBuffer, 12+len, USTimestamp, NDS.UserData);
         break;
     }
 }
 
-void Wifi::StartTX_LocN(int nslot, int loc)
+bool Wifi::StartTX_LocN(int nslot, int loc)
 {
     TXSlot* slot = &TXSlots[nslot];
 
     if (IOPORT(W_TXSlotLoc1 + (loc*4)) & 0x7000)
         Log(LogLevel::Warn, "wifi: unusual loc%d bits set %04X\n", loc, IOPORT(W_TXSlotLoc1 + (loc*4)));
 
-    slot->Valid = true;
-
     slot->Addr = (IOPORT(W_TXSlotLoc1 + (loc*4)) & 0x0FFF) << 1;
+    if (!WifiTxBounds::DescriptorFits(slot->Addr))
+    {
+        slot->Valid = false;
+        return false;
+    }
     slot->Length = *(u16*)&RAM[slot->Addr + 0xA] & 0x3FFF;
+    if (!WifiTxBounds::FrameFits(slot->Addr, slot->Length))
+    {
+        slot->Valid = false;
+        return false;
+    }
+    slot->Valid = true;
 
     u8 rate = RAM[slot->Addr + 0x8];
     if (rate == 0x14) slot->Rate = 2;
@@ -695,19 +754,30 @@ void Wifi::StartTX_LocN(int nslot, int loc)
 
     slot->CurPhase = 0;
     slot->CurPhaseTime = PreambleLen(slot->Rate);
+    return true;
 }
 
-void Wifi::StartTX_Cmd()
+bool Wifi::StartTX_Cmd()
 {
     TXSlot* slot = &TXSlots[1];
 
     if (IOPORT(W_TXSlotCmd) & 0x3000)
         Log(LogLevel::Warn,"wifi: !! unusual TXSLOT_CMD bits set %04X\n", IOPORT(W_TXSlotCmd));
 
-    slot->Valid = true;
-
     slot->Addr = (IOPORT(W_TXSlotCmd) & 0x0FFF) << 1;
+    if (!WifiTxBounds::DescriptorFits(slot->Addr))
+    {
+        slot->Valid = false;
+        return false;
+    }
     slot->Length = *(u16*)&RAM[slot->Addr + 0xA] & 0x3FFF;
+    if (!WifiTxBounds::FrameFits(slot->Addr, slot->Length) ||
+        !WifiTxBounds::ContainsFrameBytes(slot->Length, 26, 2))
+    {
+        slot->Valid = false;
+        return false;
+    }
+    slot->Valid = true;
 
     u8 rate = RAM[slot->Addr + 0x8];
     if (rate == 0x14) slot->Rate = 2;
@@ -733,16 +803,26 @@ void Wifi::StartTX_Cmd()
 
     // starting a CMD transfer wakes up the transceiver automatically
     UpdatePowerStatus(1);
+    return true;
 }
 
 void Wifi::StartTX_Beacon()
 {
     TXSlot* slot = &TXSlots[4];
 
-    slot->Valid = true;
-
     slot->Addr = (IOPORT(W_TXSlotBeacon) & 0x0FFF) << 1;
+    if (!WifiTxBounds::DescriptorFits(slot->Addr))
+    {
+        slot->Valid = false;
+        return;
+    }
     slot->Length = *(u16*)&RAM[slot->Addr + 0xA] & 0x3FFF;
+    if (!WifiTxBounds::FrameFits(slot->Addr, slot->Length))
+    {
+        slot->Valid = false;
+        return;
+    }
+    slot->Valid = true;
 
     u8 rate = RAM[slot->Addr + 0x8];
     if (rate == 0x14) slot->Rate = 2;
@@ -771,37 +851,37 @@ void Wifi::FireTX()
     txstart &= txreq;
     txstart &= ~txbusy;
 
-    IOPORT(W_TXBusy) = txbusy | txstart;
-
-    if (txstart & 0x0008)
+    // Prepare exactly the slot that will run. Marking all requested slots busy
+    // before validating them lets a rejected descriptor reach ProcessTX later.
+    const u16 priorities[] = {0x0008, 0x0004, 0x0002, 0x0001};
+    for (const u16 bit : priorities)
     {
-        StartTX_LocN(3, 2);
-        return;
-    }
+        if (!(txstart & bit)) continue;
 
-    if (txstart & 0x0004)
-    {
-        StartTX_LocN(2, 1);
-        return;
-    }
+        bool prepared = false;
+        if (bit == 0x0008) prepared = StartTX_LocN(3, 2);
+        else if (bit == 0x0004) prepared = StartTX_LocN(2, 1);
+        else if (bit == 0x0002)
+        {
+            MPClientFail = 0xFFFE;
+            prepared = StartTX_Cmd();
+        }
+        else prepared = StartTX_LocN(0, 0);
 
-    if (txstart & 0x0002)
-    {
-        MPClientFail = 0xFFFE;
-        StartTX_Cmd();
-        return;
-    }
+        if (WifiTxBounds::PreparedSlotCanStart(prepared))
+        {
+            IOPORT(W_TXBusy) = txbusy | bit;
+            return;
+        }
 
-    if (txstart & 0x0001)
-    {
-        StartTX_LocN(0, 0);
-        return;
+        IOPORT(W_TXBusy) &= ~bit;
+        IOPORT(W_TXReqRead) &= ~bit;
     }
 }
 
 void Wifi::SendMPDefaultReply()
 {
-    u8 reply[12 + 28];
+    u8 reply[12 + 28] {};
 
     *(u16*)&reply[0xA] = 28; // length
 
@@ -838,7 +918,7 @@ void Wifi::SendMPReply(u16 clienttime, u16 clientmask)
 
     // mark the last packet as success. dunno what the MSB is, it changes.
     //if (slot->Valid)
-    if (IOPORT(W_TXSlotReply2) & 0x8000)
+    if ((IOPORT(W_TXSlotReply2) & 0x8000) && WifiTxBounds::DescriptorFits(slot->Addr))
         *(u16*)&RAM[slot->Addr] = 0x0001;
 
     // CHECKME!!
@@ -855,15 +935,22 @@ void Wifi::SendMPReply(u16 clienttime, u16 clientmask)
     }
     else
     {
-        slot->Valid = true;
-
         slot->Addr = (IOPORT(W_TXSlotReply2) & 0x0FFF) << 1;
-        slot->Length = *(u16*)&RAM[slot->Addr + 0xA] & 0x3FFF;
-
-        // the packet is entirely ignored if it lasts longer than the maximum reply time
-        u32 duration = PreambleLen(slot->Rate) + (slot->Length * (slot->Rate==2 ? 4:8));
-        if (duration > clienttime)
+        if (!WifiTxBounds::DescriptorFits(slot->Addr))
             slot->Valid = false;
+        else
+        {
+            slot->Length = *(u16*)&RAM[slot->Addr + 0xA] & 0x3FFF;
+            slot->Valid = WifiTxBounds::FrameFits(slot->Addr, slot->Length);
+        }
+
+        if (slot->Valid)
+        {
+            // the packet is entirely ignored if it lasts longer than the maximum reply time
+            u32 duration = PreambleLen(slot->Rate) + (slot->Length * (slot->Rate==2 ? 4:8));
+            if (duration > clienttime)
+                slot->Valid = false;
+        }
     }
 
     // this seems to be set upon IRQ0
@@ -895,7 +982,7 @@ void Wifi::SendMPReply(u16 clienttime, u16 clientmask)
 
 void Wifi::SendMPAck(u16 cmdcount, u16 clientfail)
 {
-    u8 ack[12 + 32];
+    u8 ack[12 + 32] {};
 
     *(u16*)&ack[0xA] = 32; // length
 
@@ -944,7 +1031,21 @@ void Wifi::SendMPAck(u16 cmdcount, u16 clientfail)
 
 bool Wifi::ProcessTX(TXSlot* slot, int num)
 {
-    slot->CurPhaseTime -= kTimerInterval;
+    if (!slot || !WifiTxBounds::RuntimeSlotValid(num, slot->Valid, slot->CurPhase) ||
+        (slot->Valid && (!WifiTxBounds::FrameFits(slot->Addr, slot->Length) ||
+            !WifiTxBounds::ContainsFrameBytes(slot->Length, 0, 2))))
+    {
+        IOPORT(W_TXBusy) &= ~WifiTxBounds::BusyMask(num);
+        return true;
+    }
+
+    if (!SavestateInvariant::CountdownCanTick(slot->CurPhaseTime, kTimerInterval))
+    {
+        IOPORT(W_TXBusy) &= ~WifiTxBounds::BusyMask(num);
+        return true;
+    }
+    slot->CurPhaseTime = slot->CurPhaseTime < kTimerInterval ? 0 :
+        slot->CurPhaseTime - kTimerInterval;
     if (slot->CurPhaseTime > 0)
     {
         if (slot->CurPhase == 1)
@@ -954,11 +1055,18 @@ bool Wifi::ProcessTX(TXSlot* slot, int num)
         }
         else if (slot->CurPhase == 2)
         {
-            MPReplyTimer -= kTimerInterval;
-            if (MPReplyTimer <= 0 && MPClientMask != 0)
+            MPReplyTimer = MPReplyTimer < kTimerInterval ? 0 :
+                MPReplyTimer - kTimerInterval;
+            const u16 pendingClients = MPClientMask & 0xFFFE;
+            if (MPReplyTimer <= 0 && pendingClients != 0)
             {
                 int nclient = 1;
-                while (!(MPClientMask & (1 << nclient))) nclient++;
+                while (nclient < 16 && !(pendingClients & (1U << nclient))) nclient++;
+                if (nclient >= 16)
+                {
+                    MPClientMask = 0;
+                    return false;
+                }
 
                 u32 curclient = 1 << nclient;
 
@@ -1014,7 +1122,13 @@ bool Wifi::ProcessTX(TXSlot* slot, int num)
                 u16 framectl = *(u16*)&RAM[slot->Addr + 0xC];
                 if ((framectl & 0x00FF) == 0x0010)
                 {
-                    u16 aid = *(u16*)&RAM[slot->Addr + 0xC + 24 + 4];
+                    if (!WifiTxBounds::ContainsFrameBytes(slot->Length, 28, 2))
+                    {
+                        slot->Valid = false;
+                        IOPORT(W_TXBusy) &= ~(1U << num);
+                        return true;
+                    }
+                    u16 aid = *(u16*)&RAM[slot->Addr + 0xC + 28];
                     if (aid) Log(LogLevel::Debug, "[HOST] syncing client %04X, sync=%016llX\n", aid, USTimestamp);
                 }
                 else if ((framectl & 0x00FF) == 0x00C0)
@@ -1513,7 +1627,7 @@ void Wifi::FinishRX()
         len *= ((txrate==0x14) ? 4 : 8);
         len -= 76; // CHECKME: is this offset fixed?
 
-        u64 timestamp = *(u64*)&RXBuffer[12 + 24];
+        u64 timestamp = WifiMemory::Read64(&RXBuffer[12 + 24]);
         timestamp += (u64)len;
 
         USCounter = timestamp;
@@ -1863,6 +1977,12 @@ void Wifi::USTimer(u32 param)
         }
     }
 
+    if ((ComStatus & 0x2) && TXCurSlot >= 6)
+    {
+        IOPORT(W_TXBusy) = 0;
+        TXCurSlot = UINT32_MAX;
+        ComStatus &= ~0x2U;
+    }
     if (ComStatus & 0x2)
     {
         bool finished = ProcessTX(&TXSlots[TXCurSlot], TXCurSlot);
@@ -1893,9 +2013,18 @@ void Wifi::USTimer(u32 param)
             }
         }
     }
+    if ((ComStatus & 0x1) && RXBufferPtr > sizeof(RXBuffer) - sizeof(u16))
+        ComStatus &= ~0x1U;
     if (ComStatus & 0x1)
     {
-        RXTime -= kTimerInterval;
+        if (!SavestateInvariant::CountdownCanTick(RXTime, kTimerInterval))
+        {
+            ComStatus &= ~0x1U;
+            RXBufferPtr = 0;
+            ScheduleTimer(false);
+            return;
+        }
+        RXTime = RXTime < kTimerInterval ? 0 : RXTime - kTimerInterval;
         if (!(RXTime & RXHalfwordTimeMask))
         {
             u16 addr = IOPORT(W_RXTXAddr) << 1;

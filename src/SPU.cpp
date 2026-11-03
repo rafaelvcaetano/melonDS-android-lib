@@ -25,6 +25,7 @@
 #include "DSi.h"
 #include "DSi_I2S.h"
 #include "SPU.h"
+#include "SavestateInvariant.h"
 
 #include "blip-buf/blip_buf.h"
 
@@ -402,6 +403,17 @@ void SPUChannel::DoSavestate(Savestate* file)
     file->Var32(&FIFOReadOffset);
     file->Var32(&FIFOLevel);
     file->VarArray(FIFO, sizeof(FIFO));
+
+    if (!file->Saving && !file->Error &&
+        !SavestateInvariant::SPUChannelValid(
+            FIFOReadPos, FIFOWritePos, FIFOLevel, ADPCMIndex, ADPCMIndexLoop))
+    {
+        Log(LogLevel::Error, "savestate: rejected invalid SPU channel state\n");
+        Reset();
+        ADPCMIndex = 0;
+        ADPCMIndexLoop = 0;
+        file->Error = true;
+    }
 }
 
 void SPUChannel::FIFO_BufferData()
@@ -447,7 +459,11 @@ void SPUChannel::FIFO_BufferData()
 template<typename T>
 T SPUChannel::FIFO_ReadData()
 {
-    T ret = *(T*)&((u8*)FIFO)[FIFOReadPos];
+    T ret {};
+    u8* output = reinterpret_cast<u8*>(&ret);
+    const u8* bytes = reinterpret_cast<const u8*>(FIFO);
+    for (u32 i = 0; i < sizeof(T); i++)
+        output[i] = bytes[(FIFOReadPos + i) & 0x1F];
 
     FIFOReadPos += sizeof(T);
     FIFOReadPos &= 0x1F;
@@ -762,6 +778,14 @@ void SPUCaptureUnit::DoSavestate(Savestate* file)
     file->Var32(&FIFOWriteOffset);
     file->Var32(&FIFOLevel);
     file->VarArray(FIFO, 4*4);
+
+    if (!file->Saving && !file->Error &&
+        !SavestateInvariant::SPUCaptureValid(FIFOReadPos, FIFOWritePos, FIFOLevel))
+    {
+        Log(LogLevel::Error, "savestate: rejected invalid SPU capture state\n");
+        Reset();
+        file->Error = true;
+    }
 }
 
 void SPUCaptureUnit::FIFO_FlushData()
@@ -787,7 +811,10 @@ void SPUCaptureUnit::FIFO_FlushData()
 template<typename T>
 void SPUCaptureUnit::FIFO_WriteData(T val)
 {
-    *(T*)&((u8*)FIFO)[FIFOWritePos] = val;
+    const u8* input = reinterpret_cast<const u8*>(&val);
+    u8* bytes = reinterpret_cast<u8*>(FIFO);
+    for (u32 i = 0; i < sizeof(T); i++)
+        bytes[(FIFOWritePos + i) & 0xF] = input[i];
 
     FIFOWritePos += sizeof(T);
     FIFOWritePos &= 0xF;

@@ -26,6 +26,9 @@
 #include "melonDLDI.h"
 #include "FATStorage.h"
 #include "Utils.h"
+#include "CartridgeImageBounds.h"
+#include "CartridgeTransferBounds.h"
+#include "DLDIBounds.h"
 
 namespace melonDS
 {
@@ -463,15 +466,14 @@ void CartRetail::DoSavestate(Savestate* file)
     // we reload the SRAM contents.
     // it should be the same file, but the contents may change
 
-    u32 oldlen = SRAMLength;
-
-    file->Var32(&SRAMLength);
-    if (SRAMLength != oldlen)
+    u32 serializedLength = SRAMLength;
+    file->Var32(&serializedLength);
+    if (!file->Saving && serializedLength != SRAMLength)
     {
-        Log(LogLevel::Warn, "savestate: VERY BAD!!!! SRAM LENGTH DIFFERENT. %d -> %d\n", oldlen, SRAMLength);
-        Log(LogLevel::Warn, "oh well. loading it anyway. adsfgdsf\n");
-
-        SRAM = SRAMLength ? std::make_unique<u8[]>(SRAMLength) : nullptr;
+        Log(LogLevel::Error, "savestate: cartridge SRAM length mismatch %u != %u\n",
+            serializedLength, SRAMLength);
+        file->Error = true;
+        return;
     }
     if (SRAMLength)
     {
@@ -505,10 +507,11 @@ int CartRetail::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, const 
     {
     case 0xB7:
         {
+            if (!CartridgeTransferBounds::B7LengthValid(len, 0x4000)) return 0;
             u32 addr = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
             memset(data, 0, len);
 
-            if (((addr + len - 1) >> 12) != (addr >> 12))
+            if ((addr & 0xFFF) + len > 0x1000)
             {
                 u32 len1 = 0x1000 - (addr & 0xFFF);
                 ReadROM_B7(addr, len1, data, 0);
@@ -559,22 +562,20 @@ u8 CartRetail::SPIWrite(u8 val, u32 pos, bool last)
 
 void CartRetail::ReadROM_B7(u32 addr, u32 len, u8* data, u32 offset) const
 {
-    addr &= (ROMLength-1);
-
-    if (addr < 0x8000)
-        addr = 0x8000 + (addr & 0x1FF);
-
-    if (IsDSi && (addr >= DSiBase))
+    for (u32 copied = 0; copied < len;)
     {
-        // for DSi carts:
-        // * in DSi mode: block the first 0x3000 bytes of the DSi area
-        // * in DS mode: block the entire DSi area
+        u32 source = addr & (ROMLength - 1);
+        if (source < 0x8000)
+            source = (0x8000 + (source & 0x1FF)) & (ROMLength - 1);
 
-        if ((!DSiMode) || (addr < (DSiBase+0x3000)))
-            addr = 0x8000 + (addr & 0x1FF);
+        if (IsDSi && source >= DSiBase && ((!DSiMode) || source < DSiBase + 0x3000))
+            source = (0x8000 + (source & 0x1FF)) & (ROMLength - 1);
+
+        const u32 chunk = std::min(len - copied, ROMLength - source);
+        memcpy(data + offset + copied, ROM.get() + source, chunk);
+        copied += chunk;
+        addr += chunk;
     }
-
-    memcpy(data+offset, ROM.get()+addr, len);
 }
 
 u8 CartRetail::SRAMWrite_EEPROMTiny(u8 val, u32 pos, bool last)
@@ -991,6 +992,7 @@ int CartRetailNAND::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, co
 
     case 0xB7:
         {
+            if (!CartridgeTransferBounds::B7LengthValid(len, 0x4000)) return 0;
             u32 addr = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
 
             if (SRAMWindow == 0)
@@ -998,7 +1000,7 @@ int CartRetailNAND::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, co
                 // regular ROM mode
                 memset(data, 0, len);
 
-                if (((addr + len - 1) >> 12) != (addr >> 12))
+                if ((addr & 0xFFF) + len > 0x1000)
                 {
                     u32 len1 = 0x1000 - (addr & 0xFFF);
                     ReadROM_B7(addr, len1, data, 0);
@@ -1017,16 +1019,8 @@ int CartRetailNAND::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, co
                     addr >= SRAMBase && (addr - SRAMBase) < SRAMLength)
                 {
                     u32 saveoffset = addr - SRAMBase;
-                    u32 pagebase = saveoffset & ~0xFFF;
-                    u32 pageoffset = saveoffset & 0xFFF;
-                    for (u32 copied = 0; copied < len;)
-                    {
-                        u32 chunk = std::min(len - copied,
-                            std::min(0x1000u - pageoffset, SRAMLength - pagebase - pageoffset));
-                        memcpy(data + copied, &SRAM[pagebase + pageoffset], chunk);
-                        copied += chunk;
-                        pageoffset = 0;
-                    }
+                    const u32 copyLength = std::min(len, SRAMLength - saveoffset);
+                    memcpy(data, &SRAM[saveoffset], copyLength);
                 }
             }
         }
@@ -1200,89 +1194,112 @@ CartSD::~CartSD() = default;
 // The SD card is destroyed by the optional's destructor
 
 
-void CartSD::ApplyDLDIPatchAt(u8* binary, u32 dldioffset, const u8* patch, u32 patchlen, bool readonly) const
+static u32 ReadDLDI32(const u8* source)
 {
-    if (patch[0x0D] > binary[dldioffset+0x0F])
+    u32 value;
+    memcpy(&value, source, sizeof(value));
+    return value;
+}
+
+static void WriteDLDI32(u8* destination, u32 value)
+{
+    memcpy(destination, &value, sizeof(value));
+}
+
+bool CartSD::ApplyDLDIPatchAt(u8* binary, u32 binarylen, u32 dldioffset,
+                              const u8* patch, u32 patchlen, bool readonly) const
+{
+    if (!binary || !patch || patchlen < 0x80 ||
+        !DLDIBounds::RangeFits(dldioffset, 0x80, binarylen) ||
+        patch[0x0D] >= 31 || binary[dldioffset + 0x0F] >= 31)
+        return false;
+
+    const u32 reservedCapacity = 1U << binary[dldioffset + 0x0F];
+    const u32 patchsize = 1U << patch[0x0D];
+    if (patch[0x0D] > binary[dldioffset+0x0F] ||
+        !DLDIBounds::PatchFits(dldioffset, reservedCapacity, patchlen, patchsize, binarylen))
     {
         Log(LogLevel::Error, "DLDI driver ain't gonna fit, sorry\n");
-        return;
+        return false;
     }
 
-    Log(LogLevel::Info, "existing driver is: %s\n", &binary[dldioffset+0x10]);
-    Log(LogLevel::Info, "new driver is: %s\n", &patch[0x10]);
+    Log(LogLevel::Info, "existing driver is: %.48s\n", &binary[dldioffset+0x10]);
+    Log(LogLevel::Info, "new driver is: %.48s\n", &patch[0x10]);
 
-    u32 memaddr = *(u32*)&binary[dldioffset+0x40];
+    u32 memaddr = ReadDLDI32(&binary[dldioffset+0x40]);
     if (memaddr == 0)
-        memaddr = *(u32*)&binary[dldioffset+0x68] - 0x80;
+    {
+        const u32 startup = ReadDLDI32(&binary[dldioffset+0x68]);
+        if (startup < 0x80) return false;
+        memaddr = startup - 0x80;
+    }
 
-    u32 patchbase = *(u32*)&patch[0x40];
+    u32 patchbase = ReadDLDI32(&patch[0x40]);
     u32 delta = memaddr - patchbase;
-
-    u32 patchsize = 1 << patch[0x0D];
+    if (patchbase > UINT32_MAX - patchsize || memaddr > UINT32_MAX - patchsize) return false;
     u32 patchend = patchbase + patchsize;
 
+    auto relativeRange = [&](u32 startField, u32 endField, u32 limit,
+                             u32& start, u32& end) -> bool {
+        const u32 absoluteStart = ReadDLDI32(&patch[startField]);
+        const u32 absoluteEnd = ReadDLDI32(&patch[endField]);
+        if (absoluteStart < patchbase || absoluteEnd < patchbase) return false;
+        start = absoluteStart - patchbase;
+        end = absoluteEnd - patchbase;
+        return DLDIBounds::FixRangeFits(start, end, limit);
+    };
+
+    u32 fixStarts[4] {}, fixEnds[4] {};
+    const u8 fixmask = patch[0x0E];
+    if ((fixmask & 0x01) && !relativeRange(0x40, 0x44, patchlen, fixStarts[0], fixEnds[0])) return false;
+    if ((fixmask & 0x02) && !relativeRange(0x48, 0x4C, patchlen, fixStarts[1], fixEnds[1])) return false;
+    if ((fixmask & 0x04) && !relativeRange(0x50, 0x54, patchlen, fixStarts[2], fixEnds[2])) return false;
+    if ((fixmask & 0x08) && !relativeRange(0x58, 0x5C, patchsize, fixStarts[3], fixEnds[3])) return false;
+    if (readonly)
+    {
+        const u32 patchWriteSectors = ReadDLDI32(&patch[0x74]);
+        if (patchWriteSectors < patchbase ||
+            !DLDIBounds::RangeFits(patchWriteSectors - patchbase, 8, patchlen))
+            return false;
+    }
+
+    memset(&binary[dldioffset], 0, patchsize);
     memcpy(&binary[dldioffset], patch, patchlen);
 
-    *(u32*)&binary[dldioffset+0x40] += delta;
-    *(u32*)&binary[dldioffset+0x44] += delta;
-    *(u32*)&binary[dldioffset+0x48] += delta;
-    *(u32*)&binary[dldioffset+0x4C] += delta;
-    *(u32*)&binary[dldioffset+0x50] += delta;
-    *(u32*)&binary[dldioffset+0x54] += delta;
-    *(u32*)&binary[dldioffset+0x58] += delta;
-    *(u32*)&binary[dldioffset+0x5C] += delta;
-
-    *(u32*)&binary[dldioffset+0x68] += delta;
-    *(u32*)&binary[dldioffset+0x6C] += delta;
-    *(u32*)&binary[dldioffset+0x70] += delta;
-    *(u32*)&binary[dldioffset+0x74] += delta;
-    *(u32*)&binary[dldioffset+0x78] += delta;
-    *(u32*)&binary[dldioffset+0x7C] += delta;
-
-    u8 fixmask = patch[0x0E];
+    for (u32 field : {0x40U, 0x44U, 0x48U, 0x4CU, 0x50U, 0x54U, 0x58U, 0x5CU,
+                      0x68U, 0x6CU, 0x70U, 0x74U, 0x78U, 0x7CU})
+        WriteDLDI32(&binary[dldioffset + field], ReadDLDI32(&binary[dldioffset + field]) + delta);
 
     if (fixmask & 0x01)
     {
-        u32 fixstart = *(u32*)&patch[0x40] - patchbase;
-        u32 fixend = *(u32*)&patch[0x44] - patchbase;
-
-        for (u32 addr = fixstart; addr < fixend; addr+=4)
+        for (u32 addr = fixStarts[0]; addr < fixEnds[0]; addr+=4)
         {
-            u32 val = *(u32*)&binary[dldioffset+addr];
+            u32 val = ReadDLDI32(&binary[dldioffset+addr]);
             if (val >= patchbase && val < patchend)
-                *(u32*)&binary[dldioffset+addr] += delta;
+                WriteDLDI32(&binary[dldioffset+addr], val + delta);
         }
     }
     if (fixmask & 0x02)
     {
-        u32 fixstart = *(u32*)&patch[0x48] - patchbase;
-        u32 fixend = *(u32*)&patch[0x4C] - patchbase;
-
-        for (u32 addr = fixstart; addr < fixend; addr+=4)
+        for (u32 addr = fixStarts[1]; addr < fixEnds[1]; addr+=4)
         {
-            u32 val = *(u32*)&binary[dldioffset+addr];
+            u32 val = ReadDLDI32(&binary[dldioffset+addr]);
             if (val >= patchbase && val < patchend)
-                *(u32*)&binary[dldioffset+addr] += delta;
+                WriteDLDI32(&binary[dldioffset+addr], val + delta);
         }
     }
     if (fixmask & 0x04)
     {
-        u32 fixstart = *(u32*)&patch[0x50] - patchbase;
-        u32 fixend = *(u32*)&patch[0x54] - patchbase;
-
-        for (u32 addr = fixstart; addr < fixend; addr+=4)
+        for (u32 addr = fixStarts[2]; addr < fixEnds[2]; addr+=4)
         {
-            u32 val = *(u32*)&binary[dldioffset+addr];
+            u32 val = ReadDLDI32(&binary[dldioffset+addr]);
             if (val >= patchbase && val < patchend)
-                *(u32*)&binary[dldioffset+addr] += delta;
+                WriteDLDI32(&binary[dldioffset+addr], val + delta);
         }
     }
     if (fixmask & 0x08)
     {
-        u32 fixstart = *(u32*)&patch[0x58] - patchbase;
-        u32 fixend = *(u32*)&patch[0x5C] - patchbase;
-
-        memset(&binary[dldioffset+fixstart], 0, fixend-fixstart);
+        memset(&binary[dldioffset+fixStarts[3]], 0, fixEnds[3]-fixStarts[3]);
     }
 
     if (readonly)
@@ -1291,40 +1308,46 @@ void CartSD::ApplyDLDIPatchAt(u8* binary, u32 dldioffset, const u8* patch, u32 p
         binary[dldioffset+0x64] &= ~0x02;
 
         // make writeSectors() return failure
-        u32 writesec_addr = *(u32*)&binary[dldioffset+0x74];
-        writesec_addr -= memaddr;
-        writesec_addr += dldioffset;
-        *(u32*)&binary[writesec_addr+0x00] = 0xE3A00000; // mov r0, #0
-        *(u32*)&binary[writesec_addr+0x04] = 0xE12FFF1E; // bx lr
+        u32 writesec_addr = ReadDLDI32(&binary[dldioffset+0x74]);
+        if (writesec_addr < memaddr ||
+            !DLDIBounds::RangeFits(writesec_addr - memaddr, 8, patchlen))
+            return false;
+        writesec_addr = dldioffset + (writesec_addr - memaddr);
+        WriteDLDI32(&binary[writesec_addr+0x00], 0xE3A00000); // mov r0, #0
+        WriteDLDI32(&binary[writesec_addr+0x04], 0xE12FFF1E); // bx lr
     }
 
     Log(LogLevel::Debug, "applied DLDI patch at %08X\n", dldioffset);
+    return true;
 }
 
 void CartSD::ApplyDLDIPatch(const u8* patch, u32 patchlen, bool readonly)
 {
-    if (*(u32*)&patch[0] != 0xBF8DA5ED ||
-        *(u32*)&patch[4] != 0x69684320 ||
-        *(u32*)&patch[8] != 0x006D6873)
+    if (!patch || patchlen < 0x80 || ReadDLDI32(&patch[0]) != 0xBF8DA5ED ||
+        ReadDLDI32(&patch[4]) != 0x69684320 ||
+        ReadDLDI32(&patch[8]) != 0x006D6873)
     {
         Log(LogLevel::Error, "bad DLDI patch\n");
         return;
     }
 
-    u32 offset = *(u32*)&ROM[0x20];
-    u32 size = *(u32*)&ROM[0x2C];
+    if (ROMLength < sizeof(NDSHeader)) return;
+    u32 offset = ReadDLDI32(&ROM[0x20]);
+    u32 size = ReadDLDI32(&ROM[0x2C]);
+    if (!DLDIBounds::RangeFits(offset, size, ROMLength))
+        return;
 
     u8* binary = &ROM[offset];
 
-    for (u32 i = 0; i < size; )
+    for (u32 i = 0; DLDIBounds::SearchProbeFits(i, size); )
     {
-        if (*(u32*)&binary[i  ] == 0xBF8DA5ED &&
-            *(u32*)&binary[i+4] == 0x69684320 &&
-            *(u32*)&binary[i+8] == 0x006D6873)
+        if (ReadDLDI32(&binary[i  ]) == 0xBF8DA5ED &&
+            ReadDLDI32(&binary[i+4]) == 0x69684320 &&
+            ReadDLDI32(&binary[i+8]) == 0x006D6873)
         {
             Log(LogLevel::Debug, "DLDI structure found at %08X (%08X)\n", i, offset+i);
-            ApplyDLDIPatchAt(binary, i, patch, patchlen, readonly);
-            i += patchlen;
+            const bool applied = ApplyDLDIPatchAt(binary, size, i, patch, patchlen, readonly);
+            i += applied ? patchlen : 1;
         }
         else
             i++;
@@ -1333,11 +1356,14 @@ void CartSD::ApplyDLDIPatch(const u8* patch, u32 patchlen, bool readonly)
 
 void CartSD::ReadROM_B7(u32 addr, u32 len, u8* data, u32 offset) const
 {
-    // TODO: how strict should this be for homebrew?
-
-    addr &= (ROMLength-1);
-
-    memcpy(data+offset, ROM.get()+addr, len);
+    for (u32 copied = 0; copied < len;)
+    {
+        const u32 source = addr & (ROMLength - 1);
+        const u32 chunk = std::min(len - copied, ROMLength - source);
+        memcpy(data + offset + copied, ROM.get() + source, chunk);
+        copied += chunk;
+        addr += chunk;
+    }
 }
 
 CartHomebrew::CartHomebrew(const u8* rom, u32 len, u32 chipid, ROMListEntry romparams, void* userdata, std::optional<FATStorage>&& sdcard) :
@@ -1401,10 +1427,11 @@ int CartHomebrew::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, cons
     {
     case 0xB7:
         {
+            if (!CartridgeTransferBounds::B7LengthValid(len, 0x4000)) return 0;
             u32 addr = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
             memset(data, 0, len);
 
-            if (((addr + len - 1) >> 12) != (addr >> 12))
+            if ((addr & 0xFFF) + len > 0x1000)
             {
                 u32 len1 = 0x1000 - (addr & 0xFFF);
                 ReadROM_B7(addr, len1, data, 0);
@@ -1491,11 +1518,38 @@ void NDSCartSlot::DoSavestate(Savestate* file) noexcept
     file->VarArray(ROMCommand.data(), sizeof(ROMCommand));
     file->Var32(&ROMData);
 
-    file->VarArray(TransferData.data(), sizeof(TransferData));
-    file->Var32(&TransferPos);
-    file->Var32(&TransferLen);
-    file->Var32(&TransferDir);
-    file->VarArray(TransferCmd.data(), sizeof(TransferCmd));
+    if (file->Saving)
+    {
+        file->VarArray(TransferData.data(), sizeof(TransferData));
+        file->Var32(&TransferPos);
+        file->Var32(&TransferLen);
+        file->Var32(&TransferDir);
+        file->VarArray(TransferCmd.data(), sizeof(TransferCmd));
+    }
+    else
+    {
+        std::array<u8, 0x4000> transferData {};
+        std::array<u8, 8> transferCmd {};
+        u32 transferPos = 0;
+        u32 transferLen = 0;
+        u32 transferDir = 0;
+        file->VarArray(transferData.data(), sizeof(transferData));
+        file->Var32(&transferPos);
+        file->Var32(&transferLen);
+        file->Var32(&transferDir);
+        file->VarArray(transferCmd.data(), sizeof(transferCmd));
+        if (file->Error || !CartridgeTransferBounds::Validate(
+                transferPos, transferLen, transferDir, transferData.size()))
+        {
+            file->Error = true;
+            return;
+        }
+        TransferData = transferData;
+        TransferPos = transferPos;
+        TransferLen = transferLen;
+        TransferDir = transferDir;
+        TransferCmd = transferCmd;
+    }
 
     // cart inserted/len/ROM/etc should be already populated
     // savestate should be loaded after the right game is loaded
@@ -1614,13 +1668,26 @@ std::unique_ptr<CartCommon> ParseROM(std::unique_ptr<u8[]>&& romdata, u32 romlen
         return nullptr;
     }
 
-    if (romlen == 0)
+    if (!CartridgeImageBounds::IsNDSLengthSupported(romlen))
     {
-        Log(LogLevel::Error, "NDSCart: romlen is zero\n");
+        Log(LogLevel::Error, "NDSCart: unsupported ROM length %u\n", romlen);
+        return nullptr;
+    }
+
+    NDSHeader unpaddedHeader {};
+    memcpy(&unpaddedHeader, romdata.get(), sizeof(unpaddedHeader));
+    if (!CartridgeImageBounds::ValidateNDS(unpaddedHeader, romlen))
+    {
+        Log(LogLevel::Error, "NDSCart: malformed ROM header ranges\n");
         return nullptr;
     }
 
     auto [cartrom, cartromsize] = PadToPowerOf2(std::move(romdata), romlen);
+    if (!cartrom || cartromsize == 0)
+    {
+        Log(LogLevel::Error, "NDSCart: failed to allocate padded ROM image\n");
+        return nullptr;
+    }
 
     NDSHeader header {};
     memcpy(&header, cartrom.get(), sizeof(header));
@@ -1830,7 +1897,8 @@ void NDSCartSlot::ROMPrepareData(u32 param) noexcept
 {
     if (TransferDir == 0)
     {
-        if (TransferPos >= TransferLen)
+        if (TransferPos >= TransferLen ||
+            !CartridgeTransferBounds::WordFits(TransferPos, TransferData.size()))
             ROMData = 0;
         else
             ROMData = *(u32*)&TransferData[TransferPos];
@@ -1977,7 +2045,8 @@ void NDSCartSlot::WriteROMData(u32 val) noexcept
     {
         if (TransferDir == 1)
         {
-            if (TransferPos < TransferLen)
+            if (TransferPos < TransferLen &&
+                CartridgeTransferBounds::WordFits(TransferPos, TransferData.size()))
                 *(u32*)&TransferData[TransferPos] = ROMData;
 
             TransferPos += 4;

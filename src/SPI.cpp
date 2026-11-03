@@ -74,6 +74,16 @@ FirmwareMem::~FirmwareMem() = default;
 
 void FirmwareMem::Reset()
 {
+    if (!FirmwareData.IsLayoutValid())
+    {
+        Log(LogLevel::Error, "firmware: refusing to reset with an invalid binary layout\n");
+        Hold = 0;
+        CurCmd = 0;
+        Data = 0;
+        StatusReg = 0;
+        return;
+    }
+
     // fix touchscreen coords
     for (auto& u : FirmwareData.GetUserData())
     {
@@ -157,7 +167,7 @@ void FirmwareMem::SetupDirectBoot()
 
 bool FirmwareMem::IsLoadedFirmwareBuiltIn() const
 {
-    return FirmwareData.GetHeader().Identifier == GENERATED_FIRMWARE_IDENTIFIER;
+    return FirmwareData.IsGenerated();
 }
 
 void FirmwareMem::Write(u8 val)
@@ -255,6 +265,13 @@ void FirmwareMem::Release()
 {
     if (CurCmd == 0x02 || CurCmd == 0x0A)
     { // If the SPI firmware chip just finished a write...
+        if (!FirmwareData.IsLayoutValid())
+        {
+            Log(LogLevel::Error, "firmware: refusing to flush an invalid binary layout\n");
+            SPIDevice::Release();
+            CurCmd = 0;
+            return;
+        }
         // We only notify the frontend of changes to the Wi-fi/userdata settings region
         // (although it might still decide to flush the whole thing)
         u32 wifioffset = FirmwareData.GetWifiAccessPointOffset();

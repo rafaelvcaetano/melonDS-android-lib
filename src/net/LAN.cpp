@@ -43,6 +43,7 @@
 #endif
 
 #include "LAN.h"
+#include "MPPacketValidation.h"
 
 
 namespace melonDS
@@ -74,6 +75,52 @@ enum
 const int kDiscoveryPort = 7063;
 const int kLANPort = 7064;
 
+struct PlayerWire
+{
+    s32 ID;
+    char Name[32];
+    u32 Status;
+    u32 Address;
+    u8 IsLocalPlayer;
+    u8 Reserved[3];
+    u32 Ping;
+};
+static_assert(sizeof(PlayerWire) == sizeof(LAN::Player));
+static_assert(offsetof(PlayerWire, ID) == offsetof(LAN::Player, ID));
+static_assert(offsetof(PlayerWire, Name) == offsetof(LAN::Player, Name));
+static_assert(offsetof(PlayerWire, Status) == offsetof(LAN::Player, Status));
+static_assert(offsetof(PlayerWire, Address) == offsetof(LAN::Player, Address));
+static_assert(offsetof(PlayerWire, IsLocalPlayer) == offsetof(LAN::Player, IsLocalPlayer));
+static_assert(offsetof(PlayerWire, Ping) == offsetof(LAN::Player, Ping));
+
+static PlayerWire EncodePlayer(const LAN::Player& player)
+{
+    PlayerWire wire {};
+    wire.ID = player.ID;
+    memcpy(wire.Name, player.Name, sizeof(wire.Name));
+    wire.Status = static_cast<u32>(player.Status);
+    wire.Address = player.Address;
+    wire.IsLocalPlayer = player.IsLocalPlayer ? 1 : 0;
+    wire.Ping = player.Ping;
+    return wire;
+}
+
+static bool DecodePlayer(const PlayerWire& wire, LAN::Player& player)
+{
+    if (wire.ID < 0 || wire.ID >= 16 || wire.Status > LAN::Player_Disconnected ||
+        wire.IsLocalPlayer > 1)
+        return false;
+    player = {};
+    player.ID = wire.ID;
+    memcpy(player.Name, wire.Name, sizeof(player.Name));
+    player.Name[31] = '\0';
+    player.Status = static_cast<LAN::PlayerStatus>(wire.Status);
+    player.Address = wire.Address;
+    player.IsLocalPlayer = wire.IsLocalPlayer != 0;
+    player.Ping = wire.Ping;
+    return true;
+}
+
 
 LAN::LAN() noexcept : Inited(false)
 {
@@ -98,6 +145,7 @@ LAN::LAN() noexcept : Inited(false)
     MPRecvTimeout = 25;
     LastHostID = -1;
     LastHostPeer = nullptr;
+    HostPeer = nullptr;
 
     FrameCount = 0;
 
@@ -253,6 +301,7 @@ bool LAN::StartHost(const char* playername, int numplayers)
     HostAddress = kLocalhost;
     LastHostID = -1;
     LastHostPeer = nullptr;
+    HostPeer = nullptr;
 
     Active = true;
     IsHost = true;
@@ -310,22 +359,32 @@ bool LAN::StartClient(const char* playername, const char* host)
             }
             else if (conn == 1 && event.type == ENET_EVENT_TYPE_RECEIVE)
             {
+                if (event.channelID != Chan_Cmd || event.packet->dataLength != 11)
+                {
+                    enet_packet_destroy(event.packet);
+                    continue;
+                }
                 u8* data = event.packet->data;
-                if (event.channelID != Chan_Cmd) continue;
-                if (data[0] != Cmd_ClientInit) continue;
-                if (event.packet->dataLength != 11) continue;
+                if (data[0] != Cmd_ClientInit)
+                {
+                    enet_packet_destroy(event.packet);
+                    continue;
+                }
 
                 u32 magic = data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24);
                 u32 version = data[5] | (data[6] << 8) | (data[7] << 16) | (data[8] << 24);
-                if (magic != kLANMagic) continue;
-                if (version != kProtocolVersion) continue;
-                if (data[10] > 16) continue;
+                if (magic != kLANMagic || version != kProtocolVersion ||
+                    data[10] == 0 || data[10] > 16 || data[9] >= data[10] || data[9] >= 16)
+                {
+                    enet_packet_destroy(event.packet);
+                    continue;
+                }
 
                 MaxPlayers = data[10];
 
                 // send player information
                 MyPlayer.ID = data[9];
-                u8 cmd[9+sizeof(Player)];
+                u8 cmd[9+sizeof(PlayerWire)];
                 cmd[0] = Cmd_PlayerInfo;
                 cmd[1] = (u8)kLANMagic;
                 cmd[2] = (u8)(kLANMagic >> 8);
@@ -335,10 +394,12 @@ bool LAN::StartClient(const char* playername, const char* host)
                 cmd[6] = (u8)(kProtocolVersion >> 8);
                 cmd[7] = (u8)(kProtocolVersion >> 16);
                 cmd[8] = (u8)(kProtocolVersion >> 24);
-                memcpy(&cmd[9], &MyPlayer, sizeof(Player));
-                ENetPacket* pkt = enet_packet_create(cmd, 9+sizeof(Player), ENET_PACKET_FLAG_RELIABLE);
+                const PlayerWire wire = EncodePlayer(MyPlayer);
+                memcpy(&cmd[9], &wire, sizeof(wire));
+                ENetPacket* pkt = enet_packet_create(cmd, sizeof(cmd), ENET_PACKET_FLAG_RELIABLE);
                 enet_peer_send(event.peer, Chan_Cmd, pkt);
 
+                enet_packet_destroy(event.packet);
                 conn = 2;
                 break;
             }
@@ -363,6 +424,7 @@ bool LAN::StartClient(const char* playername, const char* host)
     HostAddress = addr.host;
     LastHostID = -1;
     LastHostPeer = nullptr;
+    HostPeer = peer;
     RemotePeers[0] = peer;
     peer->data = &Players[0];
 
@@ -397,6 +459,7 @@ void LAN::EndSession()
 
     enet_host_destroy(Host);
     Host = nullptr;
+    HostPeer = nullptr;
     IsHost = false;
 }
 
@@ -496,11 +559,15 @@ void LAN::ProcessDiscovery()
 
 void LAN::HostUpdatePlayerList()
 {
-    u8 cmd[2+sizeof(Players)];
+    u8 cmd[2+(sizeof(PlayerWire)*16)];
     cmd[0] = Cmd_PlayerList;
     cmd[1] = (u8)NumPlayers;
-    memcpy(&cmd[2], Players, sizeof(Players));
-    ENetPacket* pkt = enet_packet_create(cmd, 2+sizeof(Players), ENET_PACKET_FLAG_RELIABLE);
+    for (int i = 0; i < 16; i++)
+    {
+        const PlayerWire wire = EncodePlayer(Players[i]);
+        memcpy(&cmd[2 + i*sizeof(PlayerWire)], &wire, sizeof(wire));
+    }
+    ENetPacket* pkt = enet_packet_create(cmd, sizeof(cmd), ENET_PACKET_FLAG_RELIABLE);
     enet_host_broadcast(Host, Chan_Cmd, pkt);
 }
 
@@ -570,7 +637,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
     case ENET_EVENT_TYPE_DISCONNECT:
         {
             Player* player = (Player*)event.peer->data;
-            if (!player) break;
+            if (!player || player->ID < 0 || player->ID >= 16) break;
 
             ConnectedBitmask &= ~(1 << player->ID);
 
@@ -588,14 +655,18 @@ void LAN::ProcessHostEvent(ENetEvent& event)
 
     case ENET_EVENT_TYPE_RECEIVE:
         {
-            if (event.packet->dataLength < 1) break;
+            if (event.packet->dataLength < 1)
+            {
+                enet_packet_destroy(event.packet);
+                break;
+            }
 
             u8* data = (u8*)event.packet->data;
             switch (data[0])
             {
             case Cmd_PlayerInfo: // client sending player info
                 {
-                    if (event.packet->dataLength != (9+sizeof(Player))) break;
+                    if (event.packet->dataLength != (9+sizeof(PlayerWire))) break;
 
                     u32 magic = data[1] | (data[2] << 8) | (data[3] << 16) | (data[4] << 24);
                     u32 version = data[5] | (data[6] << 8) | (data[7] << 16) | (data[8] << 24);
@@ -605,12 +676,18 @@ void LAN::ProcessHostEvent(ENetEvent& event)
                         break;
                     }
 
+                    PlayerWire wire;
+                    memcpy(&wire, &data[9], sizeof(wire));
                     Player player;
-                    memcpy(&player, &data[9], sizeof(Player));
-                    player.Name[31] = '\0';
+                    if (!DecodePlayer(wire, player))
+                    {
+                        enet_peer_disconnect(event.peer, 0);
+                        break;
+                    }
 
                     Player* hostside = (Player*)event.peer->data;
-                    if (player.ID != hostside->ID)
+                    if (!hostside || hostside->ID < 0 || hostside->ID >= 16 ||
+                        player.ID != hostside->ID)
                     {
                         enet_peer_disconnect(event.peer, 0);
                         break;
@@ -620,6 +697,8 @@ void LAN::ProcessHostEvent(ENetEvent& event)
 
                     player.Status = Player_Client;
                     player.Address = event.peer->address.host;
+                    player.IsLocalPlayer = false;
+                    player.Ping = event.peer->roundTripTime;
                     memcpy(hostside, &player, sizeof(Player));
 
                     Platform::Mutex_Unlock(PlayersMutex);
@@ -633,7 +712,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
                 {
                     if (event.packet->dataLength != 1) break;
                     Player* player = (Player*)event.peer->data;
-                    if (!player) break;
+                    if (!player || player->ID < 0 || player->ID >= 16) break;
 
                     ConnectedBitmask |= (1 << player->ID);
                 }
@@ -643,7 +722,7 @@ void LAN::ProcessHostEvent(ENetEvent& event)
                 {
                     if (event.packet->dataLength != 1) break;
                     Player* player = (Player*)event.peer->data;
-                    if (!player) break;
+                    if (!player || player->ID < 0 || player->ID >= 16) break;
 
                     ConnectedBitmask &= ~(1 << player->ID);
                 }
@@ -694,7 +773,7 @@ void LAN::ProcessClientEvent(ENetEvent& event)
     case ENET_EVENT_TYPE_DISCONNECT:
         {
             Player* player = (Player*)event.peer->data;
-            if (!player) break;
+            if (!player || player->ID < 0 || player->ID >= 16) break;
 
             ConnectedBitmask &= ~(1 << player->ID);
 
@@ -711,20 +790,43 @@ void LAN::ProcessClientEvent(ENetEvent& event)
 
     case ENET_EVENT_TYPE_RECEIVE:
         {
-            if (event.packet->dataLength < 1) break;
+            if (event.packet->dataLength < 1)
+            {
+                enet_packet_destroy(event.packet);
+                break;
+            }
 
             u8* data = (u8*)event.packet->data;
             switch (data[0])
             {
             case Cmd_PlayerList: // host sending player list
                 {
-                    if (event.packet->dataLength != (2+sizeof(Players))) break;
-                    if (data[1] > 16) break;
+                    if (event.packet->dataLength != (2+(sizeof(PlayerWire)*16))) break;
+                    if (event.peer != HostPeer || data[1] == 0 || data[1] > 16 ||
+                        data[1] > MaxPlayers || MyPlayer.ID < 0 || MyPlayer.ID >= 16) break;
+
+                    Player incoming[16] {};
+                    int activePlayers = 0;
+                    bool valid = true;
+                    for (int i = 0; i < 16; i++)
+                    {
+                        PlayerWire wire;
+                        memcpy(&wire, &data[2 + i*sizeof(PlayerWire)], sizeof(wire));
+                        if (!DecodePlayer(wire, incoming[i]) ||
+                            (incoming[i].Status != Player_None && incoming[i].ID != i))
+                        {
+                            valid = false;
+                            break;
+                        }
+                        if (incoming[i].Status != Player_None) activePlayers++;
+                    }
+                    if (!valid || activePlayers != data[1] ||
+                        incoming[MyPlayer.ID].ID != MyPlayer.ID) break;
 
                     Platform::Mutex_Lock(PlayersMutex);
 
                     NumPlayers = data[1];
-                    memcpy(Players, &data[2], sizeof(Players));
+                    memcpy(Players, incoming, sizeof(Players));
                     for (int i = 0; i < 16; i++)
                     {
                         Players[i].Name[31] = '\0';
@@ -759,7 +861,7 @@ void LAN::ProcessClientEvent(ENetEvent& event)
                 {
                     if (event.packet->dataLength != 1) break;
                     Player* player = (Player*)event.peer->data;
-                    if (!player) break;
+                    if (!player || player->ID < 0 || player->ID >= 16) break;
 
                     ConnectedBitmask |= (1 << player->ID);
                 }
@@ -769,7 +871,7 @@ void LAN::ProcessClientEvent(ENetEvent& event)
                 {
                     if (event.packet->dataLength != 1) break;
                     Player* player = (Player*)event.peer->data;
-                    if (!player) break;
+                    if (!player || player->ID < 0 || player->ID >= 16) break;
 
                     ConnectedBitmask &= ~(1 << player->ID);
                 }
@@ -808,8 +910,9 @@ void LAN::ProcessLAN(int type)
     while (!RXQueue.empty())
     {
         ENetPacket* enetpacket = RXQueue.front();
-        MPPacketHeader* header = (MPPacketHeader*)&enetpacket->data[0];
-        u32 packettime = header->Magic;
+        MPPacketHeader header;
+        memcpy(&header, enetpacket->data, sizeof(header));
+        u32 packettime = header.Magic;
 
         if ((packettime > time_last) || (packettime < (time_last - 16)))
         {
@@ -823,7 +926,7 @@ void LAN::ProcessLAN(int type)
             if (type == 1)
             {
                 // if looking for a misc. frame, we shouldn't be receiving a MP frame
-                if (header->Type == 0)
+                if (header.Type == 0)
                     return;
 
                 RXQueue.pop();
@@ -842,15 +945,12 @@ void LAN::ProcessLAN(int type)
     {
         if (event.type == ENET_EVENT_TYPE_RECEIVE && event.channelID == Chan_MP)
         {
-            MPPacketHeader* header = (MPPacketHeader*)&event.packet->data[0];
-
-            bool good = true;
-            if (event.packet->dataLength < sizeof(MPPacketHeader))
-                good = false;
-            else if (header->Magic != 0x4946494E)
-                good = false;
-            else if (header->SenderID == MyPlayer.ID)
-                good = false;
+            MPPacketHeader header {};
+            const bool hasHeader = event.packet->dataLength >= sizeof(header);
+            if (hasHeader) memcpy(&header, event.packet->data, sizeof(header));
+            const bool good = hasHeader &&
+                MPPacketValidation::HeaderValid(header, event.packet->dataLength) &&
+                header.SenderID != static_cast<u32>(MyPlayer.ID);
 
             if (!good)
             {
@@ -859,7 +959,8 @@ void LAN::ProcessLAN(int type)
             else
             {
                 // mark this packet with the time it was received
-                header->Magic = (u32)Platform::GetMSCount();
+                const u32 receivedAt = (u32)Platform::GetMSCount();
+                memcpy(event.packet->data, &receivedAt, sizeof(receivedAt));
 
                 event.packet->userData = event.peer;
                 RXQueue.push(event.packet);
@@ -941,6 +1042,13 @@ void LAN::End(int inst)
 int LAN::SendPacketGeneric(u32 type, u8* packet, int len, u64 timestamp)
 {
     if (!Host) return 0;
+    const u32 kind = type & 0xFFFFU;
+    const u32 aid = type >> 16;
+    const int maximum = kind == 2 ? 1024 : 2048;
+    if (len < 0 || len > maximum || (len != 0 && !packet) || kind > 3 ||
+        (kind == 2 ? (aid < 1 || aid > 15) : aid != 0) ||
+        MyPlayer.ID < 0 || MyPlayer.ID >= 16)
+        return 0;
 
     // TODO make the reliable part optional?
     //u32 flags = ENET_PACKET_FLAG_RELIABLE;
@@ -976,23 +1084,28 @@ int LAN::RecvPacketGeneric(u8* packet, bool block, u64* timestamp)
 
     ENetPacket* enetpacket = RXQueue.front();
     RXQueue.pop();
-    MPPacketHeader* header = (MPPacketHeader*)&enetpacket->data[0];
+    MPPacketHeader header;
+    memcpy(&header, enetpacket->data, sizeof(header));
+    if (!MPPacketValidation::PayloadFits(enetpacket->dataLength, header.Length, 2048) ||
+        header.SenderID >= 16)
+    {
+        enet_packet_destroy(enetpacket);
+        return 0;
+    }
 
-    u32 len = header->Length;
+    u32 len = header.Length;
     if (len)
     {
-        if (len > 2048) len = 2048;
-
         memcpy(packet, &enetpacket->data[sizeof(MPPacketHeader)], len);
 
-        if (header->Type == 1)
+        if (header.Type == 1)
         {
-            LastHostID = header->SenderID;
+            LastHostID = header.SenderID;
             LastHostPeer = (ENetPeer*)enetpacket->userData;
         }
     }
 
-    if (timestamp) *timestamp = header->Timestamp;
+    if (timestamp) *timestamp = header.Timestamp;
     enet_packet_destroy(enetpacket);
     return len;
 }
@@ -1058,27 +1171,33 @@ u16 LAN::RecvReplies(int inst, u8* packets, u64 timestamp, u16 aidmask)
 
         ENetPacket* enetpacket = RXQueue.front();
         RXQueue.pop();
-        MPPacketHeader* header = (MPPacketHeader*)&enetpacket->data[0];
+        MPPacketHeader header;
+        memcpy(&header, enetpacket->data, sizeof(header));
         bool good = true;
-        if ((header->Type & 0xFFFF) != 2)
+        if ((header.Type & 0xFFFF) != 2 ||
+            !MPPacketValidation::PayloadFits(enetpacket->dataLength, header.Length, 1024) ||
+            header.SenderID >= 16)
             good = false;
-        else if (header->Timestamp < (timestamp - 32))
+        else if (header.Timestamp < (timestamp - 32))
             good = false;
 
         if (good)
         {
-            u32 len = header->Length;
+            u32 len = header.Length;
             if (len)
             {
-                if (len > 1024) len = 1024;
-
-                u32 aid = header->Type >> 16;
+                u32 aid = header.Type >> 16;
+                if (aid < 1 || aid > 15)
+                {
+                    enet_packet_destroy(enetpacket);
+                    continue;
+                }
                 memcpy(&packets[(aid-1)*1024], &enetpacket->data[sizeof(MPPacketHeader)], len);
 
-                ret |= (1<<aid);
+                ret |= (1U << aid);
             }
 
-            myinstmask |= (1<<header->SenderID);
+            myinstmask |= (1U << header.SenderID);
             if (((myinstmask & ConnectedBitmask) == ConnectedBitmask) ||
                 ((ret & aidmask) == aidmask))
             {

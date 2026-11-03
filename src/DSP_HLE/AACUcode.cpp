@@ -19,6 +19,7 @@
 #include "../DSi.h"
 #include "AACUcode.h"
 #include "../Platform.h"
+#include "../SavestateInvariant.h"
 
 
 namespace melonDS
@@ -81,6 +82,13 @@ void AACUcode::DoSavestate(Savestate *file)
 
     if (!file->Saving)
     {
+        if (!file->Error && !SavestateInvariant::AACCommandValid(CmdState, CmdParamCount))
+        {
+            CmdState = 0;
+            CmdParamCount = 0;
+            memset(CmdParams, 0, sizeof(CmdParams));
+            file->Error = true;
+        }
         LastFrequency = -1;
         LastChannels = -1;
     }
@@ -119,6 +127,13 @@ void AACUcode::RecvCmdWord()
     }
     else if (CmdState == 1)
     {
+        if (CmdParamCount >= sizeof(CmdParams) / sizeof(CmdParams[0]))
+        {
+            CmdState = 0;
+            CmdParamCount = 0;
+            CmdWritten[1] = false;
+            return;
+        }
         CmdParams[CmdParamCount] = val;
         CmdParamCount++;
 

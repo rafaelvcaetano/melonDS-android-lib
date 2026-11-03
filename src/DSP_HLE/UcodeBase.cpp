@@ -18,6 +18,7 @@
 
 #include "../DSi.h"
 #include "UcodeBase.h"
+#include "../DSPHLEBounds.h"
 #include "../Platform.h"
 
 
@@ -342,11 +343,14 @@ void UcodeBase::SetSemaphoreOut(u16 val)
 }
 
 
-u16* UcodeBase::GetDataMemPointer(u32 addr)
+u16* UcodeBase::GetDataMemPointer(u32 addr, u32 wordCount)
 {
     // pointer only valid within 32K page
     u16* mem = (u16*)DSi.NWRAMMap_C[2][(addr >> 14) & 0x7];
-    return &mem[addr & 0x3FFF];
+    const u32 offset = addr & 0x3FFF;
+    if (!mem || wordCount > DSPHLEBounds::PageWords - offset)
+        return nullptr;
+    return &mem[offset];
 }
 
 
@@ -354,6 +358,7 @@ void UcodeBase::Start()
 {
     // initialize pipe structure
     u16* pipe = GetDataMemPointer(kPipeMonitorAddr);
+    if (!pipe) return;
     for (int i = 0; i < 16; i++)
     {
         *pipe++ = kPipeBufferAddr + (0x100 * i);    // buffer address
@@ -372,11 +377,23 @@ void UcodeBase::Start()
 
 u16* UcodeBase::LoadPipe(u8 index)
 {
-    return GetDataMemPointer(kPipeMonitorAddr + (index * 5));
+    if (index >= 16) return nullptr;
+    return GetDataMemPointer(kPipeMonitorAddr + (index * 5), 5);
+}
+
+bool UcodeBase::PipeValid(const u16* pipe)
+{
+    if (!pipe) return false;
+    const u16 readPointer = pipe[2] & 0x7FFF;
+    const u16 writePointer = pipe[3] & 0x7FFF;
+    if (!DSPHLEBounds::PipeValid(pipe[0], pipe[1], readPointer, writePointer))
+        return false;
+    return GetDataMemPointer(pipe[0], pipe[1] >> 1) != nullptr;
 }
 
 u32 UcodeBase::GetPipeLength(u16* pipe)
 {
+    if (!PipeValid(pipe)) return 0;
     u32 ret;
     u16 rdptr = pipe[2] & 0x7FFF;
     u16 wrptr = pipe[3] & 0x7FFF;
@@ -396,7 +413,8 @@ u32 UcodeBase::GetPipeLength(u16* pipe)
 
 u32 UcodeBase::ReadPipe(u16* pipe, u16* data, u32 len)
 {
-    u16* pipebuf = GetDataMemPointer(pipe[0]);
+    if (!data || len == 0 || !PipeValid(pipe)) return 0;
+    u16* pipebuf = GetDataMemPointer(pipe[0], pipe[1] >> 1);
     u16 pipelen = pipe[1] >> 1;
     u16 rdptr = (pipe[2] & 0x7FFF) >> 1;
     u16 rdphase = pipe[2] & 0x8000;
@@ -424,7 +442,8 @@ u32 UcodeBase::ReadPipe(u16* pipe, u16* data, u32 len)
 
 u32 UcodeBase::WritePipe(u16* pipe, const u16* data, u32 len)
 {
-    u16* pipebuf = GetDataMemPointer(pipe[0]);
+    if (!data || len == 0 || !PipeValid(pipe)) return 0;
+    u16* pipebuf = GetDataMemPointer(pipe[0], pipe[1] >> 1);
     u16 pipelen = pipe[1] >> 1;
     u16 rdptr = (pipe[2] & 0x7FFF) >> 1;
     u16 wrptr = (pipe[3] & 0x7FFF) >> 1;
@@ -461,6 +480,12 @@ u32 UcodeBase::WritePipe(u16* pipe, const u16* data, u32 len)
 
 void UcodeBase::ReadARM9Mem(u16* mem, u32 addr, u32 len)
 {
+    if (!mem || len == 0) return;
+    if (!DSPHLEBounds::MemoryTransferValid(len))
+    {
+        Log(LogLevel::Error, "DSP_HLE: rejected odd ARM9 read length %u\n", len);
+        return;
+    }
     if (addr & 2)
     {
         *mem = DSi.ARM9Read16(addr);
@@ -484,6 +509,12 @@ void UcodeBase::ReadARM9Mem(u16* mem, u32 addr, u32 len)
 
 void UcodeBase::WriteARM9Mem(const u16* mem, u32 addr, u32 len)
 {
+    if (!mem || len == 0) return;
+    if (!DSPHLEBounds::MemoryTransferValid(len))
+    {
+        Log(LogLevel::Error, "DSP_HLE: rejected odd ARM9 write length %u\n", len);
+        return;
+    }
     if (addr & 2)
     {
         DSi.ARM9Write16(addr, *mem);
@@ -553,7 +584,14 @@ void UcodeBase::TryStartAudioCmd()
         if ((cmdaction == 1) || (cmdaction == 2))
         {
             // initialize mic buffer
-            u16* micbuf = GetDataMemPointer(kMicBufferAddr);
+            u16* micbuf = GetDataMemPointer(kMicBufferAddr, 0x1003);
+            if (!micbuf)
+            {
+                if (MicSampling) DSi.Mic.Stop(Mic_DSi_DSP);
+                MicSampling = false;
+                MicInFIFO.Clear();
+                return;
+            }
             *micbuf++ = kMicBufferAddr + 3; // pointer to mic buffer
             *micbuf++ = 0x1000;             // buffer length
             *micbuf++ = 0;                  // write pointer
@@ -599,17 +637,39 @@ void UcodeBase::AudioOutAdvance()
 
 void UcodeBase::MicInAdvance()
 {
-    u16* micbuf = GetDataMemPointer(kMicBufferAddr);
+    u16* micbuf = GetDataMemPointer(kMicBufferAddr, 3);
+    if (!micbuf)
+    {
+        if (MicSampling) DSi.Mic.Stop(Mic_DSi_DSP);
+        MicSampling = false;
+        MicInFIFO.Clear();
+        return;
+    }
+    const u16 dataAddress = micbuf[0];
     u16 buflen = micbuf[1];
     u16 wrpos = micbuf[2];
-    u16* micdata = &micbuf[3];
+    if (!DSPHLEBounds::MicBufferValid(dataAddress, buflen, wrpos))
+    {
+        if (MicSampling) DSi.Mic.Stop(Mic_DSi_DSP);
+        MicSampling = false;
+        MicInFIFO.Clear();
+        return;
+    }
+    u16* micdata = GetDataMemPointer(dataAddress, buflen);
+    if (!micdata)
+    {
+        if (MicSampling) DSi.Mic.Stop(Mic_DSi_DSP);
+        MicSampling = false;
+        MicInFIFO.Clear();
+        return;
+    }
 
     while (!MicInFIFO.IsEmpty())
     {
         // mic input is written to a circular buffer in DSP RAM
 
         s16 val = MicInFIFO.Read();
-        micdata[wrpos & 0x3FFF] = val;
+        micdata[wrpos] = val;
 
         wrpos++;
         if (wrpos >= buflen)

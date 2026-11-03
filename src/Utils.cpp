@@ -19,6 +19,7 @@
 #include "Utils.h"
 
 #include <string.h>
+#include <new>
 
 namespace melonDS
 {
@@ -34,7 +35,8 @@ std::pair<std::unique_ptr<u8[]>, u32> PadToPowerOf2(std::unique_ptr<u8[]>&& data
     while (newlen < len)
         newlen <<= 1;
 
-    auto newdata = std::make_unique<u8[]>(newlen);
+    std::unique_ptr<u8[]> newdata(new (std::nothrow) u8[newlen]);
+    if (!newdata) return {nullptr, 0};
     memcpy(newdata.get(), data.get(), len);
     data = nullptr;
     return {std::move(newdata), newlen};
@@ -49,7 +51,8 @@ std::pair<std::unique_ptr<u8[]>, u32> PadToPowerOf2(const u8* data, u32 len) noe
     while (newlen < len)
         newlen <<= 1;
 
-    auto newdata = std::make_unique<u8[]>(newlen);
+    std::unique_ptr<u8[]> newdata(new (std::nothrow) u8[newlen]);
+    if (!newdata) return {nullptr, 0};
     memcpy(newdata.get(), data, len);
     return {std::move(newdata), newlen};
 }
@@ -59,7 +62,8 @@ std::unique_ptr<u8[]> CopyToUnique(const u8* data, u32 len) noexcept
     if (data == nullptr || len == 0)
         return nullptr;
 
-    auto newdata = std::make_unique<u8[]>(len);
+    std::unique_ptr<u8[]> newdata(new (std::nothrow) u8[len]);
+    if (!newdata) return nullptr;
     memcpy(newdata.get(), data, len);
     return newdata;
 }

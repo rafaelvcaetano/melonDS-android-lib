@@ -133,6 +133,7 @@ private:
     int MPRecvTimeout;
     int LastHostID;
     ENetPeer* LastHostPeer;
+    ENetPeer* HostPeer;
     std::queue<ENetPacket*> RXQueue;
 
     u32 FrameCount;

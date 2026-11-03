@@ -97,6 +97,12 @@ public:
 
     [[nodiscard]] u32 Length() const { return buffer_offset; }
 
+    [[nodiscard]] u32 RemainingInSection() const
+    {
+        const u32 limit = Saving ? buffer_length : section_end;
+        return buffer_offset <= limit ? limit - buffer_offset : 0;
+    }
+
     [[nodiscard]] u16 MajorVersion() const
     {
         // major version is stored at offset 0x04
@@ -119,10 +125,11 @@ private:
     bool Resize(u32 new_length);
     void WriteSavestateHeader();
     void WriteStateLength();
-    u32 FindSection(const char* magic) const;
+    u32 FindSection(const char* magic, u32* section_end) const;
     u8* buffer;
     u32 buffer_offset;
     u32 buffer_length;
+    u32 section_end;
     bool buffer_owned;
     bool finished;
 };

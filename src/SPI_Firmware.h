@@ -481,6 +481,8 @@ public:
     /// DSi firmware is non-bootable for instance.
     /// If this firmware is not bootable, then melonDS should use direct-boot mode.
     [[nodiscard]] bool IsBootable() const;
+    [[nodiscard]] bool IsLayoutValid() const;
+    [[nodiscard]] bool IsGenerated() const { return Generated; }
 
     /// @return The address of the first extended Wi-fi settings block in the firmware.
     /// @warning Only meaningful if this is DSi firmware.
@@ -558,11 +560,12 @@ public:
     u32 FixFirmwareLength(u32 originalLength);
 
     /// Updates the checksums of all used sections of the firmware.
-    void UpdateChecksums();
+    bool UpdateChecksums();
 private:
     u8* FirmwareBuffer;
     u32 FirmwareBufferLength;
     u32 FirmwareMask;
+    bool Generated;
 };
 
 }
