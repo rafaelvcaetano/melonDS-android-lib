@@ -22,6 +22,23 @@ struct CartridgeTransferBounds
     {
         return length > 0 && length <= capacity;
     }
+
+    static constexpr bool SpanFits(u32 capacity, u32 offset, u32 length)
+    {
+        return offset <= capacity && length <= capacity - offset;
+    }
+
+    static constexpr bool RoundedHalfwordSpanFits(u32 capacity, u32 offset, u32 length)
+    {
+        const u32 rounded = length + (length & 1U);
+        return rounded >= length && SpanFits(capacity, offset, rounded);
+    }
+
+    static constexpr bool RoundedWordSpanFits(u32 capacity, u32 offset, u32 length)
+    {
+        if (length > UINT32_MAX - 3) return false;
+        return SpanFits(capacity, offset, (length + 3U) & ~3U);
+    }
 };
 }
 

@@ -101,6 +101,84 @@ struct SavestateInvariant
     {
         return vertices >= 2 && vertices <= 10;
     }
+
+    static constexpr bool BPTWLCursorValid(u32 cursor)
+    {
+        return cursor == UINT32_MAX || cursor < 0x100;
+    }
+
+    static constexpr bool SDHostStateValid(u32 fifo, u32 blockLength16, u32 blockLength32)
+    {
+        return fifo < 2 && blockLength16 <= 0x200 && blockLength32 <= 0x200;
+    }
+
+    static constexpr bool CameraStateValid(
+        u32 buffer, u32 read0, u32 write0, u32 read1, u32 write1)
+    {
+        return buffer < 2 && read0 <= 512 && write0 <= 512 &&
+            read1 <= 512 && write1 <= 512;
+    }
+
+    static constexpr bool CameraFrameDimensionsValid(u32 width, u32 height)
+    {
+        return width >= 2 && width <= 640 && height >= 2 && height <= 480 &&
+            (width & 1U) == 0;
+    }
+
+    static constexpr bool GPU2DFIFOValid(u32 readPosition, u32 writePosition)
+    {
+        return readPosition < 16 && writePosition <= 14 && (writePosition & 1) == 0;
+    }
+
+    static constexpr bool TeakraDMAChannelValid(u32 channel)
+    {
+        return channel < 8;
+    }
+
+    static constexpr bool BtdmpQueueValid(u32 size)
+    {
+        return size <= 16;
+    }
+
+    static constexpr bool SPUMixIntervalValid(u32 interval)
+    {
+        return interval == 704 || interval == 1024;
+    }
+
+    static constexpr u32 SPUInterpolationPosition(u32 timer, u32 reload)
+    {
+        if (reload >= 0x10000 || timer <= reload) return 0;
+        const u64 numerator = static_cast<u64>(timer - reload) * 0x100;
+        const u32 denominator = 0x10000 - reload;
+        const u64 position = numerator / denominator;
+        return position > 0xFF ? 0xFF : static_cast<u32>(position);
+    }
+
+    static constexpr bool VRAMMappingValid(u32 mask)
+    {
+        return (mask & ~0x1FFU) == 0;
+    }
+
+    static constexpr bool AESModeValid(u32 mode)
+    {
+        return mode <= 3;
+    }
+
+    static constexpr bool GPUVertexStateValid(u32 mode, u32 vertexNumber)
+    {
+        return mode < 4 && vertexNumber < ((mode & 1U) ? 4U : 3U);
+    }
+
+    static constexpr bool RTCCursorsValid(
+        u32 inputBit, u32 inputPosition, u32 outputBit, u32 outputPosition)
+    {
+        return inputBit < 8 && inputPosition < 8 && outputBit < 8 && outputPosition < 8;
+    }
+
+    static constexpr bool SolarLevelValid(u32 level)
+    {
+        return level <= 10;
+    }
 };
 }
 

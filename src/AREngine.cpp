@@ -21,6 +21,7 @@
 #include "NDS.h"
 #include "DSi.h"
 #include "AREngine.h"
+#include "ARWorkBudget.h"
 #include "Platform.h"
 
 namespace melonDS
@@ -39,10 +40,10 @@ AREngine::AREngine(melonDS::NDS& nds) : NDS(nds)
     case ((x)+0x08): case ((x)+0x09): case ((x)+0x0A): case ((x)+0x0B): \
     case ((x)+0x0C): case ((x)+0x0D): case ((x)+0x0E): case ((x)+0x0F)
 
-void AREngine::RunCheat(const ARCode& arcode)
+ARBudgetResult AREngine::RunCheat(const ARCode& arcode, ARWorkBudget& frameBudget)
 {
     if (arcode.Code.size() < 2)
-        return;
+        return ARBudgetResult::Accepted;
 
     const u32* code = arcode.Code.data();
     const u32* end = code + arcode.Code.size();
@@ -59,12 +60,17 @@ void AREngine::RunCheat(const ARCode& arcode)
 
     // TODO: does anything reset this??
     u32 c5count = 0;
+    ARWorkBudget workBudget;
 
     for (;;)
     {
         if (end - code < 2)
             // An instruction needs both its opcode and parameter.
             break;
+
+        const ARBudgetResult instructionBudget = ConsumeARWork(workBudget, frameBudget, 1);
+        if (instructionBudget != ARBudgetResult::Accepted)
+            return instructionBudget;
 
         u32 a = *code++;
         u32 b = *code++;
@@ -73,7 +79,7 @@ void AREngine::RunCheat(const ARCode& arcode)
 
         if ((op & 0xF0) == 0xE0 &&
             ((static_cast<u64>(b) + 7) / 8) * 2 > static_cast<u64>(end - code))
-            return;
+            return ARBudgetResult::Accepted;
 
         if ((op < 0xD0 && op != 0xC5) || op > 0xD2)
         {
@@ -232,7 +238,7 @@ void AREngine::RunCheat(const ARCode& arcode)
             // could be implemented with some hackery, but, does anything even
             // use it??
             Log(LogLevel::Error, "AR: !! THE FUCKING C4000000 OPCODE. TELL ARISOTURA.\n");
-            return;
+            return ARBudgetResult::Accepted;
 
         case 0xC5: // count++ / IF (count & b.l) == b.h
             {
@@ -367,6 +373,11 @@ void AREngine::RunCheat(const ARCode& arcode)
             {
                 // TODO: check for bad alignment of dstaddr
 
+                const ARBudgetResult copyBudget = ConsumeARWork(
+                    workBudget, frameBudget, ARWorkBudget::OperationsForBytes(b));
+                if (copyBudget != ARBudgetResult::Accepted)
+                    return copyBudget;
+
                 u32 dstaddr = (a & 0x0FFFFFFF) + offset;
                 u32 bytesleft = b;
                 while (bytesleft >= 8)
@@ -398,6 +409,11 @@ void AREngine::RunCheat(const ARCode& arcode)
             {
                 // TODO: check for bad alignment of srcaddr/dstaddr
 
+                const ARBudgetResult copyBudget = ConsumeARWork(
+                    workBudget, frameBudget, ARWorkBudget::OperationsForBytes(b));
+                if (copyBudget != ARBudgetResult::Accepted)
+                    return copyBudget;
+
                 u32 srcaddr = offset;
                 u32 dstaddr = (a & 0x0FFFFFFF);
                 u32 bytesleft = b;
@@ -420,19 +436,46 @@ void AREngine::RunCheat(const ARCode& arcode)
 
         default:
             Log(LogLevel::Warn, "!! bad AR opcode %08X %08X\n", a, b);
-            return;
+            return ARBudgetResult::Accepted;
         }
     }
+
+    // Reaching the limit exactly is valid. ConsumeARWork returns CheatExhausted
+    // only when an instruction would cross the per-cheat limit.
+    return ARBudgetResult::Accepted;
 }
 
 void AREngine::RunCheats()
 {
     if (Cheats.empty()) return;
 
-    for (const ARCode& code : Cheats)
+    if (WorkBudgetFrame != NDS.NumFrames)
     {
-        if (code.Enabled)
-            RunCheat(code);
+        WorkBudgetFrame = NDS.NumFrames;
+        FrameWorkBudget = ARWorkBudget();
+    }
+
+    for (ARCode& code : Cheats)
+    {
+        if (!code.Enabled)
+        {
+            code.BudgetExceeded = false;
+            continue;
+        }
+        if (code.BudgetExceeded)
+            continue;
+
+        const ARBudgetResult result = RunCheat(code, FrameWorkBudget);
+        if (result == ARBudgetResult::CheatExhausted)
+        {
+            code.BudgetExceeded = true;
+            Log(LogLevel::Warn, "AR: cheat quarantined after exceeding its work budget\n");
+        }
+        else if (result == ARBudgetResult::FrameExhausted)
+        {
+            Log(LogLevel::Warn, "AR: deferred remaining cheats after exhausting the frame budget\n");
+            break;
+        }
     }
 }
 }

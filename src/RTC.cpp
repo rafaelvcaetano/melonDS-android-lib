@@ -20,6 +20,7 @@
 #include "NDS.h"
 #include "RTC.h"
 #include "Platform.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -83,6 +84,10 @@ void RTC::DoSavestate(Savestate* file)
 
     file->Var32((u32*)&TimerError);
     file->Var32(&ClockCount);
+
+    if (!file->Saving && !file->Error &&
+        !SavestateInvariant::RTCCursorsValid(InputBit, InputPos, OutputBit, OutputPos))
+        file->Error = true;
 }
 
 

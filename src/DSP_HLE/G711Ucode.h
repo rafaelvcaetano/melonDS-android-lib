@@ -41,6 +41,8 @@ protected:
     u8 CmdState;
     u16 CmdParams[8];
 
+    bool MemorySpanValid(u32 address, u32 byteLength, bool write) const;
+    bool CommandValid() const;
     void TryStartCmd();
     void FinishCmd(u32 param);
 

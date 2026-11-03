@@ -22,6 +22,7 @@
 #include "DSi_NAND.h"
 #include "DSi_AES.h"
 #include "Platform.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -118,6 +119,12 @@ void DSi_AES::DoSavestate(Savestate* file)
     file->Var32(&InputDMASize);
     file->Var32(&OutputDMASize);
     file->Var32(&AESMode);
+
+    if (!file->Saving && !file->Error && !SavestateInvariant::AESModeValid(AESMode))
+    {
+        file->Error = true;
+        return;
+    }
 
     InputFIFO.DoSavestate(file);
     OutputFIFO.DoSavestate(file);

@@ -18,6 +18,10 @@ void Dma::DoSavestate(melonDS::Savestate *file) {
 
     file->Var16(&enable_channel);
     file->Var16(&active_channel);
+    if (!file->Saving && !file->Error && active_channel >= channels.size()) {
+        file->Error = true;
+        return;
+    }
     for (auto& chan : channels) {
         file->Var16(&chan.addr_src_low);
         file->Var16(&chan.addr_src_high);
@@ -49,6 +53,8 @@ void Dma::DoSavestate(melonDS::Savestate *file) {
 }
 
 void Dma::DoDma(u16 channel) {
+    if (channel >= channels.size())
+        return;
     channels[channel].Start();
 
     channels[channel].ahbm_channel = ahbm.GetChannelForDma(channel);

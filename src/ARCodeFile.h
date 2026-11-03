@@ -37,6 +37,7 @@ struct ARCode
     std::string Name;
     std::string Description;
     bool Enabled;
+    bool BudgetExceeded = false;
     std::vector<u32> Code;
 };
 

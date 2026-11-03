@@ -29,7 +29,8 @@ public:
     }
 
     void ActivateChannel(u16 value) {
-        active_channel = value;
+        if (value < channels.size())
+            active_channel = value;
     }
     u16 GetActiveChannel() const {
         return active_channel;

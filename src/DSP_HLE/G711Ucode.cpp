@@ -21,6 +21,7 @@
 #include "../DSi.h"
 #include "G711Ucode.h"
 #include "../Platform.h"
+#include "../DSPHLEBounds.h"
 
 
 namespace melonDS
@@ -30,6 +31,48 @@ using Platform::LogLevel;
 
 namespace DSP_HLE
 {
+
+bool G711Ucode::MemorySpanValid(u32 address, u32 byteLength, bool write) const
+{
+    MemRegion region {};
+    if (DSi.ARM9GetMemRegion(address, write, &region))
+        return DSPHLEBounds::RegionSpanFits(address & region.Mask, byteLength, region.Mask);
+
+    if ((address & 0xFF000000) != 0x03000000 || !(DSi.SCFG_EXT[0] & (1 << 25)))
+        return false;
+
+    for (u32 index = 0; index < 3; ++index)
+    {
+        if (DSPHLEBounds::MappedSpanFits(
+                DSi.NWRAMStart[0][index], DSi.NWRAMEnd[0][index], address, byteLength))
+            return true;
+    }
+    return false;
+}
+
+bool G711Ucode::CommandValid() const
+{
+    const u32 cmd = (CmdParams[0] << 16) | CmdParams[1];
+    const u32 action = (cmd >> 8) & 0xF;
+    const u32 type = cmd & 0xFF;
+    const u32 srcAddr = (CmdParams[2] << 16) | CmdParams[3];
+    const u32 dstAddr = (CmdParams[4] << 16) | CmdParams[5];
+    const u32 len = (CmdParams[6] << 16) | CmdParams[7];
+
+    if ((type != 1 && type != 2) || len == 0)
+        return true;
+    if (!DSPHLEBounds::G711LengthValid(len))
+        return false;
+
+    const u32 cyclesPerSample = action == 1 ? 31 : 14;
+    if (!DSPHLEBounds::G711TimingValid(len, cyclesPerSample))
+        return false;
+
+    const u32 srcBytes = action == 1 ? len * 2 : len;
+    const u32 dstBytes = action == 1 ? len : len * 2;
+    return MemorySpanValid(srcAddr, srcBytes, false) &&
+        MemorySpanValid(dstAddr, dstBytes, true);
+}
 
 
 G711Ucode::G711Ucode(melonDS::DSi& dsi, int version) : UcodeBase(dsi)
@@ -97,6 +140,13 @@ void G711Ucode::TryStartCmd()
     u32 cmd = (CmdParams[0] << 16) | CmdParams[1];
     u32 len = (CmdParams[6] << 16) | CmdParams[7];
 
+    if (!CommandValid())
+    {
+        CmdParams[6] = 0;
+        CmdParams[7] = 0;
+        len = 0;
+    }
+
     u32 action = (cmd >> 8) & 0xF;
     u32 type = cmd & 0xFF;
 
@@ -117,6 +167,12 @@ void G711Ucode::FinishCmd(u32 param)
 {
     if (CmdState != 1)
         return;
+
+    if (!CommandValid())
+    {
+        CmdParams[6] = 0;
+        CmdParams[7] = 0;
+    }
 
     u32 cmd = (CmdParams[0] << 16) | CmdParams[1];
     u32 action = (cmd >> 8) & 0xF;

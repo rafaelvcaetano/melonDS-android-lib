@@ -23,6 +23,7 @@
 #include "Args.h"
 #include "NDS.h"
 #include "DSi.h"
+#include "DSiBootBounds.h"
 #include "ARM.h"
 #include "GPU.h"
 #include "NDSCart.h"
@@ -563,7 +564,7 @@ void DSi::SetupDirectBoot()
 
                 DSi_NAND::DSiSerialData hwinfoS {};
                 nand.ReadSerialData(hwinfoS);
-                DSi_NAND::DSiHardwareInfoN hwinfoN;
+                DSi_NAND::DSiHardwareInfoN hwinfoN{};
                 nand.ReadHardwareInfoN(hwinfoN);
 
                 for (u32 i = 0; i < 0x14; i+=4)
@@ -802,7 +803,7 @@ bool DSi::LoadNAND()
     memset(NWRAMEnd, 0, sizeof(NWRAMEnd));
     memset(NWRAMMask, 0, sizeof(NWRAMMask));
 
-    u32 bootparams[8];
+    u32 bootparams[8] = {};
     if (FullBIOSBoot)
     {
         // TODO: figure out default MBK mapping
@@ -825,8 +826,11 @@ bool DSi::LoadNAND()
     }
     else
     {
-        FileSeek(nand, 0x220, FileSeekOrigin::Start);
-        FileRead(bootparams, 4, 8, nand);
+        if (!FileSeek(nand, 0x220, FileSeekOrigin::Start) ||
+            FileRead(bootparams, 4, 8, nand) != 8 ||
+            !DSiBootBounds::SpanValid(bootparams[0], bootparams[3], bootparams[2], image->GetLength()) ||
+            !DSiBootBounds::SpanValid(bootparams[4], bootparams[7], bootparams[6], image->GetLength()))
+            return false;
 
         Log(LogLevel::Debug, "ARM9: offset=%08X size=%08X RAM=%08X size_aligned=%08X\n",
                bootparams[0], bootparams[1], bootparams[2], bootparams[3]);
@@ -838,9 +842,9 @@ bool DSi::LoadNAND()
         MBK[0][8] = 0;
         MBK[1][8] = 0;
 
-        u32 mbk[12];
-        FileSeek(nand, 0x380, FileSeekOrigin::Start);
-        FileRead(mbk, 4, 12, nand);
+        u32 mbk[12] = {};
+        if (!FileSeek(nand, 0x380, FileSeekOrigin::Start) || FileRead(mbk, 4, 12, nand) != 12)
+            return false;
 
         MapNWRAM_A(0, mbk[0] & 0xFF);
         MapNWRAM_A(1, (mbk[0] >> 8) & 0xFF);
@@ -894,12 +898,14 @@ bool DSi::LoadNAND()
 
         AES_init_ctx_iv(&ctx, boot2key, boot2iv);
 
-        FileSeek(nand, bootparams[0], FileSeekOrigin::Start);
+        if (!FileSeek(nand, bootparams[0], FileSeekOrigin::Start))
+            return false;
         dstaddr = bootparams[2];
         for (u32 i = 0; i < bootparams[3]; i += 16)
         {
-            u32 data[4];
-            FileRead(data, 16, 1, nand);
+            u32 data[4] = {};
+            if (FileRead(data, 16, 1, nand) != 1)
+                return false;
 
             Bswap128(tmp, data);
             AES_CTR_xcrypt_buffer(&ctx, tmp, 16);
@@ -919,12 +925,14 @@ bool DSi::LoadNAND()
 
         AES_init_ctx_iv(&ctx, boot2key, boot2iv);
 
-        FileSeek(nand, bootparams[4], FileSeekOrigin::Start);
+        if (!FileSeek(nand, bootparams[4], FileSeekOrigin::Start))
+            return false;
         dstaddr = bootparams[6];
         for (u32 i = 0; i < bootparams[7]; i += 16)
         {
-            u32 data[4];
-            FileRead(data, 16, 1, nand);
+            u32 data[4] = {};
+            if (FileRead(data, 16, 1, nand) != 1)
+                return false;
 
             Bswap128(tmp, data);
             AES_CTR_xcrypt_buffer(&ctx, tmp, 16);

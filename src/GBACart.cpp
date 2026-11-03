@@ -26,6 +26,7 @@
 #include "Utils.h"
 #include "CartridgeImageBounds.h"
 #include "GBAFlashBounds.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -625,6 +626,9 @@ void CartGameSolarSensor::DoSavestate(Savestate* file)
     file->Var8(&LightCounter);
     file->Var8(&LightSample);
     file->Var8(&LightLevel);
+
+    if (!file->Saving && !file->Error && !SavestateInvariant::SolarLevelValid(LightLevel))
+        file->Error = true;
 }
 
 int CartGameSolarSensor::SetInput(int num, bool pressed)

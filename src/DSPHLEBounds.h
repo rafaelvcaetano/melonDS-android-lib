@@ -8,6 +8,7 @@ namespace melonDS
 struct DSPHLEBounds
 {
     static constexpr u32 PageWords = 0x4000;
+    static constexpr u32 MaxG711Samples = 0x100000;
 
     static constexpr bool PipeValid(u32 base, u32 byteLength, u32 readPointer, u32 writePointer)
     {
@@ -37,6 +38,27 @@ struct DSPHLEBounds
     static constexpr bool YuvTransferValid(u32 byteLength)
     {
         return (byteLength & 3) == 0 && byteLength <= (UINT32_MAX - 200) / 12;
+    }
+
+    static constexpr bool G711LengthValid(u32 samples)
+    {
+        return samples <= MaxG711Samples;
+    }
+
+    static constexpr bool G711TimingValid(u32 samples, u32 cyclesPerSample)
+    {
+        return static_cast<u64>(samples) * cyclesPerSample + 200 <= UINT32_MAX;
+    }
+
+    static constexpr bool RegionSpanFits(u32 offset, u32 byteLength, u32 mask)
+    {
+        return offset <= mask && byteLength <= static_cast<u64>(mask) + 1 - offset;
+    }
+
+    static constexpr bool MappedSpanFits(u32 start, u32 end, u32 address, u32 byteLength)
+    {
+        return start < end && address >= start && address < end &&
+            byteLength <= static_cast<u64>(end) - address;
     }
 
     static constexpr bool ScalingValid(

@@ -21,6 +21,7 @@
 
 #include <vector>
 #include "ARCodeFile.h"
+#include "ARWorkBudget.h"
 
 namespace melonDS
 {
@@ -34,9 +35,11 @@ public:
 private:
     friend class ARM;
     void RunCheats();
-    void RunCheat(const ARCode& arcode);
+    ARBudgetResult RunCheat(const ARCode& arcode, ARWorkBudget& frameBudget);
 
     melonDS::NDS& NDS;
+    u32 WorkBudgetFrame = UINT32_MAX;
+    ARWorkBudget FrameWorkBudget;
 };
 
 }

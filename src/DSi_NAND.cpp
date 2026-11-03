@@ -17,11 +17,14 @@
 */
 
 #include <stdio.h>
+#include <algorithm>
 #include <codecvt>
+#include <unordered_set>
 
 #include "DSi.h"
 #include "DSi_AES.h"
 #include "DSi_NAND.h"
+#include "DSiTitleDataBounds.h"
 #include "DSiSaveGeometry.h"
 #include "DSiContentValidation.h"
 #include "FATIO.h"
@@ -47,21 +50,32 @@ NANDImage::NANDImage(Platform::FileHandle* nandfile, const u8* es_keyY) noexcept
         return;
 
     Length = FileLength(nandfile);
+    if (Length < 0x00100000ULL || Length > 512ULL * 1024ULL * 1024ULL)
+    {
+        CloseFile(nandfile);
+        return;
+    }
 
     // read the nocash footer
 
-    FileSeek(nandfile, -0x40, FileSeekOrigin::End);
+    if (!FileSeek(nandfile, -0x40, FileSeekOrigin::End))
+    {
+        CloseFile(nandfile);
+        return;
+    }
 
     char nand_footer[16];
     const char* nand_footer_ref = "DSi eMMC CID/CPU";
-    FileRead(nand_footer, 1, sizeof(nand_footer), nandfile);
+    if (FileRead(nand_footer, 1, sizeof(nand_footer), nandfile) != sizeof(nand_footer))
+        memset(nand_footer, 0, sizeof(nand_footer));
     if (memcmp(nand_footer, nand_footer_ref, sizeof(nand_footer)))
     {
         // There is another copy of the footer at 000FF800h for the case
         // that by external tools the image was cut off
         // See https://problemkaputt.de/gbatek.htm#dsisdmmcimages
-        FileSeek(nandfile, 0x000FF800, FileSeekOrigin::Start);
-        FileRead(nand_footer, 1, sizeof(nand_footer), nandfile);
+        if (!FileSeek(nandfile, 0x000FF800, FileSeekOrigin::Start) ||
+            FileRead(nand_footer, 1, sizeof(nand_footer), nandfile) != sizeof(nand_footer))
+            memset(nand_footer, 0, sizeof(nand_footer));
         if (memcmp(nand_footer, nand_footer_ref, sizeof(nand_footer)))
         {
             Log(LogLevel::Error, "ERROR: NAND missing nocash footer\n");
@@ -70,8 +84,12 @@ NANDImage::NANDImage(Platform::FileHandle* nandfile, const u8* es_keyY) noexcept
         }
     }
 
-    FileRead(eMMC_CID.data(), 1, sizeof(eMMC_CID), nandfile);
-    FileRead(&ConsoleID, 1, sizeof(ConsoleID), nandfile);
+    if (FileRead(eMMC_CID.data(), 1, sizeof(eMMC_CID), nandfile) != sizeof(eMMC_CID) ||
+        FileRead(&ConsoleID, 1, sizeof(ConsoleID), nandfile) != sizeof(ConsoleID))
+    {
+        CloseFile(nandfile);
+        return;
+    }
 
     // init NAND crypto
 
@@ -474,14 +492,20 @@ bool NANDImage::ESDecrypt(u8* data, u32 len) const
 
 bool NANDMount::ReadSerialData(DSiSerialData& dataS)
 {
+    memset(&dataS, 0, sizeof(dataS));
     FF_FIL file;
     FRESULT res = f_open(&file, "0:/sys/HWINFO_S.dat", FA_OPEN_EXISTING | FA_READ);
 
     if (res == FR_OK)
     {
         u32 nread;
-        f_read(&file, &dataS, sizeof(DSiSerialData), &nread);
-        f_close(&file);
+        res = f_read(&file, &dataS, sizeof(DSiSerialData), &nread);
+        const FRESULT closeRes = f_close(&file);
+        if (res != FR_OK || nread != sizeof(DSiSerialData) || closeRes != FR_OK)
+        {
+            memset(&dataS, 0, sizeof(dataS));
+            return false;
+        }
     }
 
     return res == FR_OK;
@@ -489,14 +513,20 @@ bool NANDMount::ReadSerialData(DSiSerialData& dataS)
 
 bool NANDMount::ReadHardwareInfoN(DSiHardwareInfoN& dataN)
 {
+    dataN.fill(0);
     FF_FIL file;
     FRESULT res = f_open(&file, "0:/sys/HWINFO_N.dat", FA_OPEN_EXISTING | FA_READ);
 
     if (res == FR_OK)
     {
         u32 nread;
-        f_read(&file, dataN.data(), sizeof(dataN), &nread);
-        f_close(&file);
+        res = f_read(&file, dataN.data(), sizeof(dataN), &nread);
+        const FRESULT closeRes = f_close(&file);
+        if (res != FR_OK || nread != sizeof(dataN) || closeRes != FR_OK)
+        {
+            dataN.fill(0);
+            return false;
+        }
     }
 
     return res == FR_OK;
@@ -660,7 +690,7 @@ bool NANDMount::ImportFile(const char* path, const u8* data, size_t len)
     return true;
 }
 
-bool NANDMount::ImportFile(const char* path, const char* in)
+bool NANDMount::ImportFile(const char* path, const char* in, u64 expectedLength)
 {
     FF_FIL file;
     FRESULT res;
@@ -669,7 +699,12 @@ bool NANDMount::ImportFile(const char* path, const char* in)
     if (!fin)
         return false;
 
-    u32 len = FileLength(fin);
+    const u64 len = FileLength(fin);
+    if (len != expectedLength)
+    {
+        CloseFile(fin);
+        return false;
+    }
 
     res = f_open(&file, path, FA_CREATE_ALWAYS | FA_WRITE);
     if (res != FR_OK)
@@ -679,13 +714,9 @@ bool NANDMount::ImportFile(const char* path, const char* in)
     }
 
     u8 buf[0x1000];
-    for (u32 i = 0; i < len; i += sizeof(buf))
+    for (u64 i = 0; i < len; i += sizeof(buf))
     {
-        u32 blocklen;
-        if ((i + sizeof(buf)) > len)
-            blocklen = len - i;
-        else
-            blocklen = sizeof(buf);
+        const u32 blocklen = static_cast<u32>(std::min<u64>(sizeof(buf), len - i));
 
         u32 nwrite;
         if (FileRead(buf, blocklen, 1, fin) != 1)
@@ -703,7 +734,14 @@ bool NANDMount::ImportFile(const char* path, const char* in)
         }
     }
 
+    u8 trailing;
+    const bool exactInput = FileLength(fin) == expectedLength && FileRead(&trailing, 1, 1, fin) == 0;
     CloseFile(fin);
+    if (!exactInput)
+    {
+        f_close(&file);
+        return false;
+    }
     if (f_close(&file) != FR_OK)
         return false;
 
@@ -730,7 +768,8 @@ bool NANDMount::ExportFile(const char* path, const char* out)
         return false;
     }
 
-    u8 buf[0x1000];
+    u8 buf[0x1000] = {};
+    bool complete = true;
     for (u32 i = 0; i < len; i += 0x1000)
     {
         u32 blocklen;
@@ -740,12 +779,18 @@ bool NANDMount::ExportFile(const char* path, const char* out)
             blocklen = 0x1000;
 
         u32 nread;
-        f_read(&file, buf, blocklen, &nread);
-        FileWrite(buf, blocklen, 1, fout);
+        res = f_read(&file, buf, blocklen, &nread);
+        if (res != FR_OK || nread != blocklen || FileWrite(buf, blocklen, 1, fout) != 1)
+        {
+            complete = false;
+            break;
+        }
     }
 
-    CloseFile(fout);
-    f_close(&file);
+    complete = CloseFile(fout) && complete;
+    complete = f_close(&file) == FR_OK && complete;
+    if (!complete)
+        return false;
 
     Log(LogLevel::Debug, "Exported file from %s to %s\n", path, out);
 
@@ -832,8 +877,12 @@ u32 NANDMount::GetTitleVersion(u32 category, u32 titleid)
 
     u32 version;
     u32 nread;
-    f_lseek(&file, 0x1E4);
-    f_read(&file, &version, 4, &nread);
+    if (f_lseek(&file, 0x1E4) != FR_OK ||
+        f_read(&file, &version, 4, &nread) != FR_OK || nread != 4)
+    {
+        f_close(&file);
+        return 0xFFFFFFFF;
+    }
     version = (version >> 24) | ((version & 0xFF0000) >> 8) | ((version & 0xFF00) << 8) | (version << 24);
 
     f_close(&file);
@@ -854,12 +903,25 @@ void NANDMount::ListTitles(u32 category, std::vector<u32>& titlelist)
         return;
     }
 
+    constexpr u32 MaxRawTitleEntries = 4096;
+    constexpr size_t MaxUniqueTitles = 1024;
+    u32 rawEntries = 0;
+    std::unordered_set<u32> seen;
     for (;;)
     {
-        FF_FILINFO info;
-        f_readdir(&titledir, &info);
+        FF_FILINFO info{};
+        if (f_readdir(&titledir, &info) != FR_OK)
+        {
+            titlelist.clear();
+            break;
+        }
         if (!info.fname[0])
             break;
+        if (++rawEntries > MaxRawTitleEntries)
+        {
+            titlelist.clear();
+            break;
+        }
 
         if (strlen(info.fname) != 8)
             continue;
@@ -867,6 +929,13 @@ void NANDMount::ListTitles(u32 category, std::vector<u32>& titlelist)
         u32 titleid;
         if (sscanf(info.fname, "%08x", &titleid) < 1)
             continue;
+        if (!seen.insert(titleid).second)
+            continue;
+        if (seen.size() > MaxUniqueTitles)
+        {
+            titlelist.clear();
+            break;
+        }
 
         u32 version = GetTitleVersion(category, titleid);
         if (version == 0xFFFFFFFF)
@@ -1217,6 +1286,15 @@ u32 NANDMount::GetTitleDataMask(u32 category, u32 titleid)
 bool NANDMount::ImportTitleData(u32 category, u32 titleid, int type, const char* file)
 {
     char fname[128];
+    u32 version;
+    NDSHeader header;
+    if (!GetTitleInfo(category, titleid, version, &header, nullptr))
+        return false;
+
+    u64 expectedLength;
+    if (!DSiTitleDataBounds::ExpectedLength(
+            type, header.DSiPublicSavSize, header.DSiPrivateSavSize, header.AppFlags, expectedLength))
+        return false;
 
     switch (type)
     {
@@ -1271,7 +1349,7 @@ bool NANDMount::ImportTitleData(u32 category, u32 titleid, int type, const char*
     if (current != FR_OK && current != FR_NO_FILE) return false;
 
     if (!removeIfPresent(staged)) return false;
-    if (!ImportFile(staged, file))
+    if (!ImportFile(staged, file, expectedLength))
     {
         removeIfPresent(staged);
         return false;

@@ -25,6 +25,7 @@
 #include "ARM.h"
 #include "SPI.h"
 #include "Platform.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -114,6 +115,8 @@ void DSi_BPTWL::DoSavestate(Savestate* file)
 
     file->VarArray(Registers, 0x100);
     file->Var32(&CurPos);
+    if (!file->Saving && !file->Error && !SavestateInvariant::BPTWLCursorValid(CurPos))
+        file->Error = true;
 }
 
 // TODO: Needs more investigation on the other bits
@@ -380,6 +383,12 @@ void DSi_BPTWL::Acquire()
 
 u8 DSi_BPTWL::Read(bool last)
 {
+    if (CurPos >= sizeof(Registers))
+    {
+        if (last) CurPos = UINT32_MAX;
+        return 0xFF;
+    }
+
     //printf("BPTWL: read %02X -> %02X @ %08X\n", CurPos, Registers[CurPos], NDS::GetPC(1));
     u8 ret = Registers[CurPos];
 
@@ -411,6 +420,12 @@ void DSi_BPTWL::Write(u8 val, bool last)
     {
         CurPos = val;
         //printf("BPTWL: reg=%02X\n", val);
+        return;
+    }
+
+    if (CurPos >= sizeof(Registers))
+    {
+        CurPos = UINT32_MAX;
         return;
     }
 

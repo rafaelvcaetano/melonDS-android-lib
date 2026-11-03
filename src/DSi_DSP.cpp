@@ -23,6 +23,7 @@
 
 #include "DSi.h"
 #include "DSi_DSP.h"
+#include "DSi_DSPBounds.h"
 #include "FIFO.h"
 #include "NDS.h"
 #include "Platform.h"
@@ -105,6 +106,13 @@ void DSi_DSP::DoSavestate(Savestate* file)
     file->Var16(&DSP_REP[1]);
     file->Var16(&DSP_REP[2]);
     file->Var8((u8*)&SCFG_RST);
+
+    if (!file->Saving && !file->Error &&
+        !DSi_DSPBounds::RestoredClockValid(DSPTimestamp, DSi.ARM9Timestamp))
+    {
+        file->Error = true;
+        return;
+    }
 
     if (DSPHLE)
     {
@@ -768,12 +776,22 @@ bool DSi_DSP::DSPCatchUp()
 
     u64 backlog = curtime - DSPTimestamp;
 
-    while (backlog & (1uLL<<32)) // god I hope this never happens
+    if (backlog > DSi_DSPBounds::MaxCatchUpCycles)
     {
-        Run((u32)(backlog & ((1uLL<<32)-1)));
+        DSPTimestamp = curtime;
+        return false;
+    }
+
+    while (backlog > UINT32_MAX)
+    {
+        const u32 chunk = DSi_DSPBounds::CatchUpChunk(backlog);
+        if (chunk == 0)
+            return false;
+        Run(chunk);
         backlog = curtime - DSPTimestamp;
     }
-    Run((u32)backlog);
+    if (backlog > 0)
+        Run(DSi_DSPBounds::CatchUpChunk(backlog));
 
     return true;
 }

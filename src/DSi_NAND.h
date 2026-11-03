@@ -115,7 +115,7 @@ public:
     bool ExportTitleData(u32 category, u32 titleid, int type, const char* file);
 
     bool ImportFile(const char* path, const u8* data, size_t len);
-    bool ImportFile(const char* path, const char* in);
+    bool ImportFile(const char* path, const char* in, u64 expectedLength);
     bool ExportFile(const char* path, const char* out);
     void RemoveFile(const char* path);
     void RemoveDir(const char* path);

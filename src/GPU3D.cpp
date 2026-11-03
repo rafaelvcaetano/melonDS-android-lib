@@ -648,6 +648,12 @@ void GPU3D::DoSavestate(Savestate* file) noexcept
     file->Var32(&CurPolygonAttr);
     file->Var32(&TexParam);
     file->Var32(&TexPalette);
+    if (!file->Saving && !file->Error &&
+        !SavestateInvariant::GPUVertexStateValid(PolygonMode, VertexNumInPoly))
+    {
+        RejectGPUState(file, softRenderer, "polygon mode and vertex count");
+        return;
+    }
     RenderFrameIdentical = false;
     if (softRenderer && softRenderer->IsThreaded())
     {
@@ -1450,6 +1456,11 @@ void GPU3D::SubmitPolygon() noexcept
 
 void GPU3D::SubmitVertex() noexcept
 {
+    if (!SavestateInvariant::GPUVertexStateValid(PolygonMode, VertexNumInPoly))
+    {
+        VertexNumInPoly = 0;
+        return;
+    }
     s64 vertex[4] = {(s64)CurVertex[0], (s64)CurVertex[1], (s64)CurVertex[2], 0x1000};
     Vertex* vertextrans = &TempVertexBuffer[VertexNumInPoly];
 

@@ -25,6 +25,13 @@ struct CartridgeImageBounds
         return offset <= length && size <= length - offset;
     }
 
+    static constexpr u32 DirectBootReadWidth(u64 length, u64 offset)
+    {
+        if (offset >= length) return 0;
+        const u64 remaining = length - offset;
+        return remaining < sizeof(u32) ? static_cast<u32>(remaining) : sizeof(u32);
+    }
+
     static bool ValidateNDS(const NDSHeader& header, u64 length)
     {
         if (!IsNDSLengthSupported(length)) return false;

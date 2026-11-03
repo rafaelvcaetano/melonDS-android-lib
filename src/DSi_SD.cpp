@@ -24,6 +24,8 @@
 #include "DSi_NAND.h"
 #include "DSi_NWifi.h"
 #include "Platform.h"
+#include "CartridgeTransferBounds.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -234,6 +236,10 @@ void DSi_SDHost::DoSavestate(Savestate* file)
 
     if (Ports[0]) Ports[0]->DoSavestate(file);
     if (Ports[1]) Ports[1]->DoSavestate(file);
+
+    if (!file->Saving && !file->Error &&
+        !SavestateInvariant::SDHostStateValid(CurFIFO, BlockLen16, BlockLen32))
+        file->Error = true;
 }
 
 
@@ -335,13 +341,20 @@ void DSi_SDHost::FinishRX(u32 param)
 
 u32 DSi_SDHost::DataRX(const u8* data, u32 len)
 {
-    if (len != BlockLen16) { Log(LogLevel::Warn, "!! BAD BLOCKLEN\n"); len = BlockLen16; }
+    if (!data || len != BlockLen16 || CurFIFO >= 2 || len > 0x200)
+    {
+        Log(LogLevel::Warn, "rejected invalid SD receive span\n");
+        return 0;
+    }
 
     bool last = (BlockCountInternal == 0);
 
     u32 f = CurFIFO ^ 1;
-    for (u32 i = 0; i < len; i += 2)
-        DataFIFO[f].Write(*(u16*)&data[i]);
+    u32 i = 0;
+    for (; i + 1 < len; i += 2)
+        DataFIFO[f].Write(static_cast<u16>(data[i]) | (static_cast<u16>(data[i + 1]) << 8));
+    if (i < len)
+        DataFIFO[f].Write(data[i]);
 
     //CurFIFO = f;
     //SetIRQ(24);
@@ -381,6 +394,7 @@ void DSi_SDHost::FinishTX(u32 param)
 
 u32 DSi_SDHost::DataTX(u8* data, u32 len)
 {
+    if (!data || CurFIFO >= 2 || len > 0x200) return 0;
     TXReq = true;
 
     u32 f = CurFIFO;
@@ -425,8 +439,15 @@ u32 DSi_SDHost::DataTX(u8* data, u32 len)
         }
     }
 
-    for (u32 i = 0; i < len; i += 2)
-        *(u16*)&data[i] = DataFIFO[f].Read();
+    u32 i = 0;
+    for (; i + 1 < len; i += 2)
+    {
+        const u16 value = DataFIFO[f].Read();
+        data[i] = static_cast<u8>(value);
+        data[i + 1] = static_cast<u8>(value >> 8);
+    }
+    if (i < len)
+        data[i] = static_cast<u8>(DataFIFO[f].Read());
 
     CurFIFO ^= 1;
     BlockCountInternal--;
@@ -863,6 +884,9 @@ void DSi_MMCStorage::DoSavestate(Savestate* file)
     file->Var64(&RWAddress);
     file->Var32(&RWCommand);
 
+    if (!file->Saving && !file->Error && BlockSize > 0x200)
+        file->Error = true;
+
     // TODO: what about the file contents?
 }
 
@@ -1069,18 +1093,23 @@ u32 DSi_MMCStorage::ReadBlock(u64 addr)
     u32 len = BlockSize;
     len = Host->GetTransferrableLen(len);
 
-    u8 data[0x200];
+    const u32 offset = static_cast<u32>(addr & 0x1FF);
+    if (!CartridgeTransferBounds::RoundedHalfwordSpanFits(0x200, offset, len)) return 0;
+
+    u8 data[0x200] = {};
     if (auto* sd = std::get_if<FATStorage>(&Storage))
     {
-        sd->ReadSectors((u32)(addr >> 9), 1, data);
+        if (!sd->ReadSectors((u32)(addr >> 9), 1, data)) return 0;
     }
     else if (auto* nand = std::get_if<DSi_NAND::NANDImage>(&Storage))
     {
-        FileSeek(nand->GetFile(), addr, FileSeekOrigin::Start);
-        FileRead(&data[addr & 0x1FF], 1, len, nand->GetFile());
+        if (addr > nand->GetLength() || len > nand->GetLength() - addr ||
+            !FileSeek(nand->GetFile(), addr, FileSeekOrigin::Start) ||
+            FileRead(&data[offset], 1, len, nand->GetFile()) != len)
+            return 0;
     }
 
-    return Host->DataRX(&data[addr & 0x1FF], len);
+    return Host->DataRX(&data[offset], len);
 }
 
 u32 DSi_MMCStorage::WriteBlock(u64 addr)
@@ -1088,26 +1117,31 @@ u32 DSi_MMCStorage::WriteBlock(u64 addr)
     u32 len = BlockSize;
     len = Host->GetTransferrableLen(len);
 
-    u8 data[0x200];
+    const u32 offset = static_cast<u32>(addr & 0x1FF);
+    if (!CartridgeTransferBounds::RoundedHalfwordSpanFits(0x200, offset, len)) return 0;
+
+    u8 data[0x200] = {};
     if (len < 0x200)
     {
         if (auto* sd = get_if<FATStorage>(&Storage))
         {
-            sd->ReadSectors((u32)(addr >> 9), 1, data);
+            if (!sd->ReadSectors((u32)(addr >> 9), 1, data)) return 0;
         }
     }
-    if ((len = Host->DataTX(&data[addr & 0x1FF], len)))
+    if ((len = Host->DataTX(&data[offset], len)))
     {
         if (!ReadOnly)
         {
             if (auto* sd = get_if<FATStorage>(&Storage))
             {
-                sd->WriteSectors((u32)(addr >> 9), 1, data);
+                if (!sd->WriteSectors((u32)(addr >> 9), 1, data)) return 0;
             }
             else if (auto* nand = get_if<DSi_NAND::NANDImage>(&Storage))
             {
-                FileSeek(nand->GetFile(), addr, FileSeekOrigin::Start);
-                FileWrite(&data[addr & 0x1FF], 1, len, nand->GetFile());
+                if (addr > nand->GetLength() || len > nand->GetLength() - addr ||
+                    !FileSeek(nand->GetFile(), addr, FileSeekOrigin::Start) ||
+                    FileWrite(&data[offset], 1, len, nand->GetFile()) != len)
+                    return 0;
             }
         }
     }

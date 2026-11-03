@@ -279,6 +279,12 @@ void SPU::DoSavestate(Savestate* file)
 
     file->Var32(&MixInterval);
 
+    if (!file->Saving && !file->Error && !SavestateInvariant::SPUMixIntervalValid(MixInterval))
+    {
+        file->Error = true;
+        return;
+    }
+
     file->Bool32(&Mute);
 
     for (SPUChannel& channel : Channels)
@@ -692,8 +698,7 @@ s32 SPUChannel::Run(u32 cycles)
     // interpolation (emulation improvement, not a hardware feature)
     if ((type < 3) && (InterpType != AudioInterpolation::None))
     {
-        s32 samplepos = ((Timer - TimerReload) * 0x100) / (0x10000 - TimerReload);
-        if (samplepos > 0xFF) samplepos = 0xFF;
+        const u32 samplepos = SavestateInvariant::SPUInterpolationPosition(Timer, TimerReload);
 
         switch (InterpType)
         {

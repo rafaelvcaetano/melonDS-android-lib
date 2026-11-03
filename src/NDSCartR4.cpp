@@ -16,11 +16,13 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include <algorithm>
 #include <string.h>
 #include "NDS.h"
 #include "DSi.h"
 #include "NDSCart.h"
 #include "Platform.h"
+#include "CartridgeTransferBounds.h"
 
 namespace melonDS
 {
@@ -74,6 +76,7 @@ CartR4::CartR4(std::unique_ptr<u8[]>&& rom, u32 len, u32 chipid, ROMListEntry ro
     InitStatus = 0;
     R4CartType = ctype;
     CartLanguage = clanguage;
+    memset(Buffer, 0, sizeof(Buffer));
 }
 
 CartR4::~CartR4()
@@ -85,6 +88,7 @@ void CartR4::Reset()
     CartSD::Reset();
 
     BufferInitialized = false;
+    memset(Buffer, 0, sizeof(Buffer));
     EncryptionKey = -1;
     FATEntryOffset[0] = 0xFFFFFFFF;
     FATEntryOffset[1] = 0xFFFFFFFF;
@@ -108,6 +112,8 @@ void CartR4::DoSavestate(Savestate* file)
     file->Var32(&FATEntryOffset[0]);
     file->Var32(&FATEntryOffset[1]);
     file->VarArray(Buffer, 512);
+    if (!file->Saving)
+        BufferInitialized = false;
 }
 
 // FIXME: Ace3DS/clone behavior is only partially verified.
@@ -127,10 +133,19 @@ int CartR4::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, const u8* 
         }
     case 0xB4: /* FAT entry */
         {
-            u8 entryBuffer[512];
+            if (!SD)
+            {
+                memset(data, 0, len);
+                return 0;
+            }
+            u8 entryBuffer[512] = {};
             u32 sector = ((cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4]) & (~0x1F);
             // set FAT entry offset to the starting cluster, to gain a bit of speed
-            SD->ReadSectors(sector >> 9, 1, entryBuffer);
+            if (SD->ReadSectors(sector >> 9, 1, entryBuffer) != 1)
+            {
+                memset(data, 0, len);
+                return 0;
+            }
             u16 fileEntryOffset = sector & 0x1FF;
             u32 clusterStart = (entryBuffer[fileEntryOffset + 27] << 8)
                 | entryBuffer[fileEntryOffset + 26]
@@ -159,8 +174,8 @@ int CartR4::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, const u8* 
     case 0xB9: /* SD read request */
         {
             u32 sector = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
-            if (SD)
-                SD->ReadSectors(GetAdjustedSector(sector), 1, Buffer);
+            memset(Buffer, 0, sizeof(Buffer));
+            BufferInitialized = SD && SD->ReadSectors(GetAdjustedSector(sector), 1, Buffer) == 1;
             for (u32 pos = 0; pos < len; pos += 4)
                 *(u32*)&data[pos] = 0;
             return 0;
@@ -190,7 +205,19 @@ int CartR4::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, const u8* 
             if (!BufferInitialized)
             {
                 u32 addr = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
-                memcpy(data, &ROM[addr & (ROMLength-1)], len);
+                if (!CartridgeTransferBounds::B7LengthValid(len, 0x4000) || ROMLength == 0)
+                {
+                    memset(data, 0, len);
+                    return 0;
+                }
+                u32 copied = 0;
+                while (copied < len)
+                {
+                    const u32 source = (addr + copied) & (ROMLength - 1);
+                    const u32 chunk = std::min(len - copied, ROMLength - source);
+                    ReadROM_B7(source, chunk, data, copied);
+                    copied += chunk;
+                }
                 return 0;
             }
             /* Otherwise, fall through. */
@@ -199,6 +226,11 @@ int CartR4::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, const u8* 
     case 0xBA: /* SD read data */
         {
             // TODO: Do these use separate buffers?
+            if (!BufferInitialized)
+            {
+                memset(data, 0, len);
+                return 0;
+            }
             for (u32 pos = 0; pos < len; pos++)
                 data[pos] = Buffer[pos & 0x1FF];
             return 0;
@@ -207,8 +239,10 @@ int CartR4::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, const u8* 
         {
             // TODO: Is decryption done using the sector from 0xBF or 0xB6?
             u32 sector = (cmd[1]<<24) | (cmd[2]<<16) | (cmd[3]<<8) | cmd[4];
-            if (len >= 512)
+            if (BufferInitialized && SD && len >= 512)
                 DecryptR4Sector(data, Buffer, GetEncryptionKey(sector >> 9));
+            else
+                memset(data, 0, len);
             return 0;        
         }
     default:
@@ -255,11 +289,16 @@ void CartR4::ROMCommandFinish(const u8* cmd, u8* data, u32 len)
 
 u16 CartR4::GetEncryptionKey(u16 sector)
 {
+    if (!SD) return sector;
     if (EncryptionKey == -1)
     {
-        u8 encryptedBuffer[512];
-        u8 decryptedBuffer[512];
-        SD->ReadFile("_DS_MENU.DAT", 0, 512, encryptedBuffer);
+        u8 encryptedBuffer[512] = {};
+        u8 decryptedBuffer[512] = {};
+        if (SD->ReadFile("_DS_MENU.DAT", 0, 512, encryptedBuffer) != 512)
+        {
+            EncryptionKey = -2;
+            return EncryptionKey ^ sector;
+        }
         for (u32 key = 0; key < 0x10000; key++)
         {
             DecryptR4Sector(decryptedBuffer, encryptedBuffer, key);
@@ -286,22 +325,25 @@ u16 CartR4::GetEncryptionKey(u16 sector)
 
 void CartR4::ReadSDToBuffer(u32 sector, bool rom)
 {
+    memset(Buffer, 0, sizeof(Buffer));
+    BufferInitialized = false;
     if (SD)
     {
+        bool read = false;
         if (rom && FATEntryOffset[0] == 0xFFFFFFFF)
         {
             // On first boot, read from _DS_MENU.DAT.
-            SD->ReadFile("_DS_MENU.DAT", sector & ~0x1FF, 512, Buffer);
+            read = SD->ReadFile("_DS_MENU.DAT", sector & ~0x1FF, 512, Buffer) == 512;
         }
         else
         {
             // Default mode.
-            SD->ReadSectors(
+            read = SD->ReadSectors(
                 SDFATEntrySectorGet(FATEntryOffset[rom ? 0 : 1], sector) >> 9,
                 1, Buffer
-            );
+            ) == 1;
         }
-        BufferInitialized = true;
+        BufferInitialized = read;
     }
 }
 

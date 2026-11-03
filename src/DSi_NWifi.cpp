@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include "DSi.h"
 #include "DSi_NWifi.h"
+#include "DSi_NWifiBounds.h"
 #include "SPI.h"
 #include "WifiAP.h"
 #include "Platform.h"
@@ -798,6 +799,12 @@ void DSi_NWifi::BMI_Command()
             u32 len = MB_Read32(0);
             Log(LogLevel::Debug, "BMI mem write %08X %08X\n", addr, len);
 
+            if (!DSi_NWifiBounds::MailboxPayloadValid(len, Mailbox[0].Level()))
+            {
+                MB_Drain(0);
+                return;
+            }
+
             for (u32 i = 0; i < len; i++)
             {
                 u8 val = Mailbox[0].Read();
@@ -851,6 +858,12 @@ void DSi_NWifi::BMI_Command()
             u32 len = MB_Read32(0);
             Log(LogLevel::Debug, "BMI LZ write %08X\n", len);
             //FILE* f = fopen("debug/wififirm.bin", "ab");
+
+            if (!DSi_NWifiBounds::MailboxPayloadValid(len, Mailbox[0].Level()))
+            {
+                MB_Drain(0);
+                return;
+            }
 
             for (u32 i = 0; i < len; i++)
             {
@@ -1555,7 +1568,10 @@ u32 DSi_NWifi::WindowRead(u32 addr)
     // hax
     if ((addr & 0x1FFC00) == 0x1FFC00)
     {
-        return *(u32*)&EEPROM[addr & 0x3FF];
+        u32 value = 0;
+        if (!DSi_NWifiBounds::ReadLE32(EEPROM, sizeof(EEPROM), addr & 0x3FF, value))
+            return 0;
+        return value;
     }
 
     switch (addr)

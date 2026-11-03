@@ -24,6 +24,7 @@
 
 #include "GPU2D_Soft.h"
 #include "GPU3D.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -262,6 +263,24 @@ void GPU::DoSavestate(Savestate* file) noexcept
 
     if (!file->Saving)
     {
+        auto mappingsValid = [](const u32* mappings, size_t count) {
+            for (size_t i = 0; i < count; ++i)
+                if (!SavestateInvariant::VRAMMappingValid(mappings[i])) return false;
+            return true;
+        };
+        if (!SavestateInvariant::VRAMMappingValid(VRAMMap_LCDC) ||
+            !mappingsValid(VRAMMap_ABG, 0x20) || !mappingsValid(VRAMMap_AOBJ, 0x10) ||
+            !mappingsValid(VRAMMap_BBG, 0x8) || !mappingsValid(VRAMMap_BOBJ, 0x8) ||
+            !mappingsValid(VRAMMap_ABGExtPal, 4) ||
+            !SavestateInvariant::VRAMMappingValid(VRAMMap_AOBJExtPal) ||
+            !mappingsValid(VRAMMap_BBGExtPal, 4) ||
+            !SavestateInvariant::VRAMMappingValid(VRAMMap_BOBJExtPal) ||
+            !mappingsValid(VRAMMap_Texture, 4) || !mappingsValid(VRAMMap_TexPal, 8) ||
+            !mappingsValid(VRAMMap_ARM7, 2))
+        {
+            file->Error = true;
+            return;
+        }
         for (int i = 0; i < 0x20; i++)
             VRAMPtr_ABG[i] = GetUniqueBankPtr(VRAMMap_ABG[i], i << 14);
         for (int i = 0; i < 0x10; i++)
@@ -359,6 +378,7 @@ u8* GPU::GetUniqueBankPtr(u32 mask, u32 offset) noexcept
 {
     if (!mask || (mask & (mask - 1)) != 0) return NULL;
     int num = __builtin_ctz(mask);
+    if (num >= 9) return NULL;
     return &VRAM[num][offset & VRAMMask[num]];
 }
 
@@ -366,6 +386,7 @@ const u8* GPU::GetUniqueBankPtr(u32 mask, u32 offset) const noexcept
 {
     if (!mask || (mask & (mask - 1)) != 0) return NULL;
     int num = __builtin_ctz(mask);
+    if (num >= 9) return NULL;
     return &VRAM[num][offset & VRAMMask[num]];
 }
 
@@ -843,6 +864,7 @@ void GPU::SetPowerCnt(u32 val) noexcept
 
 void GPU::DisplayFIFO(u32 x) noexcept
 {
+    if (x != 0 && (x < 8 || x > 256 || (x & 7))) return;
     // sample the FIFO
     // as this starts 16 cycles (~3 pixels) before display start,
     // we aren't aligned to the 8-pixel grid

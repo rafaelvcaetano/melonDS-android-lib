@@ -51,6 +51,10 @@ void Btdmp::DoSavestate(melonDS::Savestate *file) {
         transmit_queue = {};
         u8 qlen;
         file->Var8(&qlen);
+        if (file->Error || qlen > 16) {
+            file->Error = true;
+            return;
+        }
         for (u8 i = 0; i < qlen; i++) {
             u16 val;
             file->Var16(&val);
@@ -78,6 +82,10 @@ void Btdmp::DoSavestate(melonDS::Savestate *file) {
         receive_queue = {};
         u8 qlen;
         file->Var8(&qlen);
+        if (file->Error || qlen > 16) {
+            file->Error = true;
+            return;
+        }
         for (u8 i = 0; i < qlen; i++) {
             u16 val;
             file->Var16(&val);
@@ -171,7 +179,7 @@ void Btdmp::Skip(u64 ticks) {
 }
 
 void Btdmp::SampleClock(std::int16_t output[2], std::int16_t input) {
-    if (transmit_enable && (!(transmit_queue.empty()))) {
+    if (transmit_enable && transmit_queue.size() >= 2) {
         output[0] = (s16)transmit_queue.front();
         transmit_queue.pop();
         output[1] = (s16)transmit_queue.front();

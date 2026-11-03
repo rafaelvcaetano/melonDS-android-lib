@@ -22,6 +22,7 @@
 #include "DSi.h"
 #include "DSi_Camera.h"
 #include "Platform.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -106,6 +107,17 @@ void DSi_CamModule::DoSavestate(Savestate* file)
     file->Var8(&CurPixelBuffer);
 
     file->Var32(&BufferNumLines);
+
+    if (!file->Saving && !file->Error &&
+        !SavestateInvariant::CameraStateValid(CurPixelBuffer,
+            PixelBuffer[0].ReadPos, PixelBuffer[0].WritePos,
+            PixelBuffer[1].ReadPos, PixelBuffer[1].WritePos))
+    {
+        file->Error = true;
+        CurCamera = nullptr;
+        Transferring = false;
+        return;
+    }
 
     if (!file->Saving)
     {
@@ -333,6 +345,7 @@ u32 DSi_CamModule::Read32(u32 addr)
     {
     case 0x04004204:
         {
+            if (CurPixelBuffer >= 2) return 0;
             sPixelBuffer* buffer = &PixelBuffer[CurPixelBuffer ^ 1];
             u32 ret;
             if (buffer->ReadPos < buffer->WritePos)
@@ -571,13 +584,12 @@ int DSi_Camera::TransferScanline(u32* buffer, int maxlen, int& nlines)
     if ((TransferY >= FrameHeight) || (InternalY >= 480))
         return 0;
 
-    if (FrameWidth > 640 || FrameHeight > 480 ||
-        FrameWidth < 2 || FrameHeight < 2 ||
-        (FrameWidth & 1))
+    if (!SavestateInvariant::CameraFrameDimensionsValid(FrameWidth, FrameHeight))
     {
         // TODO work out something for these cases?
         Log(LogLevel::Warn, "CAM%d: invalid resolution %dx%d\n", Num, FrameWidth, FrameHeight);
-        //memset(buffer, 0, width*height*sizeof(u16));
+        TransferY = FrameHeight;
+        InternalY = 480;
         return 0;
     }
 

@@ -21,6 +21,7 @@
 #include "NDS.h"
 #include "GPU.h"
 #include "GPU3D.h"
+#include "SavestateInvariant.h"
 
 namespace melonDS
 {
@@ -186,6 +187,13 @@ void Unit::DoSavestate(Savestate* file)
         file->VarArray(DispFIFOBuffer, 256*2);
 
         file->Var32(&CaptureCnt);
+
+        if (!file->Saving && !file->Error &&
+            !SavestateInvariant::GPU2DFIFOValid(DispFIFOReadPtr, DispFIFOWritePtr))
+        {
+            file->Error = true;
+            return;
+        }
     }
 
     file->Var32(&Win0Active);

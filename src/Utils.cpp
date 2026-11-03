@@ -38,6 +38,7 @@ std::pair<std::unique_ptr<u8[]>, u32> PadToPowerOf2(std::unique_ptr<u8[]>&& data
     std::unique_ptr<u8[]> newdata(new (std::nothrow) u8[newlen]);
     if (!newdata) return {nullptr, 0};
     memcpy(newdata.get(), data.get(), len);
+    memset(newdata.get() + len, 0, newlen - len);
     data = nullptr;
     return {std::move(newdata), newlen};
 }
@@ -54,6 +55,7 @@ std::pair<std::unique_ptr<u8[]>, u32> PadToPowerOf2(const u8* data, u32 len) noe
     std::unique_ptr<u8[]> newdata(new (std::nothrow) u8[newlen]);
     if (!newdata) return {nullptr, 0};
     memcpy(newdata.get(), data, len);
+    memset(newdata.get() + len, 0, newlen - len);
     return {std::move(newdata), newlen};
 }
 
