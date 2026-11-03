@@ -1013,9 +1013,20 @@ int CartRetailNAND::ROMCommandStart(NDS& nds, NDSCart::NDSCartSlot& cartslot, co
                 memset(data, 0xFF, len);
 
                 if (SRAMWindow >= SRAMBase && SRAMWindow < (SRAMBase+SRAMLength) &&
-                    addr >= SRAMWindow && addr < (SRAMWindow+0x20000))
+                    addr >= SRAMWindow && addr < (SRAMWindow+0x20000) &&
+                    addr >= SRAMBase && (addr - SRAMBase) < SRAMLength)
                 {
-                    memcpy(data, &SRAM[addr - SRAMBase], len);
+                    u32 saveoffset = addr - SRAMBase;
+                    u32 pagebase = saveoffset & ~0xFFF;
+                    u32 pageoffset = saveoffset & 0xFFF;
+                    for (u32 copied = 0; copied < len;)
+                    {
+                        u32 chunk = std::min(len - copied,
+                            std::min(0x1000u - pageoffset, SRAMLength - pagebase - pageoffset));
+                        memcpy(data + copied, &SRAM[pagebase + pageoffset], chunk);
+                        copied += chunk;
+                        pageoffset = 0;
+                    }
                 }
             }
         }
