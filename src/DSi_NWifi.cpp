@@ -1258,6 +1258,9 @@ void DSi_NWifi::WMI_SendPacket(u16 len)
         return;
     }
 
+    if (len < 2 || Mailbox[0].Level() < 2)
+        return;
+
     // header???
     // packets with bit1=1 are something special (sync??)
     // otherwise, ????
@@ -1295,6 +1298,9 @@ void DSi_NWifi::WMI_SendPacket(u16 len)
 
     Log(LogLevel::Debug, "WMI: send packet, hdr=%04X, len=%d\n", hdr, len);
 
+    if (len < 24 || Mailbox[0].Level() < 14)
+        return;
+
     u8 dstmac[6];
     u8 srcmac[6];
     u16 plen;
@@ -1306,9 +1312,11 @@ void DSi_NWifi::WMI_SendPacket(u16 len)
     plen = MB_Read16(0);
     plen = ((plen & 0xFF00) >> 8) | ((plen & 0x00FF) << 8);
 
-    if (plen > len-16)
+    if (plen < 8 || plen > len-16 ||
+        plen - 8 > sizeof(LANBuffer) - 14 || Mailbox[0].Level() < plen)
     {
-        Log(LogLevel::Error, "WMI: bad packet length %d > %d\n", plen, len-16);
+        Log(LogLevel::Error, "WMI: invalid packet length %d (frame %d, buffered %u)\n",
+            plen, len, Mailbox[0].Level());
         return;
     }
 
