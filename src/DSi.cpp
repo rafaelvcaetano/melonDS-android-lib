@@ -717,10 +717,19 @@ void DSi::SoftReset()
     // TODO: is this actually reset?
     I2S.Reset();
 
+    // DS-compatible software may leave the touchscreen in DS mode.
+    SPI.GetTSC()->Reset();
+
     // TODO: does the DSP get reset? NWRAM doesn't, so I'm assuming no
     // *HOWEVER*, the bootrom (which does get rerun) does remap NWRAM, and thus
     // the DSP most likely gets reset
     DSP.Reset();
+
+    // Restore the effective RAM mapping as well as the SCFG registers before
+    // loading boot2. A DS-mode title may have left a 4MB mapping active.
+    SCFG_EXT[0] = 0x8307F100;
+    SCFG_EXT[1] = 0x93FFFB06;
+    ApplyNewRAMSize((SCFG_EXT[0] >> 14) & 0x3);
 
     LoadNAND();
 
@@ -739,8 +748,6 @@ void DSi::SoftReset()
     }
     SCFG_Clock9 = 0x0187; // CHECKME
     SCFG_Clock7 = 0x0187;
-    SCFG_EXT[0] = 0x8307F100;
-    SCFG_EXT[1] = 0x93FFFB06;
     SCFG_MC = 0x0010;//0x0011;
     // TODO: is this actually reset?
     SCFG_RST = 0;
