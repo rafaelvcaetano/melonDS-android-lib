@@ -271,7 +271,9 @@ const std::string BinningBuffer{R"(
 
 layout (std430, binding = 6) buffer BinResultBuffer
 {
-    uvec4 VariantWorkCount[MaxVariants];
+    // a flat uint array instead of uvec4[MaxVariants] (same layout),
+    // some Mali drivers misplace atomics on a single component of a uvec4 array element
+    uint VariantWorkCountFlat[MaxVariants*4];
     uint SortedWorkOffset[MaxVariants];
 
     uvec4 SortWorkWorkCount;
@@ -281,6 +283,11 @@ layout (std430, binding = 6) buffer BinResultBuffer
     //uint BinnedMask[TilesPerLine*TileLines*BinStride];
     //uint WorkOffsets[TilesPerLine*TileLines*BinStride];
 };
+
+#define VariantCountX(i) VariantWorkCountFlat[uint(i)*4u]
+#define VariantCountY(i) VariantWorkCountFlat[uint(i)*4u + 1u]
+#define VariantCountZ(i) VariantWorkCountFlat[uint(i)*4u + 2u]
+#define VariantCountW(i) VariantWorkCountFlat[uint(i)*4u + 3u]
 
 const int BinningCoarseMaskStart = 0;
 const int BinningMaskStart = BinningCoarseMaskStart+TilesPerLine*TileLines*CoarseBinStride;
@@ -839,7 +846,10 @@ layout (local_size_x = 32) in;
 
 void main()
 {
-    VariantWorkCount[gl_GlobalInvocationID.x] = uvec4(1, 1, 0, 0);
+    VariantCountX(gl_GlobalInvocationID.x) = 1u;
+    VariantCountY(gl_GlobalInvocationID.x) = 1u;
+    VariantCountZ(gl_GlobalInvocationID.x) = 0u;
+    VariantCountW(gl_GlobalInvocationID.x) = 0u;
 }
 
 )";
@@ -985,7 +995,7 @@ void main()
 
     if (binnedMask != 0U)
     {
-        uint workOffset = atomicAdd(VariantWorkCount[0].w, uint(bitCount(binnedMask)));
+        uint workOffset = atomicAdd(VariantCountW(0), uint(bitCount(binnedMask)));
         BinningMaskAndOffset[BinningWorkOffsetsStart + linearTile * BinStride + groupIdx] = workOffset;
 
         uint tilePositionCombined = uint(bitfieldInsert(fineTileTopLeft.x, fineTileTopLeft.y, 16, 16));
@@ -999,7 +1009,7 @@ void main()
             int polygonIdx = groupIdx * 32 + bit;
             int variantIdx = Polygons[polygonIdx].Variant;
 
-            int inVariantOffset = int(atomicAdd(VariantWorkCount[variantIdx].z, 1u));
+            int inVariantOffset = int(atomicAdd(VariantCountZ(variantIdx), 1u));
             WorkDescs[WorkDescsUnsortedStart + workOffset + uint(idx)] = uvec2(tilePositionCombined, uint(bitfieldInsert(polygonIdx, inVariantOffset, 11, 21)));
 
             idx++;
@@ -1016,14 +1026,19 @@ layout (local_size_x = 32) in;
 
 void main()
 {
-    if (gl_GlobalInvocationID.x < NumVariants)
+    if (gl_GlobalInvocationID.x == 0u && NumVariants > 0u)
     {
-        if (gl_GlobalInvocationID.x == 0u)
+        // a bit of a cheat putting this here, but this shader won't run that often
+        SortWorkWorkCount = uvec4((VariantCountW(0) + 31u) / 32u, 1u, 1u, 0u);
+
+        // a running sum instead of an atomic, which also leaves the total in VariantCountW(1)
+        uint sum = 0u;
+        for (uint i = 0u; i < NumVariants; i++)
         {
-            // a bit of a cheat putting this here, but this shader won't run that often
-            SortWorkWorkCount = uvec4((VariantWorkCount[0].w + 31u) / 32u, 1u, 1u, 0u);
+            SortedWorkOffset[i] = sum;
+            sum += VariantCountZ(i);
         }
-        SortedWorkOffset[gl_GlobalInvocationID.x] = atomicAdd(VariantWorkCount[1].w, VariantWorkCount[gl_GlobalInvocationID.x].z);
+        VariantCountW(1) = sum;
     }
 }
 
@@ -1039,7 +1054,7 @@ layout (local_size_x = 32) in;
 
 void main()
 {
-    if (gl_GlobalInvocationID.x < VariantWorkCount[0].w)
+    if (gl_GlobalInvocationID.x < VariantCountW(0))
     {
         uvec2 workDesc = WorkDescs[WorkDescsUnsortedStart + gl_GlobalInvocationID.x];
         int inVariantOffset = int(bitfieldExtract(workDesc.y, 11, 21));
